@@ -1,3 +1,4 @@
+import base64
 import streamlit as st
 from utils.sheets_client import get_db
 from utils.auth import login
@@ -19,16 +20,20 @@ st.set_page_config(page_title="Sistema de producción — Ovoproductos", layout=
 db = get_db()
 username, rol = login(db)
 
+
+@st.cache_data(show_spinner=False)
+def _logo_base64():
+    with open("assets/ovomas_logo.jpeg", "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
 # ============================== BARRA LATERAL ==============================
 st.sidebar.markdown(
-    """
-    <div style="background: linear-gradient(135deg, #0B6E4F 0%, #119873 100%);
-                padding: 18px 16px; border-radius: 12px; margin-bottom: 14px;">
-        <div style="font-size: 30px; line-height: 1;">🥚</div>
-        <div style="color: white; font-size: 20px; font-weight: 800; margin-top: 6px;">
-            Ovoproductos
-        </div>
-        <div style="color: #CFF3E4; font-size: 12px; margin-top: 2px;">
+    f"""
+    <div style="background: #FFFFFF; border: 1px solid #EEE3D6; padding: 14px 16px;
+                border-radius: 12px; margin-bottom: 14px; text-align: center;">
+        <img src="data:image/jpeg;base64,{_logo_base64()}" style="max-width: 100%; height: auto;">
+        <div style="color: #777; font-size: 11px; margin-top: 6px; letter-spacing: 0.3px;">
             Sistema integral de producción
         </div>
     </div>
@@ -92,21 +97,67 @@ if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y con
     _boton_modulo("Dashboard", "📊")
     _boton_modulo("Catálogos y configuración", "⚙️")
 
+st.sidebar.markdown(
+    """
+    <div style="margin-top: 28px; padding-top: 10px; border-top: 1px solid #EEE;
+                color: #999; font-size: 10.5px; line-height: 1.4;">
+        Desarrollado por:<br>Renato Pérez — COO y Analista de Datos
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 modulo = st.session_state["modulo_actual"]
 
 # ============================== CONTENIDO ==============================
 if modulo == "Inicio":
     st.title("Panel general")
-    st.write(
-        "Selecciona un módulo en el menú lateral para registrar movimientos "
-        "del día o revisar el inventario."
-    )
-    st.info(
-        "Si es la primera vez que usas el sistema: ve primero a "
-        "'Catálogos y configuración' y crea galpones, proveedores, "
-        "categorías de huevo, insumos, presentaciones, personal y clientes "
-        "antes de registrar movimientos en los demás módulos."
-    )
+    st.write(f"Bienvenido/a, **{username}**. Selecciona un módulo en el menú lateral para empezar.")
+
+    st.markdown("### 🚀 Primeros pasos para empezar a ingresar datos")
+
+    pasos = [
+        (
+            "1️⃣ Configura los catálogos base",
+            "Ve a **Catálogos y configuración** y crea, en este orden: galpones y/o "
+            "proveedores → categorías de huevo (con su rendimiento teórico) → insumos "
+            "de limpieza → presentaciones de envase → personal → clientes → vehículos "
+            "→ áreas de limpieza. Sin esto, los demás módulos no van a tener qué ofrecerte "
+            "en sus listas desplegables.",
+        ),
+        (
+            "2️⃣ Registra una recepción de huevo",
+            "En **Bodega de materia prima**, registra el ingreso de huevo (galpón propio "
+            "o proveedor), con sus cubetas y costo.",
+        ),
+        (
+            "3️⃣ Registra una producción de semielaborados",
+            "En **Producción de semielaborados**, elige cuántas cubetas procesar — el "
+            "sistema sugiere automáticamente de qué lote tomarlas. Registra insumos, "
+            "personal, agua, y al final los valores reales obtenidos.",
+        ),
+        (
+            "4️⃣ Pasteuriza y envasa",
+            "En **Pasteurización y envasado**, toma kg del tanque de semielaborado y "
+            "conviértelos en producto terminado en la presentación que corresponda.",
+        ),
+        (
+            "5️⃣ Ingresa a cuarto frío y despacha",
+            "En **Cuarto frío**, registra el ingreso del producto envasado, y luego "
+            "arma los despachos a clientes organizados por vehículo.",
+        ),
+        (
+            "6️⃣ Revisa el panorama completo",
+            "En **Dashboard** puedes ver, por período, costos, rendimientos, inventarios "
+            "y mermas — y en **Trazabilidad** puedes generar el informe PDF completo de "
+            "cualquier lote.",
+        ),
+    ]
+    for titulo, texto in pasos:
+        with st.container(border=True):
+            st.markdown(f"**{titulo}**")
+            st.write(texto)
+
 elif modulo == "Dashboard":
     dashboard.render(db, username, rol)
 elif modulo == "Bodega de materia prima":
