@@ -27,7 +27,8 @@ def _valor_default_bool(valor_actual):
 
 
 def _seccion_simple(db, nombre_sheet, titulo, campos):
-    """campos: lista de (nombre_columna, tipo) donde tipo es 'texto', 'numero' o 'bool'.
+    """campos: lista de (nombre_columna, tipo) donde tipo es 'texto', 'numero',
+    'bool', 'fecha', o una lista/tupla de opciones fijas (selectbox).
     El primer campo de la lista se trata como identificador unico (id)."""
     st.subheader(titulo)
     id_col = campos[0][0]
@@ -40,7 +41,9 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
         with st.form(f"form_nuevo_{nombre_sheet}"):
             valores = {}
             for col, tipo in campos:
-                if tipo == "numero":
+                if isinstance(tipo, (list, tuple)):
+                    valores[col] = st.selectbox(col, tipo, key=f"nuevo_{nombre_sheet}_{col}")
+                elif tipo == "numero":
                     valores[col] = st.number_input(col, step=0.01, key=f"nuevo_{nombre_sheet}_{col}")
                 elif tipo == "bool":
                     valores[col] = st.checkbox(col, value=True, key=f"nuevo_{nombre_sheet}_{col}")
@@ -94,6 +97,22 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
                         col, value=_valor_default_bool(valor_actual),
                         key=f"editar_{nombre_sheet}_{col}_{id_seleccionado}",
                     )
+                elif isinstance(tipo, (list, tuple)):
+                    indice = tipo.index(valor_actual) if valor_actual in tipo else 0
+                    nuevos_valores[col] = st.selectbox(
+                        col, tipo, index=indice,
+                        key=f"editar_{nombre_sheet}_{col}_{id_seleccionado}",
+                    )
+                elif tipo == "fecha":
+                    try:
+                        import datetime as _dt
+                        valor_fecha = _dt.date.fromisoformat(str(valor_actual))
+                    except ValueError:
+                        valor_fecha = None
+                    nuevos_valores[col] = st.date_input(
+                        col, value=valor_fecha,
+                        key=f"editar_{nombre_sheet}_{col}_{id_seleccionado}",
+                    ).isoformat()
                 else:
                     nuevos_valores[col] = st.text_input(
                         col, value=str(valor_actual),
@@ -178,6 +197,7 @@ def render(db, username, rol):
     elif seccion == "Personal":
         _seccion_simple(db, "personal", "Personal de producción", [
             ("personal_id", "texto"), ("nombre", "texto"), ("cargo", "texto"),
+            ("tipo_personal", ["Fijo", "Ocasional"]),
             ("costo_hora", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Clientes":

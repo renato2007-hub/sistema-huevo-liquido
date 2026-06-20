@@ -17,7 +17,7 @@ SHEET_SCHEMAS = {
     ],
     "insumos": ["insumo_id", "nombre", "tipo", "unidad", "costo_unitario", "activo"],
     "presentaciones": ["presentacion_id", "nombre", "kg_nominal", "costo_envase_unitario", "activo"],
-    "personal": ["personal_id", "nombre", "cargo", "costo_hora", "activo"],
+    "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
     "areas_limpieza": ["area_id", "nombre", "activo"],
