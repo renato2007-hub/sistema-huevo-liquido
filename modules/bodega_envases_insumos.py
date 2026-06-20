@@ -36,18 +36,22 @@ def render(db, username, rol):
     tapas = db.get_df("tapas")
     etiquetas = db.get_df("etiquetas")
     cartones = db.get_df("cartones")
+    liners = db.get_df("liners")
 
     with tab_movimiento:
         tipo_item = st.radio(
-            "Tipo de ítem", ["Insumo de limpieza", "Envase", "Tapa (PET)", "Etiqueta", "Cartón"], horizontal=True,
+            "Tipo de ítem",
+            ["Insumo de limpieza", "Envase", "Tapa (PET)", "Etiqueta", "Cartón", "Liner de aluminio"],
+            horizontal=True,
         )
         catalogo = {
             "Insumo de limpieza": insumos, "Envase": presentaciones,
-            "Tapa (PET)": tapas, "Etiqueta": etiquetas, "Cartón": cartones,
+            "Tapa (PET)": tapas, "Etiqueta": etiquetas, "Cartón": cartones, "Liner de aluminio": liners,
         }[tipo_item]
         col_id = {
             "Insumo de limpieza": "insumo_id", "Envase": "presentacion_id",
             "Tapa (PET)": "tapa_id", "Etiqueta": "etiqueta_id", "Cartón": "carton_id",
+            "Liner de aluminio": "liner_id",
         }[tipo_item]
         col_nombre = "color" if tipo_item == "Tapa (PET)" else "nombre"
 
@@ -87,6 +91,7 @@ def render(db, username, rol):
                 item_tipo_map = {
                     "Insumo de limpieza": "insumo", "Envase": "envase",
                     "Tapa (PET)": "tapa", "Etiqueta": "etiqueta", "Cartón": "carton",
+                    "Liner de aluminio": "liner",
                 }
                 saldo_previo = _saldo_actual(
                     db.get_df("movimientos_envases_insumos"), item_tipo_map[tipo_item], item_id,
@@ -144,6 +149,11 @@ def render(db, username, rol):
                 "tipo": "Cartón", "item_id": row["carton_id"], "nombre": row["nombre"],
                 "saldo": _saldo_actual(df_movimientos, "carton", row["carton_id"]),
             })
+        for _, row in liners.iterrows():
+            filas.append({
+                "tipo": "Liner", "item_id": row["liner_id"], "nombre": row["nombre"],
+                "saldo": _saldo_actual(df_movimientos, "liner", row["liner_id"]),
+            })
         if filas:
             df_inv = pd.DataFrame(filas)
             negativos = df_inv[df_inv["saldo"] < 0]
@@ -164,6 +174,7 @@ def render(db, username, rol):
                         tapas[["tapa_id", "color"]].rename(columns={"tapa_id": "item_id", "color": "nombre"}) if not tapas.empty else pd.DataFrame(columns=["item_id", "nombre"]),
                         etiquetas[["etiqueta_id", "nombre"]].rename(columns={"etiqueta_id": "item_id"}) if not etiquetas.empty else pd.DataFrame(columns=["item_id", "nombre"]),
                         cartones[["carton_id", "nombre"]].rename(columns={"carton_id": "item_id"}) if not cartones.empty else pd.DataFrame(columns=["item_id", "nombre"]),
+                        liners[["liner_id", "nombre"]].rename(columns={"liner_id": "item_id"}) if not liners.empty else pd.DataFrame(columns=["item_id", "nombre"]),
                     ])
                     mermas_mostrar = mermas.merge(catalogo_todo, on="item_id", how="left")
                     columnas_merma = ["fecha", "nombre", "cantidad", "causa", "observaciones"]

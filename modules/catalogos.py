@@ -157,7 +157,7 @@ def render(db, username, rol):
         "Catálogo a administrar",
         [
             "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
-            "Insumos", "Presentaciones de envase", "Tapas (PET)", "Etiquetas", "Cartones", "Personal", "Clientes",
+            "Insumos", "Presentaciones de envase", "Tapas (PET)", "Etiquetas", "Cartones", "Liners de aluminio", "Personal", "Clientes",
             "Vehículos", "Áreas de limpieza", "Turnos", "Feriados", "Usuarios",
         ],
     )
@@ -225,6 +225,11 @@ def render(db, username, rol):
         _seccion_simple(db, "cartones", "Cartones", [
             ("carton_id", "texto"), ("nombre", "texto"),
             ("capacidad", "numero"), ("costo_unitario", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Liners de aluminio":
+        st.caption("Solo se usan en ciertos envases — al envasar, marcas la casilla solo cuando aplique.")
+        _seccion_simple(db, "liners", "Liners de aluminio", [
+            ("liner_id", "texto"), ("nombre", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Personal":
         _seccion_simple(db, "personal", "Personal de producción", [

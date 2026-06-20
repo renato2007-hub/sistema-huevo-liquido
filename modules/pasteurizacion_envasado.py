@@ -21,6 +21,7 @@ def render(db, username, rol):
     tapas = db.get_df("tapas")
     etiquetas = db.get_df("etiquetas")
     cartones = db.get_df("cartones")
+    liners = db.get_df("liners")
 
     with tab_nueva:
         if semielaborados.empty:
@@ -123,6 +124,19 @@ def render(db, username, rol):
                     f"Revisa si está bien (puede haber unidades sueltas sin cartón, está permitido)."
                 )
 
+        usa_liner = st.checkbox("🔘 Este lote usa liner de aluminio (solo para ciertos envases)")
+        liner_id = ""
+        costo_liner_unitario = 0.0
+        if usa_liner:
+            if liners.empty:
+                st.warning("No hay liners configurados en Catálogos → Liners de aluminio.")
+                return
+            liner_id = st.selectbox(
+                "Tipo de liner", liners["liner_id"],
+                format_func=lambda x: liners.set_index("liner_id").loc[x, "nombre"],
+            )
+            costo_liner_unitario = float(liners.set_index("liner_id").loc[liner_id, "costo_unitario"])
+
         observaciones = st.text_area("Observaciones", "", key="past_obs")
 
         if st.button("Guardar lote de envasado"):
@@ -140,7 +154,11 @@ def render(db, username, rol):
             costo_tapas = unidades_reales * costo_tapa_unitario if es_pet else 0.0
             costo_etiquetas = unidades_reales * costo_etiqueta_unitario
             costo_cartones = cantidad_cartones * costo_carton_unitario if usa_carton else 0.0
-            costo_total = costo_semielaborado + costo_envases + costo_tapas + costo_etiquetas + costo_cartones
+            costo_liners = unidades_reales * costo_liner_unitario if usa_liner else 0.0
+            costo_total = (
+                costo_semielaborado + costo_envases + costo_tapas
+                + costo_etiquetas + costo_cartones + costo_liners
+            )
             costo_unitario = costo_total / unidades_reales if unidades_reales > 0 else 0
 
             lote_producto_id = db.siguiente_id("pasteurizacion_envasado", "PROD", fecha)
@@ -161,6 +179,8 @@ def render(db, username, rol):
                 "carton_id": carton_id,
                 "cantidad_cartones": cantidad_cartones,
                 "costo_cartones": costo_cartones,
+                "liner_id": liner_id,
+                "costo_liners": costo_liners,
                 "costo_total": costo_total,
                 "costo_unitario": costo_unitario,
                 "unidades_saldo": unidades_reales,
@@ -256,6 +276,29 @@ def render(db, username, rol):
                     "observaciones": lote_producto_id,
                 })
 
+            if usa_liner:
+                saldo_liner_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "liner", liner_id)
+                if unidades_reales > saldo_liner_previo:
+                    st.warning(
+                        f"⚠️ Hay {saldo_liner_previo:.0f} liners de este tipo en bodega, pero estás "
+                        f"usando {unidades_reales:.0f}. Se va a guardar igual, pero revisa si falta "
+                        f"registrar una compra de liners."
+                    )
+                movimiento_liner_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
+                db.append_row("movimientos_envases_insumos", {
+                    "movimiento_id": movimiento_liner_id,
+                    "fecha": fecha.isoformat(),
+                    "item_tipo": "liner",
+                    "item_id": liner_id,
+                    "tipo_movimiento": "salida",
+                    "cantidad": unidades_reales,
+                    "costo_unitario": costo_liner_unitario,
+                    "costo_total": costo_liners,
+                    "modulo_destino": "Pasteurización y envasado",
+                    "usuario": username,
+                    "observaciones": lote_producto_id,
+                })
+
             if ve_costos(rol):
                 st.success(f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f}")
             else:
@@ -269,7 +312,7 @@ def render(db, username, rol):
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
             columnas_disp = [
                 "lote_producto_id", "fecha", "presentacion_id", "tapa_id",
-                "etiqueta_id", "cantidad_cartones", "unidades_saldo",
+                "etiqueta_id", "cantidad_cartones", "liner_id", "unidades_saldo",
             ]
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario")
