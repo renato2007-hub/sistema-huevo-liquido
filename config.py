@@ -25,6 +25,12 @@ SHEET_SCHEMAS = {
     "feriados": ["fecha", "nombre", "activo"],
     "compensaciones_feriado": ["compensacion_id", "fecha", "personal_id", "observaciones", "usuario"],
 
+    # ---------- Supervision y calidad (overhead diario, no se reparte por lote) ----------
+    "supervision_diaria": [
+        "registro_id", "fecha", "personal_id", "hora_entrada", "hora_salida",
+        "horas", "horas_nocturnas", "costo_calculado", "usuario", "observaciones",
+    ],
+
     # ---------- Bodega de materia prima ----------
     "recepciones_mp": [
         "recepcion_id", "fecha", "origen_tipo", "origen_id", "categoria_id",

@@ -250,7 +250,15 @@ def render(db, username, rol):
                 c1, c2, c3 = st.columns(3)
                 c1.metric("🥚 Huevo", f"{costo_huevo_sum:,.2f}", f"{pct(costo_huevo_sum):.0f}%")
                 c2.metric("🧴 Insumos", f"{costo_insumos_sum:,.2f}", f"{pct(costo_insumos_sum):.0f}%")
-                c3.metric("👷 Mano de obra", f"{costo_mo_sum:,.2f}", f"{pct(costo_mo_sum):.0f}%")
+                c3.metric("👷 Mano de obra directa", f"{costo_mo_sum:,.2f}", f"{pct(costo_mo_sum):.0f}%")
+
+                superv_periodo = _filtrar_por_fecha(db.get_df("supervision_diaria"), desde, hasta)
+                costo_superv = _num(superv_periodo, "costo_calculado").sum()
+                st.metric(
+                    "👔 Costo de supervisión/calidad (overhead, NO incluido arriba)",
+                    f"{costo_superv:,.2f}",
+                    help="Costo del Jefe de planta / Jefe de calidad del período — se muestra aparte a propósito, no se reparte en el costo/kg de los lotes.",
+                )
 
         st.write("")
 
@@ -294,12 +302,21 @@ def render(db, username, rol):
                 "horas en feriado con descanso acordado en su lugar · Nocturnas = "
                 "horas entre 19:00 y 05:00 (eje aparte, se cruza con las demás)."
             )
-            if personal_detalle.empty or produccion.empty:
+            if personal_detalle.empty and db.get_df("supervision_diaria").empty:
                 st.info("No hay registros de horas de personal en este período.")
             else:
-                ph = personal_detalle.merge(
-                    produccion[["lote_semielaborado_id", "fecha"]], on="lote_semielaborado_id", how="left",
-                )
+                if not personal_detalle.empty and not produccion.empty:
+                    ph = personal_detalle.merge(
+                        produccion[["lote_semielaborado_id", "fecha"]], on="lote_semielaborado_id", how="left",
+                    )
+                else:
+                    ph = pd.DataFrame(columns=["personal_id", "fecha", "horas", "horas_nocturnas", "costo_calculado"])
+
+                superv = db.get_df("supervision_diaria")
+                if not superv.empty:
+                    superv_cols = superv[["personal_id", "fecha", "horas", "horas_nocturnas", "costo_calculado"]].copy()
+                    ph = pd.concat([ph, superv_cols], ignore_index=True)
+
                 ph = _filtrar_por_fecha(ph, desde, hasta)
                 if ph.empty:
                     st.info("No hay registros de horas de personal en este período.")
@@ -345,6 +362,7 @@ def render(db, username, rol):
                     c6.metric("Costo mano de obra", f"{resumen_personal['costo'].sum():,.2f}")
 
                     st.caption("'Nocturnas' es un eje aparte (cuándo se trabajó) — esas horas también están incluidas en normales/extras/dobles según corresponda, no se suman por separado al total.")
+                    st.caption("El costo de esta tabla incluye mano de obra directa de producción + supervisión/calidad combinados — para el costo por kg de cada lote (que NO incluye supervisión), ve a la pestaña 'Producción y costos'.")
                     st.dataframe(resumen_personal, use_container_width=True, hide_index=True)
                     st.markdown("**Desglose de horas por persona**")
                     st.bar_chart(

@@ -10,6 +10,7 @@ from modules import (
     pasteurizacion_envasado,
     cuarto_frio,
     limpieza_desinfeccion,
+    supervision,
     dashboard,
     trazabilidad,
     catalogos,
@@ -87,9 +88,10 @@ _boton_modulo("Producción de semielaborados", "⚗️")
 _boton_modulo("Pasteurización y envasado", "🧪")
 _boton_modulo("Cuarto frío", "❄️")
 
-if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad"):
+if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad") or puede_ver_modulo(rol, "Supervisión y calidad"):
     _categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
     _boton_modulo("Limpieza y desinfección", "🧽")
+    _boton_modulo("Supervisión y calidad", "👔")
     _boton_modulo("Trazabilidad", "📄")
 
 if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
@@ -172,6 +174,8 @@ elif modulo == "Cuarto frío":
     cuarto_frio.render(db, username, rol)
 elif modulo == "Limpieza y desinfección":
     limpieza_desinfeccion.render(db, username, rol)
+elif modulo == "Supervisión y calidad":
+    supervision.render(db, username, rol)
 elif modulo == "Trazabilidad":
     trazabilidad.render(db, username, rol)
 elif modulo == "Catálogos y configuración":
