@@ -13,8 +13,9 @@ from utils.permisos import ve_costos, es_admin
 
 def render(db, username, rol):
     st.title("Producción de semielaborados")
-    tab_nueva, tab_inventario, tab_rendimiento, tab_corregir = st.tabs(
-        ["Nueva producción", "Inventario de tanques", "Teórico vs. real", "✏️ Corregir / eliminar"]
+    tab_nueva, tab_inventario, tab_perdida, tab_rendimiento, tab_corregir = st.tabs(
+        ["Nueva producción", "Inventario de tanques", "⚠️ Registrar pérdida",
+         "Teórico vs. real", "✏️ Corregir / eliminar"]
     )
 
     categorias = db.get_df("categorias_huevo")
@@ -407,6 +408,65 @@ def render(db, username, rol):
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario_kg")
             st.dataframe(disponibles[columnas_disp], use_container_width=True)
+
+    with tab_perdida:
+        st.caption(
+            "Para clara o yema sobrante sin cliente (u otro semielaborado dañado/vencido) "
+            "que se va a desechar — reduce el saldo del tanque y queda registrado en mermas."
+        )
+        df_disp = db.get_df("produccion_semielaborados")
+        if df_disp.empty:
+            st.info("Todavía no hay lotes de semielaborado.")
+        else:
+            df_disp["kg_saldo"] = pd.to_numeric(df_disp["kg_saldo"], errors="coerce").fillna(0)
+            disponibles_perdida = df_disp[df_disp["kg_saldo"] > 0]
+            if disponibles_perdida.empty:
+                st.info("No hay lotes con saldo disponible para registrar pérdida.")
+            else:
+                lote_perdida_id = st.selectbox(
+                    "Lote semielaborado", disponibles_perdida["lote_semielaborado_id"],
+                    format_func=lambda x: (
+                        f"{x} — {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'tipo_producto']} "
+                        f"(saldo {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.1f} kg)"
+                    ),
+                )
+                fila_lote = disponibles_perdida.set_index("lote_semielaborado_id").loc[lote_perdida_id]
+                saldo_disponible = float(fila_lote["kg_saldo"])
+                costo_unit_lote = float(pd.to_numeric(fila_lote.get("costo_unitario_kg", 0), errors="coerce") or 0)
+
+                kg_desechar = st.number_input(
+                    "Kg a desechar", min_value=0.0, max_value=saldo_disponible, step=0.5,
+                )
+                causa = st.selectbox(
+                    "Causa", ["Sobrante sin cliente", "Dañado", "Vencido", "Otro"],
+                )
+                observaciones_perdida = st.text_area("Observaciones", "", key="perdida_semi_obs")
+
+                if ve_costos(rol) and kg_desechar > 0:
+                    st.caption(f"Costo estimado de la pérdida: {kg_desechar * costo_unit_lote:,.2f}")
+
+                if st.button("🗑️ Registrar pérdida"):
+                    if kg_desechar <= 0:
+                        st.error("Ingresa una cantidad mayor a 0.")
+                    else:
+                        nuevo_saldo = saldo_disponible - kg_desechar
+                        db.update_row(
+                            "produccion_semielaborados", "lote_semielaborado_id", lote_perdida_id,
+                            {"kg_saldo": nuevo_saldo},
+                        )
+                        merma_id = db.siguiente_id("mermas_semielaborado", "MS", datetime.date.today())
+                        db.append_row("mermas_semielaborado", {
+                            "merma_id": merma_id,
+                            "fecha": datetime.date.today().isoformat(),
+                            "lote_semielaborado_id": lote_perdida_id,
+                            "kg_desechado": kg_desechar,
+                            "causa": causa,
+                            "costo_estimado": kg_desechar * costo_unit_lote,
+                            "usuario": username,
+                            "observaciones": observaciones_perdida,
+                        })
+                        st.success(f"Pérdida {merma_id} registrada — saldo del lote actualizado a {nuevo_saldo:.1f} kg.")
+                        st.rerun()
 
     with tab_rendimiento:
         df = db.get_df("produccion_semielaborados")

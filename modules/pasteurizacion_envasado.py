@@ -64,6 +64,13 @@ def render(db, username, rol):
         kg_nominal = float(fila_pres["kg_nominal"])
         costo_envase_unitario = float(fila_pres["costo_envase_unitario"])
 
+        pasteurizado = st.checkbox(
+            "🔥 Este lote se pasteuriza", value=True,
+            help="Desmarca solo para venta de clara líquida cruda sin pasteurizar a clientes que la piden así.",
+        )
+        if not pasteurizado:
+            st.caption("⚠️ Se va a registrar como **sin pasteurizar** — clara/huevo crudo directo del tanque.")
+
         es_pet = str(fila_pres.get("tipo_envase", "")).strip() == "PET"
         tapa_id = ""
         costo_tapa_unitario = 0.0
@@ -170,6 +177,7 @@ def render(db, username, rol):
                 "kg_usado": kg_usado,
                 "unidades_teoricas": unidades_teoricas,
                 "unidades_reales": unidades_reales,
+                "pasteurizado": pasteurizado,
                 "costo_semielaborado": costo_semielaborado,
                 "costo_envases": costo_envases,
                 "tapa_id": tapa_id,
@@ -311,7 +319,7 @@ def render(db, username, rol):
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
             columnas_disp = [
-                "lote_producto_id", "fecha", "presentacion_id", "tapa_id",
+                "lote_producto_id", "fecha", "presentacion_id", "pasteurizado", "tapa_id",
                 "etiqueta_id", "cantidad_cartones", "liner_id", "unidades_saldo",
             ]
             if ve_costos(rol):

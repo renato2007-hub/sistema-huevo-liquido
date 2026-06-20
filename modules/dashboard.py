@@ -604,10 +604,38 @@ def render(db, username, rol):
         huevos_danados_total = _num(mermas_mp_f, "huevos_danados").sum()
         costo_mermas_mp = _num(mermas_mp_f, "costo_estimado").sum()
 
-        m1, m2, m3 = st.columns(3)
+        mermas_semi = db.get_df("mermas_semielaborado")
+        mermas_semi_f = _filtrar_por_fecha(mermas_semi, desde, hasta)
+        kg_semi_desechado = _num(mermas_semi_f, "kg_desechado").sum()
+        costo_semi_desechado = _num(mermas_semi_f, "costo_estimado").sum()
+
+        m1, m2, m3, m4 = st.columns(4)
         _kpi_card(m1, "🥚", "Cáscara generada", f"{cascara_total:,.1f} kg")
         _kpi_card(m2, "💔", "Huevos dañados en bodega", f"{huevos_danados_total:,.0f}")
-        _kpi_card(m3, "💲", "Costo huevo perdido", f"{costo_mermas_mp:,.2f}")
+        _kpi_card(m3, "🧪", "Clara/yema desechada", f"{kg_semi_desechado:,.1f} kg")
+        _kpi_card(m4, "💲", "Costo huevo + semielaborado perdido", f"{(costo_mermas_mp + costo_semi_desechado):,.2f}")
+
+        st.write("")
+        with st.container(border=True):
+            st.markdown("##### 🧪 Clara/yema desechada (sin cliente, dañada o vencida)")
+            if mermas_semi_f.empty:
+                st.info("No hay clara/yema desechada en este período.")
+            else:
+                mermas_semi_view = mermas_semi_f.copy()
+                if not produccion.empty:
+                    mermas_semi_view = mermas_semi_view.merge(
+                        produccion[["lote_semielaborado_id", "tipo_producto"]],
+                        on="lote_semielaborado_id", how="left",
+                    )
+                col_tabla, col_graf = st.columns([3, 2])
+                columnas_merma_semi = [c for c in [
+                    "fecha", "lote_semielaborado_id", "tipo_producto", "kg_desechado", "causa", "observaciones",
+                ] if c in mermas_semi_view.columns]
+                col_tabla.dataframe(mermas_semi_view[columnas_merma_semi], use_container_width=True, hide_index=True)
+                with col_graf:
+                    if "tipo_producto" in mermas_semi_view.columns:
+                        por_tipo_merma = mermas_semi_view.groupby("tipo_producto")["kg_desechado"].sum()
+                        _grafico_dona(por_tipo_merma.index, por_tipo_merma.values, "Kg desechados por tipo")
 
         st.write("")
         with st.container(border=True):

@@ -30,6 +30,11 @@ SHEET_SCHEMAS = {
     "compensaciones_feriado": ["compensacion_id", "fecha", "personal_id", "observaciones", "usuario"],
 
     # ---------- Supervision y calidad (overhead diario, no se reparte por lote) ----------
+    "mermas_semielaborado": [
+        "merma_id", "fecha", "lote_semielaborado_id", "kg_desechado",
+        "causa", "costo_estimado", "usuario", "observaciones",
+    ],
+
     "supervision_diaria": [
         "registro_id", "fecha", "personal_id", "hora_entrada", "hora_salida",
         "horas", "horas_nocturnas", "costo_calculado", "usuario", "observaciones",
@@ -82,7 +87,7 @@ SHEET_SCHEMAS = {
     # ---------- Pasteurizacion y envasado ----------
     "pasteurizacion_envasado": [
         "lote_producto_id", "fecha", "lote_semielaborado_id", "presentacion_id",
-        "kg_usado", "unidades_teoricas", "unidades_reales",
+        "kg_usado", "unidades_teoricas", "unidades_reales", "pasteurizado",
         "costo_semielaborado", "costo_envases", "tapa_id", "costo_tapas",
         "etiqueta_id", "costo_etiquetas",
         "carton_id", "cantidad_cartones", "costo_cartones",
