@@ -54,7 +54,8 @@ SHEET_SCHEMAS = {
         "detalle_id", "lote_semielaborado_id", "insumo_id", "cantidad", "costo_calculado",
     ],
     "produccion_personal": [
-        "detalle_id", "lote_semielaborado_id", "personal_id", "horas", "costo_calculado",
+        "detalle_id", "lote_semielaborado_id", "personal_id",
+        "hora_entrada", "hora_salida", "horas", "horas_nocturnas", "costo_calculado",
     ],
     "produccion_semielaborados": [
         "lote_semielaborado_id", "fecha", "orden_produccion", "tipo_producto",

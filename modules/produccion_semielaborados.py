@@ -7,6 +7,7 @@ import datetime
 import streamlit as st
 import pandas as pd
 from utils.costing import sugerir_lotes_fefo, costo_ponderado, rendimiento_teorico, sugerir_codigo_lote
+from utils.horas_trabajo import calcular_horas_sesion
 from utils.permisos import ve_costos, es_admin
 
 
@@ -109,11 +110,20 @@ def render(db, username, rol):
         )
 
         st.markdown("**Personal que trabajó la jornada**")
+        st.caption("Ingresa hora de entrada y salida — el sistema calcula las horas totales y cuántas son nocturnas (19:00-05:00).")
         opciones_personal = list(personal["personal_id"]) if not personal.empty else []
         df_personal_input = st.data_editor(
-            pd.DataFrame({"personal_id": pd.Series(dtype="object"), "horas": pd.Series(dtype="float")}),
+            pd.DataFrame({
+                "personal_id": pd.Series(dtype="object"),
+                "hora_entrada": pd.Series(dtype="object"),
+                "hora_salida": pd.Series(dtype="object"),
+            }),
             num_rows="dynamic", use_container_width=True, key="editor_personal",
-            column_config={"personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal)},
+            column_config={
+                "personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal),
+                "hora_entrada": st.column_config.TimeColumn("Hora entrada", format="HH:mm"),
+                "hora_salida": st.column_config.TimeColumn("Hora salida", format="HH:mm"),
+            },
         )
 
         agua_litros = st.number_input("Agua usada (litros)", min_value=0.0, step=1.0)
@@ -206,11 +216,22 @@ def render(db, username, rol):
             for _, fila in df_personal_input.iterrows():
                 if pd.isna(fila.get("personal_id")) or not fila.get("personal_id"):
                     continue
+                if pd.isna(fila.get("hora_entrada")) or pd.isna(fila.get("hora_salida")):
+                    st.error(
+                        f"Falta hora de entrada o salida para {fila['personal_id']}. "
+                        f"Completa ambas antes de guardar."
+                    )
+                    return
                 costo_hora = float(personal.set_index("personal_id").loc[fila["personal_id"], "costo_hora"])
-                horas = float(fila["horas"]) if pd.notna(fila.get("horas")) else 0.0
+                horas, horas_nocturnas = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
                 costo_mano_obra_total += costo_hora * horas
                 detalle_personal.append({
-                    "personal_id": fila["personal_id"], "horas": horas, "costo_calculado": costo_hora * horas,
+                    "personal_id": fila["personal_id"],
+                    "hora_entrada": fila["hora_entrada"].strftime("%H:%M"),
+                    "hora_salida": fila["hora_salida"].strftime("%H:%M"),
+                    "horas": horas,
+                    "horas_nocturnas": horas_nocturnas,
+                    "costo_calculado": costo_hora * horas,
                 })
 
             costo_total = costo_huevo_total + costo_insumos_total + costo_mano_obra_total

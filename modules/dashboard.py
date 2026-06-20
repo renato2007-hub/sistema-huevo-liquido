@@ -291,7 +291,8 @@ def render(db, username, rol):
             st.caption(
                 "Normales = hasta 8h en día normal · Extras = lo que excede 8h en día "
                 "normal · Dobles = horas en feriado sin compensación · Compensadas = "
-                "horas en feriado con descanso acordado en su lugar (ver Catálogos → Feriados)."
+                "horas en feriado con descanso acordado en su lugar · Nocturnas = "
+                "horas entre 19:00 y 05:00 (eje aparte, se cruza con las demás)."
             )
             if personal_detalle.empty or produccion.empty:
                 st.info("No hay registros de horas de personal en este período.")
@@ -309,10 +310,13 @@ def render(db, username, rol):
                     else:
                         ph["nombre"] = ph["personal_id"]
                     ph["horas"] = pd.to_numeric(ph["horas"], errors="coerce").fillna(0)
+                    ph["horas_nocturnas"] = pd.to_numeric(ph.get("horas_nocturnas"), errors="coerce").fillna(0)
                     ph["costo_calculado"] = pd.to_numeric(ph["costo_calculado"], errors="coerce").fillna(0)
 
-                    # costo total por persona (independiente de la clasificacion de horas)
+                    # costo total y horas nocturnas por persona (ejes aparte de la
+                    # clasificacion normal/extra/doble/compensada)
                     costo_por_persona = ph.groupby("nombre")["costo_calculado"].sum()
+                    nocturnas_por_persona = ph.groupby("nombre")["horas_nocturnas"].sum()
 
                     # sumar horas del MISMO dia antes de clasificar (si una persona trabajo
                     # en varios lotes el mismo dia, hay que sumarlas antes de aplicar el limite
@@ -330,14 +334,17 @@ def render(db, username, rol):
                         horas_totales=("horas", "sum"),
                     ).reset_index().sort_values("horas_totales", ascending=False)
                     resumen_personal["costo"] = resumen_personal["nombre"].map(costo_por_persona).fillna(0)
+                    resumen_personal["horas_nocturnas"] = resumen_personal["nombre"].map(nocturnas_por_persona).fillna(0)
 
-                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1, c2, c3, c4, c5, c6 = st.columns(6)
                     c1.metric("Horas normales", f"{resumen_personal['horas_normales'].sum():,.1f}")
                     c2.metric("Horas extras", f"{resumen_personal['horas_extras'].sum():,.1f}")
                     c3.metric("Horas dobles", f"{resumen_personal['horas_dobles'].sum():,.1f}")
                     c4.metric("Horas compensadas", f"{resumen_personal['horas_compensadas'].sum():,.1f}")
-                    c5.metric("Costo mano de obra", f"{resumen_personal['costo'].sum():,.2f}")
+                    c5.metric("Horas nocturnas", f"{resumen_personal['horas_nocturnas'].sum():,.1f}")
+                    c6.metric("Costo mano de obra", f"{resumen_personal['costo'].sum():,.2f}")
 
+                    st.caption("'Nocturnas' es un eje aparte (cuándo se trabajó) — esas horas también están incluidas en normales/extras/dobles según corresponda, no se suman por separado al total.")
                     st.dataframe(resumen_personal, use_container_width=True, hide_index=True)
                     st.markdown("**Desglose de horas por persona**")
                     st.bar_chart(
