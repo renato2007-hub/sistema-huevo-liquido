@@ -17,7 +17,7 @@ NOMBRES_TABLAS = [
 ]
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("📄 Trazabilidad")
     st.caption(
         "Elige el lote de origen (SR = huevo entero, R = clara, TK = yema) y "

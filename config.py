@@ -8,7 +8,7 @@ la primera vez que corre (si la pestana es nueva).
 # Nombre de cada pestana (tab) del Google Sheet -> lista de columnas (encabezado)
 SHEET_SCHEMAS = {
     # ---------- Catalogos ----------
-    "usuarios": ["username", "password_hash", "nombre", "activo"],
+    "usuarios": ["username", "password_hash", "nombre", "rol", "activo"],
     "galpones": ["galpon_id", "nombre", "ubicacion", "activo"],
     "proveedores": ["proveedor_id", "nombre", "contacto", "calificacion", "activo"],
     "categorias_huevo": [

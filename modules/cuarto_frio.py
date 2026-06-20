@@ -7,9 +7,10 @@ de inventario, y vista de que se cargo en cada vehiculo.
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.permisos import ve_costos
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("Cuarto frío")
     tab_ingreso, tab_despacho, tab_inventario, tab_vehiculos = st.tabs(
         ["Ingreso desde envasado", "Despacho a cliente", "Inventario actual", "🚚 Cargas por vehículo"]
@@ -248,14 +249,15 @@ def render(db, username):
                 )
             else:
                 inventario["lote_origen"] = ""
-            st.dataframe(
-                inventario[[
-                    "entrada_id", "lote_origen", "lote_producto_id", "presentacion_nombre",
-                    "saldo", "costo_unitario", "valor", "fecha_vencimiento",
-                ]],
-                use_container_width=True,
-            )
-            st.metric("Valor total en cuarto frío", f"{inventario['valor'].sum():,.2f}")
+            columnas_inv = [
+                "entrada_id", "lote_origen", "lote_producto_id", "presentacion_nombre",
+                "saldo", "fecha_vencimiento",
+            ]
+            if ve_costos(rol):
+                columnas_inv[5:5] = ["costo_unitario", "valor"]
+            st.dataframe(inventario[columnas_inv], use_container_width=True)
+            if ve_costos(rol):
+                st.metric("Valor total en cuarto frío", f"{inventario['valor'].sum():,.2f}")
 
     with tab_vehiculos:
         salidas = db.get_df("cuarto_frio_salidas")

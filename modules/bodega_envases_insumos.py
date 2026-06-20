@@ -9,6 +9,7 @@ porque ya venian mal o se danaron en bodega).
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.permisos import ve_costos
 
 CAUSAS_MERMA = ["Llegó dañado del proveedor", "Se dañó en bodega", "Se dañó al manipular/usar", "Otro"]
 
@@ -26,7 +27,7 @@ def _saldo_actual(df_movimientos, item_tipo, item_id):
     return float((cantidades * signo).sum())
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("Bodega de envases e insumos")
     tab_movimiento, tab_inventario = st.tabs(["Registrar movimiento", "Inventario actual"])
 
@@ -132,9 +133,9 @@ def render(db, username):
                         presentaciones[["presentacion_id", "nombre"]].rename(columns={"presentacion_id": "item_id"}) if not presentaciones.empty else pd.DataFrame(columns=["item_id", "nombre"]),
                     ])
                     mermas_mostrar = mermas.merge(catalogo_todo, on="item_id", how="left")
-                    st.dataframe(
-                        mermas_mostrar[["fecha", "nombre", "cantidad", "causa", "costo_total", "observaciones"]],
-                        use_container_width=True,
-                    )
+                    columnas_merma = ["fecha", "nombre", "cantidad", "causa", "observaciones"]
+                    if ve_costos(rol):
+                        columnas_merma.insert(4, "costo_total")
+                    st.dataframe(mermas_mostrar[columnas_merma], use_container_width=True)
         else:
             st.info("Configura insumos y presentaciones en Catálogos para ver el inventario.")

@@ -7,9 +7,10 @@ import datetime
 import streamlit as st
 import pandas as pd
 from utils.costing import sugerir_lotes_fefo, costo_ponderado, rendimiento_teorico, sugerir_codigo_lote
+from utils.permisos import ve_costos, es_admin
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("Producción de semielaborados")
     tab_nueva, tab_inventario, tab_rendimiento, tab_corregir = st.tabs(
         ["Nueva producción", "Inventario de tanques", "Teórico vs. real", "✏️ Corregir / eliminar"]
@@ -323,10 +324,13 @@ def render(db, username):
                     "observaciones": f"{observaciones} (co-producto junto con lote clara {codigo_clara})".strip(),
                 })
 
-                st.success(
-                    f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados — "
-                    f"costo/kg clara {costo_unit_clara:,.2f}, costo/kg yema {costo_unit_yema:,.2f}"
-                )
+                if ve_costos(rol):
+                    st.success(
+                        f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados — "
+                        f"costo/kg clara {costo_unit_clara:,.2f}, costo/kg yema {costo_unit_yema:,.2f}"
+                    )
+                else:
+                    st.success(f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados.")
             else:
                 costo_unitario_kg = costo_total / kg_real if kg_real > 0 else 0
                 db.append_row("produccion_semielaborados", {
@@ -351,10 +355,13 @@ def render(db, username):
                     "observaciones": observaciones,
                 })
 
-                st.success(
-                    f"Lote {codigo_lote} guardado — "
-                    f"costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}"
-                )
+                if ve_costos(rol):
+                    st.success(
+                        f"Lote {codigo_lote} guardado — "
+                        f"costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}"
+                    )
+                else:
+                    st.success(f"Lote {codigo_lote} guardado.")
 
     with tab_inventario:
         df = db.get_df("produccion_semielaborados")
@@ -363,10 +370,10 @@ def render(db, username):
         else:
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
             disponibles = df[df["kg_saldo"] > 0]
-            st.dataframe(
-                disponibles[["lote_semielaborado_id", "fecha", "tipo_producto", "kg_saldo", "costo_unitario_kg"]],
-                use_container_width=True,
-            )
+            columnas_disp = ["lote_semielaborado_id", "fecha", "tipo_producto", "kg_saldo"]
+            if ve_costos(rol):
+                columnas_disp.append("costo_unitario_kg")
+            st.dataframe(disponibles[columnas_disp], use_container_width=True)
 
     with tab_rendimiento:
         df = db.get_df("produccion_semielaborados")
@@ -405,6 +412,9 @@ def render(db, username):
                 col_g2.line_chart(df.set_index("fecha")["balance_masa_pct"])
 
     with tab_corregir:
+        if not es_admin(rol):
+            st.error("🔒 Esta función está disponible solo para el administrador.")
+            return
         st.caption(
             "Si te equivocaste al registrar una producción, NO la vuelvas a registrar encima — "
             "elimínala aquí primero (esto devuelve automáticamente las cubetas y los insumos a "

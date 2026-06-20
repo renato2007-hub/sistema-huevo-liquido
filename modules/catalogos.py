@@ -12,6 +12,7 @@ que se registre de ahi en adelante.
 """
 import streamlit as st
 from utils.auth import hash_password
+from utils.permisos import es_admin, ROLES_DISPONIBLES, NOMBRES_ROL
 
 
 def _valor_default_numero(valor_actual):
@@ -124,8 +125,12 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
         )
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("Catálogos y configuración")
+
+    if not es_admin(rol):
+        st.error("🔒 Esta sección está disponible solo para el administrador.")
+        return
 
     seccion = st.selectbox(
         "Catálogo a administrar",
@@ -193,7 +198,7 @@ def render(db, username):
     elif seccion == "Usuarios":
         st.subheader("Usuarios del sistema")
         df = db.get_df("usuarios")
-        st.dataframe(df[["username", "nombre", "activo"]] if not df.empty else df, use_container_width=True)
+        st.dataframe(df[["username", "nombre", "rol", "activo"]] if not df.empty else df, use_container_width=True)
 
         tab_nuevo, tab_editar = st.tabs(["➕ Crear usuario", "✏️ Editar / desactivar existente"])
 
@@ -202,6 +207,10 @@ def render(db, username):
                 username_nuevo = st.text_input("Usuario (sin espacios)")
                 nombre = st.text_input("Nombre completo")
                 password = st.text_input("Contraseña", type="password")
+                rol_nuevo = st.selectbox(
+                    "Rol", ROLES_DISPONIBLES, index=ROLES_DISPONIBLES.index("supervisor"),
+                    format_func=lambda r: NOMBRES_ROL[r],
+                )
                 activo = st.checkbox("Activo", value=True)
                 guardar = st.form_submit_button("Crear usuario")
             if guardar:
@@ -214,9 +223,10 @@ def render(db, username):
                         "username": username_nuevo,
                         "password_hash": hash_password(password),
                         "nombre": nombre,
+                        "rol": rol_nuevo,
                         "activo": activo,
                     })
-                    st.success(f"Usuario {username_nuevo} creado.")
+                    st.success(f"Usuario {username_nuevo} creado como {NOMBRES_ROL[rol_nuevo]}.")
                     st.rerun()
 
         with tab_editar:
@@ -225,10 +235,18 @@ def render(db, username):
             else:
                 username_sel = st.selectbox("Selecciona el usuario", df["username"], key="editar_user_select")
                 fila_usuario = df[df["username"] == username_sel].iloc[0]
+                rol_actual = str(fila_usuario.get("rol", "")) or "admin"
+                if rol_actual not in ROLES_DISPONIBLES:
+                    rol_actual = "admin"
                 with st.form(f"form_usuario_editar_{username_sel}"):
                     nombre_nuevo = st.text_input(
                         "Nombre completo", value=str(fila_usuario["nombre"]),
                         key=f"editar_user_nombre_{username_sel}",
+                    )
+                    rol_nuevo = st.selectbox(
+                        "Rol", ROLES_DISPONIBLES, index=ROLES_DISPONIBLES.index(rol_actual),
+                        format_func=lambda r: NOMBRES_ROL[r],
+                        key=f"editar_user_rol_{username_sel}",
                     )
                     activo_nuevo = st.checkbox(
                         "Activo", value=_valor_default_bool(fila_usuario["activo"]),
@@ -240,7 +258,7 @@ def render(db, username):
                     )
                     guardar_usuario = st.form_submit_button("💾 Guardar cambios")
                 if guardar_usuario:
-                    cambios = {"nombre": nombre_nuevo, "activo": activo_nuevo}
+                    cambios = {"nombre": nombre_nuevo, "rol": rol_nuevo, "activo": activo_nuevo}
                     if nueva_password:
                         cambios["password_hash"] = hash_password(nueva_password)
                     db.update_row("usuarios", "username", username_sel, cambios)

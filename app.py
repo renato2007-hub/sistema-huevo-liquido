@@ -1,6 +1,7 @@
 import streamlit as st
 from utils.sheets_client import get_db
 from utils.auth import login
+from utils.permisos import puede_ver_modulo, NOMBRES_ROL, rol_normalizado
 from modules import (
     bodega_mp,
     bodega_envases_insumos,
@@ -16,7 +17,7 @@ from modules import (
 st.set_page_config(page_title="Sistema de producción — Huevo líquido", layout="wide", page_icon="🥚")
 
 db = get_db()
-username = login(db)
+username, rol = login(db)
 
 # ============================== BARRA LATERAL ==============================
 st.sidebar.markdown(
@@ -36,14 +37,18 @@ st.sidebar.markdown(
 )
 
 with st.sidebar.container(border=True):
-    st.markdown(f"👤 Conectado como **{username}**")
+    st.markdown(f"👤 **{username}**")
+    st.caption(NOMBRES_ROL.get(rol_normalizado(rol), rol))
     if st.button("🚪 Cerrar sesión", use_container_width=True):
         del st.session_state["username"]
+        del st.session_state["rol"]
         st.rerun()
 
 st.sidebar.write("")
 
 if "modulo_actual" not in st.session_state:
+    st.session_state["modulo_actual"] = "Inicio"
+if not puede_ver_modulo(rol, st.session_state["modulo_actual"]):
     st.session_state["modulo_actual"] = "Inicio"
 
 
@@ -57,6 +62,8 @@ def _categoria(titulo, color):
 
 
 def _boton_modulo(nombre, icono):
+    if not puede_ver_modulo(rol, nombre):
+        return
     activo = st.session_state["modulo_actual"] == nombre
     if st.sidebar.button(
         f"{icono}  {nombre}", key=f"nav_{nombre}", use_container_width=True,
@@ -75,13 +82,15 @@ _boton_modulo("Producción de semielaborados", "⚗️")
 _boton_modulo("Pasteurización y envasado", "🧪")
 _boton_modulo("Cuarto frío", "❄️")
 
-_categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
-_boton_modulo("Limpieza y desinfección", "🧽")
-_boton_modulo("Trazabilidad", "📄")
+if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad"):
+    _categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
+    _boton_modulo("Limpieza y desinfección", "🧽")
+    _boton_modulo("Trazabilidad", "📄")
 
-_categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
-_boton_modulo("Dashboard", "📊")
-_boton_modulo("Catálogos y configuración", "⚙️")
+if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
+    _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
+    _boton_modulo("Dashboard", "📊")
+    _boton_modulo("Catálogos y configuración", "⚙️")
 
 modulo = st.session_state["modulo_actual"]
 
@@ -99,20 +108,20 @@ if modulo == "Inicio":
         "antes de registrar movimientos en los demás módulos."
     )
 elif modulo == "Dashboard":
-    dashboard.render(db, username)
+    dashboard.render(db, username, rol)
 elif modulo == "Bodega de materia prima":
-    bodega_mp.render(db, username)
+    bodega_mp.render(db, username, rol)
 elif modulo == "Bodega de envases e insumos":
-    bodega_envases_insumos.render(db, username)
+    bodega_envases_insumos.render(db, username, rol)
 elif modulo == "Producción de semielaborados":
-    produccion_semielaborados.render(db, username)
+    produccion_semielaborados.render(db, username, rol)
 elif modulo == "Pasteurización y envasado":
-    pasteurizacion_envasado.render(db, username)
+    pasteurizacion_envasado.render(db, username, rol)
 elif modulo == "Cuarto frío":
-    cuarto_frio.render(db, username)
+    cuarto_frio.render(db, username, rol)
 elif modulo == "Limpieza y desinfección":
-    limpieza_desinfeccion.render(db, username)
+    limpieza_desinfeccion.render(db, username, rol)
 elif modulo == "Trazabilidad":
-    trazabilidad.render(db, username)
+    trazabilidad.render(db, username, rol)
 elif modulo == "Catálogos y configuración":
-    catalogos.render(db, username)
+    catalogos.render(db, username, rol)

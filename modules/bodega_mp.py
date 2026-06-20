@@ -7,12 +7,13 @@ cada lote siempre queda ligado a la produccion que lo origino (trazabilidad).
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.permisos import ve_costos
 
 
 CAUSAS_MERMA_HUEVO = ["Caída", "Rotura en bodega", "Daño de transporte/proveedor", "Otro"]
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("Bodega de materia prima — huevo")
     tab_recepcion, tab_inventario, tab_historial, tab_perdida = st.tabs(
         ["Registrar recepción", "Inventario actual", "Historial", "⚠️ Registrar pérdida/daño"]
@@ -102,18 +103,18 @@ def render(db, username):
                 if not proximos.empty:
                     st.warning(f"{len(proximos)} lote(s) vencen en 3 días o menos — revisa el orden de consumo.")
 
-                st.dataframe(
-                    inventario[[
-                        "recepcion_id", "fecha", "origen_tipo", "categoria_id",
-                        "cubetas_saldo", "costo_cubeta", "valor_saldo",
-                        "fecha_vencimiento", "dias_para_vencer",
-                    ]],
-                    use_container_width=True,
-                )
-                st.metric("Valor total en bodega de materia prima", f"{inventario['valor_saldo'].sum():,.2f}")
+                columnas_inv = ["recepcion_id", "fecha", "origen_tipo", "categoria_id",
+                                "cubetas_saldo", "fecha_vencimiento", "dias_para_vencer"]
+                if ve_costos(rol):
+                    columnas_inv[5:5] = ["costo_cubeta", "valor_saldo"]
+                st.dataframe(inventario[columnas_inv], use_container_width=True)
+                if ve_costos(rol):
+                    st.metric("Valor total en bodega de materia prima", f"{inventario['valor_saldo'].sum():,.2f}")
 
     with tab_historial:
         df = db.get_df("recepciones_mp")
+        if not df.empty and not ve_costos(rol):
+            df = df.drop(columns=[c for c in ["costo_cubeta", "costo_total"] if c in df.columns])
         st.dataframe(df, use_container_width=True)
 
     with tab_perdida:
@@ -154,9 +155,12 @@ def render(db, username):
                         f"tiene {cubetas_saldo_lote:.2f} cubetas de saldo. Revisa la cantidad."
                     )
                 costo_estimado = cubetas_equivalentes * costo_cubeta_lote
-                st.caption(
-                    f"≈ {cubetas_equivalentes:.2f} cubetas — costo estimado de la pérdida: {costo_estimado:,.2f}"
-                )
+                if ve_costos(rol):
+                    st.caption(
+                        f"≈ {cubetas_equivalentes:.2f} cubetas — costo estimado de la pérdida: {costo_estimado:,.2f}"
+                    )
+                else:
+                    st.caption(f"≈ {cubetas_equivalentes:.2f} cubetas")
 
                 causa = st.selectbox("Causa", CAUSAS_MERMA_HUEVO)
                 observaciones = st.text_area("Observaciones", "", key="perdida_obs")
@@ -194,10 +198,13 @@ def render(db, username):
         if mermas.empty:
             st.info("No hay pérdidas registradas todavía.")
         else:
+            columnas_merma = ["fecha", "recepcion_id", "causa", "huevos_danados", "observaciones"]
+            if ve_costos(rol):
+                columnas_merma.insert(4, "costo_estimado")
             st.dataframe(
-                mermas[["fecha", "recepcion_id", "causa", "huevos_danados", "costo_estimado", "observaciones"]]
-                .sort_values("fecha", ascending=False),
+                mermas[columnas_merma].sort_values("fecha", ascending=False),
                 use_container_width=True,
             )
-            costo_total_mermas = pd.to_numeric(mermas["costo_estimado"], errors="coerce").fillna(0).sum()
-            st.metric("Costo total acumulado en pérdidas", f"{costo_total_mermas:,.2f}")
+            if ve_costos(rol):
+                costo_total_mermas = pd.to_numeric(mermas["costo_estimado"], errors="coerce").fillna(0).sum()
+                st.metric("Costo total acumulado en pérdidas", f"{costo_total_mermas:,.2f}")

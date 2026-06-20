@@ -8,9 +8,10 @@ descuentan del mismo inventario de Bodega de envases e insumos.
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.permisos import ve_costos, es_admin
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("🧽 Limpieza y desinfección")
     tab_nueva, tab_historial, tab_resumen, tab_corregir = st.tabs(
         ["➕ Registrar limpieza", "📋 Historial", "📊 Resumen por área", "✏️ Corregir / eliminar"]
@@ -132,7 +133,10 @@ def render(db, username):
                 "observaciones": observaciones,
             })
 
-            st.success(f"✅ Registro {limpieza_id} guardado — costo insumos {costo_insumos_total:,.2f}")
+            if ve_costos(rol):
+                st.success(f"✅ Registro {limpieza_id} guardado — costo insumos {costo_insumos_total:,.2f}")
+            else:
+                st.success(f"✅ Registro {limpieza_id} guardado.")
 
     # ======================== HISTORIAL ========================
     with tab_historial:
@@ -165,10 +169,10 @@ def render(db, username):
             )
             df_mostrar = df if filtro_area == "Todas" else df[df["area_nombre"] == filtro_area]
 
-            columnas = [c for c in [
-                "fecha", "area_nombre", "tipo_limpieza", "agua_litros",
-                "costo_insumos", "verificado", "observaciones",
-            ] if c in df_mostrar.columns]
+            columnas_base = ["fecha", "area_nombre", "tipo_limpieza", "agua_litros", "verificado", "observaciones"]
+            if ve_costos(rol):
+                columnas_base.insert(4, "costo_insumos")
+            columnas = [c for c in columnas_base if c in df_mostrar.columns]
             with st.container(border=True):
                 st.dataframe(
                     df_mostrar[columnas].sort_values("fecha", ascending=False),
@@ -197,16 +201,21 @@ def render(db, username):
                 registros=("limpieza_id", "count"),
             ).reset_index()
 
-            c1, c2 = st.columns(2)
-            with c1.container(border=True):
-                st.metric("💧 Agua total usada (todas las áreas)", f"{df['agua_litros'].sum():,.0f} L")
-            with c2.container(border=True):
-                st.metric("🧴 Costo total en insumos de limpieza", f"{df['costo_insumos'].sum():,.2f}")
+            if ve_costos(rol):
+                c1, c2 = st.columns(2)
+                with c1.container(border=True):
+                    st.metric("💧 Agua total usada (todas las áreas)", f"{df['agua_litros'].sum():,.0f} L")
+                with c2.container(border=True):
+                    st.metric("🧴 Costo total en insumos de limpieza", f"{df['costo_insumos'].sum():,.2f}")
+            else:
+                with st.container(border=True):
+                    st.metric("💧 Agua total usada (todas las áreas)", f"{df['agua_litros'].sum():,.0f} L")
 
             st.write("")
             with st.container(border=True):
                 st.markdown("##### Detalle por área")
-                st.dataframe(resumen, use_container_width=True, hide_index=True)
+                columnas_resumen = [c for c in resumen.columns if ve_costos(rol) or "costo" not in c]
+                st.dataframe(resumen[columnas_resumen], use_container_width=True, hide_index=True)
 
             st.write("")
             with st.container(border=True):
@@ -215,6 +224,9 @@ def render(db, username):
 
     # ======================== CORREGIR / ELIMINAR ========================
     with tab_corregir:
+        if not es_admin(rol):
+            st.error("🔒 Esta función está disponible solo para el administrador.")
+            return
         st.caption(
             "Si te equivocaste al registrar una limpieza, elimínala aquí — "
             "esto devuelve automáticamente los insumos a bodega."

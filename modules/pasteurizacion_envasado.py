@@ -8,9 +8,10 @@ import datetime
 import streamlit as st
 import pandas as pd
 from modules.bodega_envases_insumos import _saldo_actual
+from utils.permisos import ve_costos
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("Pasteurización y envasado")
     tab_nueva, tab_disponibles = st.tabs(["Nuevo lote envasado", "Producto terminado disponible"])
 
@@ -114,7 +115,10 @@ def render(db, username):
                 "observaciones": lote_producto_id,
             })
 
-            st.success(f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f}")
+            if ve_costos(rol):
+                st.success(f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f}")
+            else:
+                st.success(f"Lote {lote_producto_id} guardado.")
 
     with tab_disponibles:
         df = db.get_df("pasteurizacion_envasado")
@@ -122,10 +126,7 @@ def render(db, username):
             st.info("Todavía no hay lotes de producto terminado.")
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
-            st.dataframe(
-                df[df["unidades_saldo"] > 0][[
-                    "lote_producto_id", "fecha", "presentacion_id",
-                    "unidades_saldo", "costo_unitario",
-                ]],
-                use_container_width=True,
-            )
+            columnas_disp = ["lote_producto_id", "fecha", "presentacion_id", "unidades_saldo"]
+            if ve_costos(rol):
+                columnas_disp.append("costo_unitario")
+            st.dataframe(df[df["unidades_saldo"] > 0][columnas_disp], use_container_width=True)

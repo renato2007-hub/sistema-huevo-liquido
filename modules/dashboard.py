@@ -31,7 +31,7 @@ def _tarjeta_metrica(col, etiqueta, valor, ayuda=None, delta=None):
         st.metric(etiqueta, valor, delta=delta, help=ayuda)
 
 
-def render(db, username):
+def render(db, username, rol):
     st.title("📊 Dashboard")
 
     with st.container(border=True):
