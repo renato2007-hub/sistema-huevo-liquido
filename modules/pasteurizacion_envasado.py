@@ -18,6 +18,7 @@ def render(db, username, rol):
     semielaborados = db.get_df("produccion_semielaborados")
     presentaciones = db.get_df("presentaciones")
     turnos = db.get_df("turnos")
+    tapas = db.get_df("tapas")
 
     with tab_nueva:
         if semielaborados.empty:
@@ -60,6 +61,19 @@ def render(db, username, rol):
         kg_nominal = float(fila_pres["kg_nominal"])
         costo_envase_unitario = float(fila_pres["costo_envase_unitario"])
 
+        es_pet = str(fila_pres.get("tipo_envase", "")).strip() == "PET"
+        tapa_id = ""
+        costo_tapa_unitario = 0.0
+        if es_pet:
+            if tapas.empty:
+                st.warning("Esta presentación es PET pero no hay tapas configuradas en Catálogos → Tapas (PET).")
+                return
+            tapa_id = st.selectbox(
+                "Color de tapa", tapas["tapa_id"],
+                format_func=lambda x: tapas.set_index("tapa_id").loc[x, "color"],
+            )
+            costo_tapa_unitario = float(tapas.set_index("tapa_id").loc[tapa_id, "costo_unitario"])
+
         kg_usado = st.number_input(
             "Kg a pasteurizar/envasar", min_value=0.0, max_value=kg_disponible, step=0.5,
             key=f"kg_usado_{lote_semielaborado_id}",
@@ -83,7 +97,8 @@ def render(db, username, rol):
                 )
             costo_semielaborado = kg_usado * costo_unitario_kg
             costo_envases = unidades_reales * costo_envase_unitario
-            costo_total = costo_semielaborado + costo_envases
+            costo_tapas = unidades_reales * costo_tapa_unitario if es_pet else 0.0
+            costo_total = costo_semielaborado + costo_envases + costo_tapas
             costo_unitario = costo_total / unidades_reales if unidades_reales > 0 else 0
 
             lote_producto_id = db.siguiente_id("pasteurizacion_envasado", "PROD", fecha)
@@ -97,6 +112,8 @@ def render(db, username, rol):
                 "unidades_reales": unidades_reales,
                 "costo_semielaborado": costo_semielaborado,
                 "costo_envases": costo_envases,
+                "tapa_id": tapa_id,
+                "costo_tapas": costo_tapas,
                 "costo_total": costo_total,
                 "costo_unitario": costo_unitario,
                 "unidades_saldo": unidades_reales,
@@ -124,6 +141,29 @@ def render(db, username, rol):
                 "observaciones": lote_producto_id,
             })
 
+            if es_pet:
+                saldo_tapa_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "tapa", tapa_id)
+                if unidades_reales > saldo_tapa_previo:
+                    st.warning(
+                        f"⚠️ Hay {saldo_tapa_previo:.0f} tapas de este color en bodega, pero estás "
+                        f"usando {unidades_reales:.0f}. Se va a guardar igual, pero revisa si falta "
+                        f"registrar una compra de tapas."
+                    )
+                movimiento_tapa_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
+                db.append_row("movimientos_envases_insumos", {
+                    "movimiento_id": movimiento_tapa_id,
+                    "fecha": fecha.isoformat(),
+                    "item_tipo": "tapa",
+                    "item_id": tapa_id,
+                    "tipo_movimiento": "salida",
+                    "cantidad": unidades_reales,
+                    "costo_unitario": costo_tapa_unitario,
+                    "costo_total": costo_tapas,
+                    "modulo_destino": "Pasteurización y envasado",
+                    "usuario": username,
+                    "observaciones": lote_producto_id,
+                })
+
             if ve_costos(rol):
                 st.success(f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f}")
             else:
@@ -135,7 +175,7 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de producto terminado.")
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
-            columnas_disp = ["lote_producto_id", "fecha", "presentacion_id", "unidades_saldo"]
+            columnas_disp = ["lote_producto_id", "fecha", "presentacion_id", "tapa_id", "unidades_saldo"]
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario")
             st.dataframe(df[df["unidades_saldo"] > 0][columnas_disp], use_container_width=True)

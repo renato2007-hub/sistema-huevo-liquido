@@ -16,7 +16,8 @@ SHEET_SCHEMAS = {
         "pct_clara", "pct_yema", "pct_cascara", "notas",
     ],
     "insumos": ["insumo_id", "nombre", "tipo", "unidad", "costo_unitario", "activo"],
-    "presentaciones": ["presentacion_id", "nombre", "kg_nominal", "costo_envase_unitario", "activo"],
+    "presentaciones": ["presentacion_id", "nombre", "kg_nominal", "tipo_envase", "costo_envase_unitario", "activo"],
+    "tapas": ["tapa_id", "color", "costo_unitario", "activo"],
     "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
@@ -79,7 +80,8 @@ SHEET_SCHEMAS = {
     "pasteurizacion_envasado": [
         "lote_producto_id", "fecha", "lote_semielaborado_id", "presentacion_id",
         "kg_usado", "unidades_teoricas", "unidades_reales",
-        "costo_semielaborado", "costo_envases", "costo_total", "costo_unitario",
+        "costo_semielaborado", "costo_envases", "tapa_id", "costo_tapas",
+        "costo_total", "costo_unitario",
         "unidades_saldo", "turno", "usuario", "observaciones",
     ],
 

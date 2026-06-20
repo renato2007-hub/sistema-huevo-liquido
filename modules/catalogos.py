@@ -157,7 +157,7 @@ def render(db, username, rol):
         "Catálogo a administrar",
         [
             "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
-            "Insumos", "Presentaciones de envase", "Personal", "Clientes",
+            "Insumos", "Presentaciones de envase", "Tapas (PET)", "Personal", "Clientes",
             "Vehículos", "Áreas de limpieza", "Turnos", "Feriados", "Usuarios",
         ],
     )
@@ -190,9 +190,22 @@ def render(db, username, rol):
             ("unidad", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Presentaciones de envase":
+        st.caption(
+            "'Tipo de envase' = PET habilita el selector de color de tapa en "
+            "Pasteurización y envasado; 'Funda' no usa tapas."
+        )
         _seccion_simple(db, "presentaciones", "Presentaciones", [
             ("presentacion_id", "texto"), ("nombre", "texto"),
-            ("kg_nominal", "numero"), ("costo_envase_unitario", "numero"), ("activo", "bool"),
+            ("kg_nominal", "numero"), ("tipo_envase", ["PET", "Funda"]),
+            ("costo_envase_unitario", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Tapas (PET)":
+        st.caption(
+            "Un color de tapa por cliente (o grupo de clientes) que use envases PET. "
+            "Aparecen para elegir al envasar cualquier presentación marcada como PET."
+        )
+        _seccion_simple(db, "tapas", "Tapas", [
+            ("tapa_id", "texto"), ("color", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Personal":
         _seccion_simple(db, "personal", "Personal de producción", [

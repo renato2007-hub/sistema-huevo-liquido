@@ -33,11 +33,13 @@ def render(db, username, rol):
 
     insumos = db.get_df("insumos")
     presentaciones = db.get_df("presentaciones")
+    tapas = db.get_df("tapas")
 
     with tab_movimiento:
-        tipo_item = st.radio("Tipo de ítem", ["Insumo de limpieza", "Envase"], horizontal=True)
-        catalogo = insumos if tipo_item == "Insumo de limpieza" else presentaciones
-        col_id = "insumo_id" if tipo_item == "Insumo de limpieza" else "presentacion_id"
+        tipo_item = st.radio("Tipo de ítem", ["Insumo de limpieza", "Envase", "Tapa (PET)"], horizontal=True)
+        catalogo = {"Insumo de limpieza": insumos, "Envase": presentaciones, "Tapa (PET)": tapas}[tipo_item]
+        col_id = {"Insumo de limpieza": "insumo_id", "Envase": "presentacion_id", "Tapa (PET)": "tapa_id"}[tipo_item]
+        col_nombre = "color" if tipo_item == "Tapa (PET)" else "nombre"
 
         if catalogo.empty:
             st.warning("No hay ítems configurados todavía en Catálogos.")
@@ -57,7 +59,7 @@ def render(db, username, rol):
                 fecha = st.date_input("Fecha", value=datetime.date.today())
                 item_id = st.selectbox(
                     "Ítem", catalogo[col_id],
-                    format_func=lambda x: catalogo.set_index(col_id).loc[x, "nombre"],
+                    format_func=lambda x: catalogo.set_index(col_id).loc[x, col_nombre],
                 )
                 cantidad = st.number_input("Cantidad", min_value=0.0, step=1.0)
                 costo_unitario = st.number_input("Costo unitario", min_value=0.0, step=0.01, format="%.2f")
@@ -72,9 +74,9 @@ def render(db, username, rol):
                 guardar = st.form_submit_button("Registrar movimiento")
 
             if guardar:
+                item_tipo_map = {"Insumo de limpieza": "insumo", "Envase": "envase", "Tapa (PET)": "tapa"}
                 saldo_previo = _saldo_actual(
-                    db.get_df("movimientos_envases_insumos"),
-                    "insumo" if tipo_item == "Insumo de limpieza" else "envase", item_id,
+                    db.get_df("movimientos_envases_insumos"), item_tipo_map[tipo_item], item_id,
                 )
                 if tipo_movimiento in ("salida", "merma") and cantidad > saldo_previo:
                     st.warning(
@@ -83,7 +85,7 @@ def render(db, username, rol):
                         f"falta registrar una compra anterior."
                     )
                 movimiento_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
-                item_tipo = "insumo" if tipo_item == "Insumo de limpieza" else "envase"
+                item_tipo = item_tipo_map[tipo_item]
                 db.append_row("movimientos_envases_insumos", {
                     "movimiento_id": movimiento_id,
                     "fecha": fecha.isoformat(),
@@ -114,6 +116,11 @@ def render(db, username, rol):
                 "tipo": "Envase", "item_id": row["presentacion_id"], "nombre": row["nombre"],
                 "saldo": _saldo_actual(df_movimientos, "envase", row["presentacion_id"]),
             })
+        for _, row in tapas.iterrows():
+            filas.append({
+                "tipo": "Tapa", "item_id": row["tapa_id"], "nombre": row["color"],
+                "saldo": _saldo_actual(df_movimientos, "tapa", row["tapa_id"]),
+            })
         if filas:
             df_inv = pd.DataFrame(filas)
             negativos = df_inv[df_inv["saldo"] < 0]
@@ -131,6 +138,7 @@ def render(db, username, rol):
                     catalogo_todo = pd.concat([
                         insumos[["insumo_id", "nombre"]].rename(columns={"insumo_id": "item_id"}) if not insumos.empty else pd.DataFrame(columns=["item_id", "nombre"]),
                         presentaciones[["presentacion_id", "nombre"]].rename(columns={"presentacion_id": "item_id"}) if not presentaciones.empty else pd.DataFrame(columns=["item_id", "nombre"]),
+                        tapas[["tapa_id", "color"]].rename(columns={"tapa_id": "item_id", "color": "nombre"}) if not tapas.empty else pd.DataFrame(columns=["item_id", "nombre"]),
                     ])
                     mermas_mostrar = mermas.merge(catalogo_todo, on="item_id", how="left")
                     columnas_merma = ["fecha", "nombre", "cantidad", "causa", "observaciones"]
