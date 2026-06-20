@@ -27,7 +27,7 @@ def login(db):
     if "username" in st.session_state:
         return st.session_state["username"], st.session_state.get("rol", "admin")
 
-    st.title("Sistema de producción — Huevo líquido")
+    st.title("Sistema de producción — Ovoproductos")
 
     df_usuarios = db.get_df("usuarios")
 

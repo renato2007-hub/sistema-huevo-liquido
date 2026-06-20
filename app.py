@@ -14,7 +14,7 @@ from modules import (
     catalogos,
 )
 
-st.set_page_config(page_title="Sistema de producción — Huevo líquido", layout="wide", page_icon="🥚")
+st.set_page_config(page_title="Sistema de producción — Ovoproductos", layout="wide", page_icon="🥚")
 
 db = get_db()
 username, rol = login(db)
@@ -26,7 +26,7 @@ st.sidebar.markdown(
                 padding: 18px 16px; border-radius: 12px; margin-bottom: 14px;">
         <div style="font-size: 30px; line-height: 1;">🥚</div>
         <div style="color: white; font-size: 20px; font-weight: 800; margin-top: 6px;">
-            Huevo Líquido
+            Ovoproductos
         </div>
         <div style="color: #CFF3E4; font-size: 12px; margin-top: 2px;">
             Sistema integral de producción
