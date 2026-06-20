@@ -17,6 +17,7 @@ def render(db, username, rol):
 
     semielaborados = db.get_df("produccion_semielaborados")
     presentaciones = db.get_df("presentaciones")
+    turnos = db.get_df("turnos")
 
     with tab_nueva:
         if semielaborados.empty:
@@ -32,6 +33,13 @@ def render(db, username, rol):
             return
 
         fecha = st.date_input("Fecha", value=datetime.date.today(), key="past_fecha")
+        if turnos.empty:
+            st.warning("Configura al menos un turno en Catálogos → Turnos antes de registrar.")
+            return
+        turno_id = st.selectbox(
+            "Turno", turnos["turno_id"],
+            format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
+        )
         lote_semielaborado_id = st.selectbox(
             "Lote de semielaborado",
             disponibles["lote_semielaborado_id"],
@@ -92,6 +100,7 @@ def render(db, username, rol):
                 "costo_total": costo_total,
                 "costo_unitario": costo_unitario,
                 "unidades_saldo": unidades_reales,
+                "turno": turno_id,
                 "usuario": username,
                 "observaciones": observaciones,
             })

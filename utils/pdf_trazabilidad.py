@@ -121,6 +121,7 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                 cubetas_texto = f"{cubetas_mostrar:.2f}" if isinstance(cubetas_mostrar, float) else cubetas_mostrar
             bloque.append(_tabla_pares([
                 ("Fecha de producción", nodo_prod["fecha"]),
+                ("Turno", nodo_prod.get("turno", "—")),
                 ("Orden de producción", nodo_prod["orden_produccion"]),
                 ("Cubetas tomadas de este lote", cubetas_texto),
                 ("Kg real obtenido", nodo_prod["kg_real"]),
@@ -128,11 +129,20 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
             el.append(KeepTogether(bloque))
             el.append(Spacer(1, 0.2 * cm))
 
+            personal_lista = nodo_prod.get("personal", [])
+            if personal_lista:
+                el.append(Paragraph("Personal a cargo de este lote:", ESTILOS["Normal"]))
+                el.append(_tabla_encabezado(
+                    [[p["nombre"], f"{p['horas']:.1f} h"] for p in personal_lista],
+                    ["Nombre", "Horas trabajadas"],
+                ))
+                el.append(Spacer(1, 0.2 * cm))
+
             if nodo_prod["saneamiento"]:
                 el.append(Paragraph("Saneamiento registrado ese mismo día (contexto, no exclusivo de este lote):", ESTILOS["Normal"]))
                 el.append(_tabla_encabezado(
-                    [[s["area"], s["tipo"], "Sí" if s["verificado"] else "No"] for s in nodo_prod["saneamiento"]],
-                    ["Área", "Tipo", "Verificado"],
+                    [[s["area"], s["tipo"], s.get("turno", "—"), "Sí" if s["verificado"] else "No"] for s in nodo_prod["saneamiento"]],
+                    ["Área", "Tipo", "Turno", "Verificado"],
                 ))
                 el.append(Spacer(1, 0.2 * cm))
 
@@ -182,6 +192,7 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                 ))
                 bloque2.append(_tabla_pares([
                     ("Fecha", nodo_past["fecha"]),
+                    ("Turno", nodo_past.get("turno", "—")),
                     ("Kg usado", nodo_past["kg_usado"]),
                     ("Unidades envasadas", nodo_past["unidades"]),
                 ]))

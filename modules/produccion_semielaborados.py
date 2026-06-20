@@ -20,6 +20,7 @@ def render(db, username, rol):
     insumos = db.get_df("insumos")
     personal = db.get_df("personal")
     recepciones = db.get_df("recepciones_mp")
+    turnos = db.get_df("turnos")
 
     with tab_nueva:
         if categorias.empty:
@@ -27,6 +28,16 @@ def render(db, username, rol):
             return
 
         fecha = st.date_input("Fecha de producción", value=datetime.date.today(), key="prod_fecha")
+        if turnos.empty:
+            st.warning(
+                "Configura al menos un turno en Catálogos → Turnos antes de registrar "
+                "(esto permite saber después quién estuvo a cargo de cada lote)."
+            )
+            return
+        turno_id = st.selectbox(
+            "Turno", turnos["turno_id"],
+            format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
+        )
         orden_produccion = st.text_input("Orden de producción", "")
         if orden_produccion:
             producciones_existentes = db.get_df("produccion_semielaborados")
@@ -268,6 +279,7 @@ def render(db, username, rol):
                 "cubetas_totales": total_tomado,
                 "kg_teorico_bruto": teorico["kg_teorico_bruto"],
                 "agua_litros": agua_litros,
+                "turno": turno_id,
                 "usuario": username,
             }
 

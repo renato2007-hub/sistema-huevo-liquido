@@ -20,6 +20,7 @@ def render(db, username, rol):
     areas = db.get_df("areas_limpieza")
     insumos = db.get_df("insumos")
     personal = db.get_df("personal")
+    turnos = db.get_df("turnos")
 
     # ======================== REGISTRAR LIMPIEZA ========================
     with tab_nueva:
@@ -30,15 +31,23 @@ def render(db, username, rol):
             )
             return
 
+        if turnos.empty:
+            st.warning("Configura al menos un turno en Catálogos → Turnos antes de registrar.")
+            return
+
         with st.container(border=True):
             st.markdown("##### 📋 Datos generales")
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             fecha = c1.date_input("Fecha", value=datetime.date.today(), key="limp_fecha")
             area_id = c2.selectbox(
                 "Área / equipo limpiado", areas["area_id"],
                 format_func=lambda x: areas.set_index("area_id").loc[x, "nombre"],
             )
             tipo_limpieza = c3.selectbox("Tipo", ["Limpieza", "Desinfección", "Limpieza y desinfección"])
+            turno_id = c4.selectbox(
+                "Turno", turnos["turno_id"],
+                format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
+            )
 
         st.write("")
 
@@ -128,6 +137,7 @@ def render(db, username, rol):
                 "costo_insumos": costo_insumos_total,
                 "costo_total": costo_insumos_total,
                 "personal_id": responsable_id,
+                "turno": turno_id,
                 "verificado": verificado,
                 "usuario": username,
                 "observaciones": observaciones,

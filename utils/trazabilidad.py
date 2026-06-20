@@ -65,6 +65,15 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
     galpones = tablas["galpones"]
     proveedores = tablas["proveedores"]
     categorias = tablas["categorias_huevo"]
+    turnos = tablas["turnos"]
+    produccion_personal = tablas["produccion_personal"]
+    personal_cat = tablas["personal"]
+
+    def _nombre_turno(turno_id):
+        if turnos.empty or not turno_id:
+            return str(turno_id) if turno_id else "—"
+        ft = turnos[turnos["turno_id"] == turno_id]
+        return ft.iloc[0]["nombre"] if not ft.empty else str(turno_id)
 
     def recepciones_de(lote_semi_id):
         if consumo_mp.empty:
@@ -164,7 +173,26 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                     saneamiento.append({
                         "area": area_nombre,
                         "tipo": _val(sfila, "tipo_limpieza"),
+                        "turno": _nombre_turno(sfila.get("turno", "")),
                         "verificado": str(_val(sfila, "verificado")).upper() == "TRUE",
+                    })
+
+            # personal que trabajo este lote (o el lote hermano, si el consumo/personal
+            # quedo registrado bajo ese -- ver _extraer_lote_hermano)
+            lote_personal = lote_hermano if (lote_hermano and not consumo_mp.empty and
+                                              not consumo_mp[consumo_mp["lote_semielaborado_id"] == lote_hermano].empty) else lid
+            personal_lista = []
+            if not produccion_personal.empty:
+                rel_personal = produccion_personal[produccion_personal["lote_semielaborado_id"] == lote_personal]
+                for _, pfila in rel_personal.iterrows():
+                    nombre_persona = pfila.get("personal_id", "")
+                    if not personal_cat.empty:
+                        fpc = personal_cat[personal_cat["personal_id"] == pfila.get("personal_id")]
+                        if not fpc.empty:
+                            nombre_persona = fpc.iloc[0]["nombre"]
+                    personal_lista.append({
+                        "nombre": nombre_persona,
+                        "horas": float(pd.to_numeric(pfila.get("horas", 0), errors="coerce") or 0),
                     })
 
             nodo_prod = {
@@ -172,10 +200,12 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 "tipo_producto": _val(fp, "tipo_producto"),
                 "fecha": str(_val(fp, "fecha")),
                 "orden_produccion": _val(fp, "orden_produccion"),
+                "turno": _nombre_turno(fp.get("turno", "")),
                 "cubetas_de_este_lote": cubetas_de_este_lote,
                 "lote_hermano": lote_hermano,
                 "kg_real": _val(fp, "kg_real", 0),
                 "costo_unitario_kg": _val(fp, "costo_unitario_kg", 0),
+                "personal": personal_lista,
                 "saneamiento": saneamiento,
                 "pasteurizaciones": [],
             }
@@ -197,6 +227,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                     "lote_id": fpast["lote_producto_id"],
                     "presentacion": pres_nombre,
                     "fecha": str(_val(fpast, "fecha")),
+                    "turno": _nombre_turno(fpast.get("turno", "")),
                     "kg_usado": kg_usado_val,
                     "unidades": unidades_reales,
                     "kg_nominal": kg_nominal,

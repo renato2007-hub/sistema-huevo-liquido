@@ -137,7 +137,7 @@ def render(db, username, rol):
         [
             "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
             "Insumos", "Presentaciones de envase", "Personal", "Clientes",
-            "Vehículos", "Áreas de limpieza", "Usuarios",
+            "Vehículos", "Áreas de limpieza", "Turnos", "Usuarios",
         ],
     )
 
@@ -194,6 +194,12 @@ def render(db, username, rol):
         )
         _seccion_simple(db, "areas_limpieza", "Áreas / equipos a limpiar", [
             ("area_id", "texto"), ("nombre", "texto"), ("activo", "bool"),
+        ])
+    elif seccion == "Turnos":
+        st.caption("Ej. Turno 1 (06:00-14:00), Turno 2 (14:00-22:00) — ajusta a tus horarios reales.")
+        _seccion_simple(db, "turnos", "Turnos de trabajo", [
+            ("turno_id", "texto"), ("nombre", "texto"),
+            ("hora_inicio", "texto"), ("hora_fin", "texto"), ("activo", "bool"),
         ])
     elif seccion == "Usuarios":
         st.subheader("Usuarios del sistema")

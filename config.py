@@ -21,6 +21,7 @@ SHEET_SCHEMAS = {
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
     "areas_limpieza": ["area_id", "nombre", "activo"],
+    "turnos": ["turno_id", "nombre", "hora_inicio", "hora_fin", "activo"],
 
     # ---------- Bodega de materia prima ----------
     "recepciones_mp": [
@@ -62,7 +63,7 @@ SHEET_SCHEMAS = {
         "cascara_teorica_kg", "cascara_real_kg",
         "agua_litros",
         "costo_huevo", "costo_insumos", "costo_mano_obra", "costo_total",
-        "costo_unitario_kg", "kg_saldo", "balance_masa_pct", "usuario", "observaciones",
+        "costo_unitario_kg", "kg_saldo", "balance_masa_pct", "turno", "usuario", "observaciones",
     ],
 
     # ---------- Pasteurizacion y envasado ----------
@@ -70,7 +71,7 @@ SHEET_SCHEMAS = {
         "lote_producto_id", "fecha", "lote_semielaborado_id", "presentacion_id",
         "kg_usado", "unidades_teoricas", "unidades_reales",
         "costo_semielaborado", "costo_envases", "costo_total", "costo_unitario",
-        "unidades_saldo", "usuario", "observaciones",
+        "unidades_saldo", "turno", "usuario", "observaciones",
     ],
 
     # ---------- Cuarto frio ----------
@@ -87,7 +88,7 @@ SHEET_SCHEMAS = {
     "limpieza_desinfeccion": [
         "limpieza_id", "fecha", "area_id", "tipo_limpieza",
         "agua_litros", "costo_insumos", "costo_total",
-        "personal_id", "verificado", "usuario", "observaciones",
+        "personal_id", "turno", "verificado", "usuario", "observaciones",
     ],
     "limpieza_insumos": [
         "detalle_id", "limpieza_id", "insumo_id", "cantidad", "costo_calculado",
