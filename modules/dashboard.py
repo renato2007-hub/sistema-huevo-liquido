@@ -10,6 +10,7 @@ demas modulos.
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.horas_trabajo import clasificar_horas_por_dia, feriados_como_set, compensaciones_como_set
 from modules.bodega_envases_insumos import _saldo_actual
 
 
@@ -287,6 +288,11 @@ def render(db, username, rol):
     with tabs[2]:
         with st.container(border=True):
             st.markdown("##### 👷 Horas de trabajo por persona")
+            st.caption(
+                "Normales = hasta 8h en día normal · Extras = lo que excede 8h en día "
+                "normal · Dobles = horas en feriado sin compensación · Compensadas = "
+                "horas en feriado con descanso acordado en su lugar (ver Catálogos → Feriados)."
+            )
             if personal_detalle.empty or produccion.empty:
                 st.info("No hay registros de horas de personal en este período.")
             else:
@@ -304,15 +310,41 @@ def render(db, username, rol):
                         ph["nombre"] = ph["personal_id"]
                     ph["horas"] = pd.to_numeric(ph["horas"], errors="coerce").fillna(0)
                     ph["costo_calculado"] = pd.to_numeric(ph["costo_calculado"], errors="coerce").fillna(0)
-                    resumen_personal = ph.groupby("nombre").agg(
-                        horas=("horas", "sum"), costo=("costo_calculado", "sum"),
-                    ).reset_index().sort_values("horas", ascending=False)
 
-                    c1, c2 = st.columns(2)
-                    c1.metric("Total horas trabajadas", f"{resumen_personal['horas'].sum():,.1f}")
-                    c2.metric("Costo total de mano de obra", f"{resumen_personal['costo'].sum():,.2f}")
+                    # costo total por persona (independiente de la clasificacion de horas)
+                    costo_por_persona = ph.groupby("nombre")["costo_calculado"].sum()
+
+                    # sumar horas del MISMO dia antes de clasificar (si una persona trabajo
+                    # en varios lotes el mismo dia, hay que sumarlas antes de aplicar el limite
+                    # de 8 horas, si no se pierden las extras reales)
+                    por_persona_dia = ph.groupby(["personal_id", "nombre", "fecha"])["horas"].sum().reset_index()
+                    feriados_set = feriados_como_set(db.get_df("feriados"))
+                    compensados_set = compensaciones_como_set(db.get_df("compensaciones_feriado"))
+                    por_persona_dia = clasificar_horas_por_dia(por_persona_dia, feriados_set, compensados_set)
+
+                    resumen_personal = por_persona_dia.groupby("nombre").agg(
+                        horas_normales=("horas_normales", "sum"),
+                        horas_extras=("horas_extras", "sum"),
+                        horas_dobles=("horas_dobles", "sum"),
+                        horas_compensadas=("horas_compensadas", "sum"),
+                        horas_totales=("horas", "sum"),
+                    ).reset_index().sort_values("horas_totales", ascending=False)
+                    resumen_personal["costo"] = resumen_personal["nombre"].map(costo_por_persona).fillna(0)
+
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    c1.metric("Horas normales", f"{resumen_personal['horas_normales'].sum():,.1f}")
+                    c2.metric("Horas extras", f"{resumen_personal['horas_extras'].sum():,.1f}")
+                    c3.metric("Horas dobles", f"{resumen_personal['horas_dobles'].sum():,.1f}")
+                    c4.metric("Horas compensadas", f"{resumen_personal['horas_compensadas'].sum():,.1f}")
+                    c5.metric("Costo mano de obra", f"{resumen_personal['costo'].sum():,.2f}")
+
                     st.dataframe(resumen_personal, use_container_width=True, hide_index=True)
-                    st.bar_chart(resumen_personal.set_index("nombre")["horas"])
+                    st.markdown("**Desglose de horas por persona**")
+                    st.bar_chart(
+                        resumen_personal.set_index("nombre")[
+                            ["horas_normales", "horas_extras", "horas_dobles", "horas_compensadas"]
+                        ]
+                    )
 
     # ======================== TAB: INSUMOS Y ENVASES ========================
     with tabs[3]:

@@ -44,6 +44,8 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
                     valores[col] = st.number_input(col, step=0.01, key=f"nuevo_{nombre_sheet}_{col}")
                 elif tipo == "bool":
                     valores[col] = st.checkbox(col, value=True, key=f"nuevo_{nombre_sheet}_{col}")
+                elif tipo == "fecha":
+                    valores[col] = st.date_input(col, key=f"nuevo_{nombre_sheet}_{col}").isoformat()
                 else:
                     valores[col] = st.text_input(col, key=f"nuevo_{nombre_sheet}_{col}")
             guardar = st.form_submit_button("Agregar")
@@ -137,7 +139,7 @@ def render(db, username, rol):
         [
             "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
             "Insumos", "Presentaciones de envase", "Personal", "Clientes",
-            "Vehículos", "Áreas de limpieza", "Turnos", "Usuarios",
+            "Vehículos", "Áreas de limpieza", "Turnos", "Feriados", "Usuarios",
         ],
     )
 
@@ -201,6 +203,50 @@ def render(db, username, rol):
             ("turno_id", "texto"), ("nombre", "texto"),
             ("hora_inicio", "texto"), ("hora_fin", "texto"), ("activo", "bool"),
         ])
+    elif seccion == "Feriados":
+        st.caption(
+            "Marca aquí los días feriados — el Dashboard los usa para calcular "
+            "horas dobles automáticamente (todas las horas trabajadas ese día "
+            "cuentan como dobles, salvo que la persona haya compensado con "
+            "descanso — ver más abajo)."
+        )
+        _seccion_simple(db, "feriados", "Feriados", [
+            ("fecha", "fecha"), ("nombre", "texto"), ("activo", "bool"),
+        ])
+
+        st.divider()
+        st.subheader("Compensaciones (trabajó feriado, descansó otro día)")
+        st.caption(
+            "Si acordaste con alguien que trabaje un feriado a cambio de "
+            "descansar otro día normal (en vez de cobrar doble), regístralo "
+            "aquí — esas horas dejan de contar como 'dobles' en el Dashboard "
+            "y pasan a 'compensadas'."
+        )
+        personal_comp = db.get_df("personal")
+        if personal_comp.empty:
+            st.info("Configura personal en Catálogos → Personal antes de registrar compensaciones.")
+        else:
+            compensaciones = db.get_df("compensaciones_feriado")
+            st.dataframe(compensaciones, use_container_width=True, hide_index=True)
+            with st.form("form_compensacion"):
+                fecha_comp = st.date_input("Fecha del feriado trabajado")
+                personal_id_comp = st.selectbox(
+                    "Persona", personal_comp["personal_id"],
+                    format_func=lambda x: personal_comp.set_index("personal_id").loc[x, "nombre"],
+                )
+                obs_comp = st.text_input("Observaciones (opcional, ej. 'descansó el 2 de junio')", "")
+                guardar_comp = st.form_submit_button("Registrar compensación")
+            if guardar_comp:
+                comp_id = db.siguiente_id("compensaciones_feriado", "COMP", fecha_comp)
+                db.append_row("compensaciones_feriado", {
+                    "compensacion_id": comp_id,
+                    "fecha": fecha_comp.isoformat(),
+                    "personal_id": personal_id_comp,
+                    "observaciones": obs_comp,
+                    "usuario": username,
+                })
+                st.success(f"Compensación {comp_id} registrada.")
+                st.rerun()
     elif seccion == "Usuarios":
         st.subheader("Usuarios del sistema")
         df = db.get_df("usuarios")

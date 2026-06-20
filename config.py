@@ -22,6 +22,8 @@ SHEET_SCHEMAS = {
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
     "areas_limpieza": ["area_id", "nombre", "activo"],
     "turnos": ["turno_id", "nombre", "hora_inicio", "hora_fin", "activo"],
+    "feriados": ["fecha", "nombre", "activo"],
+    "compensaciones_feriado": ["compensacion_id", "fecha", "personal_id", "observaciones", "usuario"],
 
     # ---------- Bodega de materia prima ----------
     "recepciones_mp": [
