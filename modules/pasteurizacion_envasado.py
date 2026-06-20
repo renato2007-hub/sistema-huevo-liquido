@@ -20,6 +20,7 @@ def render(db, username, rol):
     turnos = db.get_df("turnos")
     tapas = db.get_df("tapas")
     etiquetas = db.get_df("etiquetas")
+    cartones = db.get_df("cartones")
 
     with tab_nueva:
         if semielaborados.empty:
@@ -93,6 +94,35 @@ def render(db, username, rol):
         unidades_reales = st.number_input(
             "Unidades reales obtenidas", min_value=0, step=1, value=unidades_teoricas
         )
+        usa_carton = st.checkbox("📦 Este lote se empaca en cartones (solo para ciertos clientes)")
+        carton_id = ""
+        cantidad_cartones = 0
+        costo_carton_unitario = 0.0
+        if usa_carton:
+            if cartones.empty:
+                st.warning("No hay cartones configurados en Catálogos → Cartones.")
+                return
+            carton_id = st.selectbox(
+                "Tipo de cartón", cartones["carton_id"],
+                format_func=lambda x: (
+                    f"{cartones.set_index('carton_id').loc[x, 'nombre']} "
+                    f"(capacidad {cartones.set_index('carton_id').loc[x, 'capacidad']:.0f})"
+                ),
+            )
+            capacidad_carton = float(cartones.set_index("carton_id").loc[carton_id, "capacidad"])
+            costo_carton_unitario = float(cartones.set_index("carton_id").loc[carton_id, "costo_unitario"])
+            sugerido = int(-(-unidades_reales // capacidad_carton)) if capacidad_carton else 0  # redondeo hacia arriba
+            cantidad_cartones = st.number_input(
+                "Cantidad de cartones usados", min_value=0, step=1, value=sugerido,
+            )
+            cubiertas = cantidad_cartones * capacidad_carton
+            if cubiertas != unidades_reales:
+                st.caption(
+                    f"⚠️ {cantidad_cartones:.0f} cartón(es) × {capacidad_carton:.0f} = "
+                    f"{cubiertas:.0f} unidades — tienes {unidades_reales:.0f} unidades reales. "
+                    f"Revisa si está bien (puede haber unidades sueltas sin cartón, está permitido)."
+                )
+
         observaciones = st.text_area("Observaciones", "", key="past_obs")
 
         if st.button("Guardar lote de envasado"):
@@ -109,7 +139,8 @@ def render(db, username, rol):
             costo_envases = unidades_reales * costo_envase_unitario
             costo_tapas = unidades_reales * costo_tapa_unitario if es_pet else 0.0
             costo_etiquetas = unidades_reales * costo_etiqueta_unitario
-            costo_total = costo_semielaborado + costo_envases + costo_tapas + costo_etiquetas
+            costo_cartones = cantidad_cartones * costo_carton_unitario if usa_carton else 0.0
+            costo_total = costo_semielaborado + costo_envases + costo_tapas + costo_etiquetas + costo_cartones
             costo_unitario = costo_total / unidades_reales if unidades_reales > 0 else 0
 
             lote_producto_id = db.siguiente_id("pasteurizacion_envasado", "PROD", fecha)
@@ -127,6 +158,9 @@ def render(db, username, rol):
                 "costo_tapas": costo_tapas,
                 "etiqueta_id": etiqueta_id,
                 "costo_etiquetas": costo_etiquetas,
+                "carton_id": carton_id,
+                "cantidad_cartones": cantidad_cartones,
+                "costo_cartones": costo_cartones,
                 "costo_total": costo_total,
                 "costo_unitario": costo_unitario,
                 "unidades_saldo": unidades_reales,
@@ -199,6 +233,29 @@ def render(db, username, rol):
                 "observaciones": lote_producto_id,
             })
 
+            if usa_carton and cantidad_cartones > 0:
+                saldo_carton_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "carton", carton_id)
+                if cantidad_cartones > saldo_carton_previo:
+                    st.warning(
+                        f"⚠️ Hay {saldo_carton_previo:.0f} cartones de este tipo en bodega, pero "
+                        f"estás usando {cantidad_cartones:.0f}. Se va a guardar igual, pero revisa "
+                        f"si falta registrar una compra de cartones."
+                    )
+                movimiento_carton_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
+                db.append_row("movimientos_envases_insumos", {
+                    "movimiento_id": movimiento_carton_id,
+                    "fecha": fecha.isoformat(),
+                    "item_tipo": "carton",
+                    "item_id": carton_id,
+                    "tipo_movimiento": "salida",
+                    "cantidad": cantidad_cartones,
+                    "costo_unitario": costo_carton_unitario,
+                    "costo_total": costo_cartones,
+                    "modulo_destino": "Pasteurización y envasado",
+                    "usuario": username,
+                    "observaciones": lote_producto_id,
+                })
+
             if ve_costos(rol):
                 st.success(f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f}")
             else:
@@ -210,7 +267,10 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de producto terminado.")
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
-            columnas_disp = ["lote_producto_id", "fecha", "presentacion_id", "tapa_id", "etiqueta_id", "unidades_saldo"]
+            columnas_disp = [
+                "lote_producto_id", "fecha", "presentacion_id", "tapa_id",
+                "etiqueta_id", "cantidad_cartones", "unidades_saldo",
+            ]
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario")
             st.dataframe(df[df["unidades_saldo"] > 0][columnas_disp], use_container_width=True)
