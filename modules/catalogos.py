@@ -1,0 +1,253 @@
+"""
+Catalogos y configuracion: galpones, proveedores, categorias de huevo (con
+su rendimiento teorico -- el cual puede variar por tamano y por edad de
+parvada), insumos, presentaciones, personal, clientes y usuarios del
+sistema. Esta es la base que usan todos los demas modulos.
+
+Cada catalogo tiene dos pestanas: "Agregar nuevo" y "Editar / eliminar
+existente". Editar un registro NO cambia retroactivamente lo ya guardado
+en otros modulos (por ejemplo, una produccion ya registrada conserva el
+rendimiento teorico que estaba vigente cuando se guardo) -- solo afecta lo
+que se registre de ahi en adelante.
+"""
+import streamlit as st
+from utils.auth import hash_password
+
+
+def _valor_default_numero(valor_actual):
+    try:
+        return float(valor_actual) if str(valor_actual) != "" else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _valor_default_bool(valor_actual):
+    return str(valor_actual).strip().upper() not in ("FALSE", "0", "NO", "")
+
+
+def _seccion_simple(db, nombre_sheet, titulo, campos):
+    """campos: lista de (nombre_columna, tipo) donde tipo es 'texto', 'numero' o 'bool'.
+    El primer campo de la lista se trata como identificador unico (id)."""
+    st.subheader(titulo)
+    id_col = campos[0][0]
+    df = db.get_df(nombre_sheet)
+    st.dataframe(df, use_container_width=True)
+
+    tab_nuevo, tab_editar = st.tabs(["➕ Agregar nuevo", "✏️ Editar / eliminar existente"])
+
+    with tab_nuevo:
+        with st.form(f"form_nuevo_{nombre_sheet}"):
+            valores = {}
+            for col, tipo in campos:
+                if tipo == "numero":
+                    valores[col] = st.number_input(col, step=0.01, key=f"nuevo_{nombre_sheet}_{col}")
+                elif tipo == "bool":
+                    valores[col] = st.checkbox(col, value=True, key=f"nuevo_{nombre_sheet}_{col}")
+                else:
+                    valores[col] = st.text_input(col, key=f"nuevo_{nombre_sheet}_{col}")
+            guardar = st.form_submit_button("Agregar")
+
+        if guardar:
+            if not valores[id_col]:
+                st.error(f"El campo '{id_col}' es obligatorio.")
+            elif not df.empty and id_col in df.columns and str(valores[id_col]) in df[id_col].astype(str).values:
+                st.error(
+                    f"Ya existe un registro con {id_col} = '{valores[id_col]}'. "
+                    f"Usa la pestaña 'Editar / eliminar' si quieres modificarlo."
+                )
+            else:
+                db.append_row(nombre_sheet, valores)
+                st.success("Registro agregado.")
+                st.rerun()
+
+    with tab_editar:
+        if df.empty:
+            st.info("Todavía no hay registros para editar.")
+            return
+
+        id_seleccionado = st.selectbox(
+            f"Selecciona el registro ({id_col})", df[id_col].astype(str),
+            key=f"editar_select_{nombre_sheet}",
+        )
+        fila_actual = df[df[id_col].astype(str) == id_seleccionado].iloc[0]
+
+        with st.form(f"form_editar_{nombre_sheet}_{id_seleccionado}"):
+            nuevos_valores = {}
+            for col, tipo in campos:
+                valor_actual = fila_actual[col]
+                if col == id_col:
+                    st.text_input(
+                        col, value=str(valor_actual), disabled=True,
+                        key=f"editar_id_{nombre_sheet}_{id_seleccionado}",
+                    )
+                    continue
+                if tipo == "numero":
+                    nuevos_valores[col] = st.number_input(
+                        col, value=_valor_default_numero(valor_actual), step=0.01,
+                        key=f"editar_{nombre_sheet}_{col}_{id_seleccionado}",
+                    )
+                elif tipo == "bool":
+                    nuevos_valores[col] = st.checkbox(
+                        col, value=_valor_default_bool(valor_actual),
+                        key=f"editar_{nombre_sheet}_{col}_{id_seleccionado}",
+                    )
+                else:
+                    nuevos_valores[col] = st.text_input(
+                        col, value=str(valor_actual),
+                        key=f"editar_{nombre_sheet}_{col}_{id_seleccionado}",
+                    )
+            col_a, col_b = st.columns(2)
+            guardar_cambios = col_a.form_submit_button("💾 Guardar cambios")
+            confirmar_eliminar = col_b.checkbox(
+                "Confirmo que quiero eliminar este registro",
+                key=f"confirmar_del_{nombre_sheet}_{id_seleccionado}",
+            )
+            eliminar = col_b.form_submit_button("🗑️ Eliminar")
+
+        if guardar_cambios:
+            db.update_row(nombre_sheet, id_col, id_seleccionado, nuevos_valores)
+            st.success(f"'{id_seleccionado}' actualizado.")
+            st.rerun()
+
+        if eliminar:
+            if not confirmar_eliminar:
+                st.error("Marca la casilla de confirmación antes de eliminar.")
+            else:
+                db.delete_row(nombre_sheet, id_col, id_seleccionado)
+                st.success(f"'{id_seleccionado}' eliminado.")
+                st.rerun()
+
+        st.caption(
+            "Nota: editar valores aquí no cambia los registros que ya se guardaron "
+            "en otros módulos (por ejemplo, producciones pasadas conservan los "
+            "valores que estaban vigentes cuando se registraron)."
+        )
+
+
+def render(db, username):
+    st.title("Catálogos y configuración")
+
+    seccion = st.selectbox(
+        "Catálogo a administrar",
+        [
+            "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
+            "Insumos", "Presentaciones de envase", "Personal", "Clientes",
+            "Vehículos", "Áreas de limpieza", "Usuarios",
+        ],
+    )
+
+    if seccion == "Galpones":
+        _seccion_simple(db, "galpones", "Galpones propios", [
+            ("galpon_id", "texto"), ("nombre", "texto"), ("ubicacion", "texto"), ("activo", "bool"),
+        ])
+    elif seccion == "Proveedores":
+        _seccion_simple(db, "proveedores", "Proveedores calificados", [
+            ("proveedor_id", "texto"), ("nombre", "texto"), ("contacto", "texto"),
+            ("calificacion", "texto"), ("activo", "bool"),
+        ])
+    elif seccion == "Categorías de huevo (rendimientos)":
+        st.caption(
+            "El rendimiento teórico varía según el tamaño del huevo y la edad de "
+            "la parvada — crea una categoría por cada combinación que manejes "
+            "(ej. parvada joven, madura, final) con sus propios porcentajes. "
+            "kg_promedio_cubeta es el peso BRUTO del huevo entero (con cáscara); "
+            "pct_clara + pct_yema + pct_cascara deberían sumar 100."
+        )
+        _seccion_simple(db, "categorias_huevo", "Categorías y rendimiento teórico", [
+            ("categoria_id", "texto"), ("nombre", "texto"),
+            ("kg_promedio_cubeta", "numero"), ("pct_clara", "numero"),
+            ("pct_yema", "numero"), ("pct_cascara", "numero"), ("notas", "texto"),
+        ])
+    elif seccion == "Insumos":
+        _seccion_simple(db, "insumos", "Insumos de limpieza", [
+            ("insumo_id", "texto"), ("nombre", "texto"), ("tipo", "texto"),
+            ("unidad", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Presentaciones de envase":
+        _seccion_simple(db, "presentaciones", "Presentaciones", [
+            ("presentacion_id", "texto"), ("nombre", "texto"),
+            ("kg_nominal", "numero"), ("costo_envase_unitario", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Personal":
+        _seccion_simple(db, "personal", "Personal de producción", [
+            ("personal_id", "texto"), ("nombre", "texto"), ("cargo", "texto"),
+            ("costo_hora", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Clientes":
+        _seccion_simple(db, "clientes", "Clientes", [
+            ("cliente_id", "texto"), ("nombre", "texto"), ("contacto", "texto"), ("activo", "bool"),
+        ])
+    elif seccion == "Vehículos":
+        _seccion_simple(db, "vehiculos", "Vehículos de reparto", [
+            ("vehiculo_id", "texto"), ("placa", "texto"), ("descripcion", "texto"),
+            ("conductor", "texto"), ("activo", "bool"),
+        ])
+    elif seccion == "Áreas de limpieza":
+        st.caption(
+            "Sugerencia: Lavado de huevos, Pasteurizador, Equipos de envasado, "
+            "Gavetas y cubetas, Pisos y paredes, Tanques de almacenamiento, Otros."
+        )
+        _seccion_simple(db, "areas_limpieza", "Áreas / equipos a limpiar", [
+            ("area_id", "texto"), ("nombre", "texto"), ("activo", "bool"),
+        ])
+    elif seccion == "Usuarios":
+        st.subheader("Usuarios del sistema")
+        df = db.get_df("usuarios")
+        st.dataframe(df[["username", "nombre", "activo"]] if not df.empty else df, use_container_width=True)
+
+        tab_nuevo, tab_editar = st.tabs(["➕ Crear usuario", "✏️ Editar / desactivar existente"])
+
+        with tab_nuevo:
+            with st.form("form_usuario_nuevo"):
+                username_nuevo = st.text_input("Usuario (sin espacios)")
+                nombre = st.text_input("Nombre completo")
+                password = st.text_input("Contraseña", type="password")
+                activo = st.checkbox("Activo", value=True)
+                guardar = st.form_submit_button("Crear usuario")
+            if guardar:
+                if not username_nuevo or not password:
+                    st.error("Usuario y contraseña son obligatorios.")
+                elif not df.empty and username_nuevo in df["username"].astype(str).values:
+                    st.error("Ese nombre de usuario ya existe.")
+                else:
+                    db.append_row("usuarios", {
+                        "username": username_nuevo,
+                        "password_hash": hash_password(password),
+                        "nombre": nombre,
+                        "activo": activo,
+                    })
+                    st.success(f"Usuario {username_nuevo} creado.")
+                    st.rerun()
+
+        with tab_editar:
+            if df.empty:
+                st.info("Todavía no hay usuarios para editar.")
+            else:
+                username_sel = st.selectbox("Selecciona el usuario", df["username"], key="editar_user_select")
+                fila_usuario = df[df["username"] == username_sel].iloc[0]
+                with st.form(f"form_usuario_editar_{username_sel}"):
+                    nombre_nuevo = st.text_input(
+                        "Nombre completo", value=str(fila_usuario["nombre"]),
+                        key=f"editar_user_nombre_{username_sel}",
+                    )
+                    activo_nuevo = st.checkbox(
+                        "Activo", value=_valor_default_bool(fila_usuario["activo"]),
+                        key=f"editar_user_activo_{username_sel}",
+                    )
+                    nueva_password = st.text_input(
+                        "Nueva contraseña (déjalo vacío para no cambiarla)", type="password",
+                        key=f"editar_user_password_{username_sel}",
+                    )
+                    guardar_usuario = st.form_submit_button("💾 Guardar cambios")
+                if guardar_usuario:
+                    cambios = {"nombre": nombre_nuevo, "activo": activo_nuevo}
+                    if nueva_password:
+                        cambios["password_hash"] = hash_password(nueva_password)
+                    db.update_row("usuarios", "username", username_sel, cambios)
+                    st.success(f"Usuario {username_sel} actualizado.")
+                    st.rerun()
+                st.caption(
+                    "Por seguridad no hay botón de eliminar usuarios — si alguien ya no "
+                    "debe entrar, desmarca 'Activo' en vez de borrarlo (así se conserva "
+                    "quién registró qué en el historial)."
+                )
