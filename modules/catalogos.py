@@ -157,7 +157,7 @@ def render(db, username, rol):
         "Catálogo a administrar",
         [
             "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
-            "Insumos", "Presentaciones de envase", "Tapas (PET)", "Personal", "Clientes",
+            "Insumos", "Presentaciones de envase", "Tapas (PET)", "Etiquetas", "Personal", "Clientes",
             "Vehículos", "Áreas de limpieza", "Turnos", "Feriados", "Usuarios",
         ],
     )
@@ -206,6 +206,16 @@ def render(db, username, rol):
         )
         _seccion_simple(db, "tapas", "Tapas", [
             ("tapa_id", "texto"), ("color", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Etiquetas":
+        st.caption(
+            "Las de proveedor externo suelen costar bastante más que las que "
+            "imprimen ustedes mismos en planta — por eso cada una lleva su propio costo."
+        )
+        _seccion_simple(db, "etiquetas", "Etiquetas", [
+            ("etiqueta_id", "texto"), ("nombre", "texto"),
+            ("origen", ["Proveedor externo", "Impresión propia"]),
+            ("costo_unitario", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Personal":
         _seccion_simple(db, "personal", "Personal de producción", [
