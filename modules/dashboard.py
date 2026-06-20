@@ -4,15 +4,38 @@ resume la operacion completa. Estructura: un resumen ejecutivo siempre
 visible arriba (lo mas importante de un vistazo), y el detalle agrupado en
 pestanas por tema para no amontonar todo en una sola pantalla.
 
+Estilo visual inspirado en herramientas de BI (tarjetas KPI con tendencia
+vs. periodo anterior, graficos interactivos Plotly) -- pero el calculo de
+cada numero es exactamente el mismo de siempre, esto solo cambia COMO se ve.
+
 No guarda nada -- solo lee y resume las mismas tablas que alimentan los
 demas modulos.
 """
 import datetime
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from utils.horas_trabajo import clasificar_horas_por_dia, feriados_como_set, compensaciones_como_set
 from utils.pdf_horas_personal import generar_pdf_horas_personal
 from modules.bodega_envases_insumos import _saldo_actual
+
+# Paleta de marca -- mismos colores que las categorias del menu lateral, para
+# que los graficos del Dashboard se vean parte de la misma identidad visual.
+VERDE = "#0B6E4F"
+NARANJA = "#D9740C"
+TEAL = "#0E8A8A"
+MORADO = "#6D3FA8"
+DORADO = "#E8A33D"
+GRIS = "#9AA5A0"
+PALETA = [VERDE, NARANJA, TEAL, MORADO, DORADO, "#C1561D"]
+
+_LAYOUT_BASE = dict(
+    font=dict(family="sans-serif", size=12, color="#333"),
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+    margin=dict(l=10, r=10, t=30, b=10),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+)
 
 
 def _filtrar_por_fecha(df, desde, hasta, columna="fecha"):
@@ -28,9 +51,106 @@ def _num(df, col):
     return pd.to_numeric(df[col], errors="coerce").fillna(0)
 
 
+def _periodo_anterior(desde, hasta):
+    """Mismo numero de dias, justo antes del periodo seleccionado -- para
+    poder mostrar la tendencia (%) en las tarjetas KPI."""
+    dias = (hasta - desde).days + 1
+    hasta_ant = desde - datetime.timedelta(days=1)
+    desde_ant = hasta_ant - datetime.timedelta(days=dias - 1)
+    return desde_ant, hasta_ant
+
+
+def _delta_pct(actual, anterior):
+    if anterior in (0, None) or pd.isna(anterior):
+        return None
+    return (actual - anterior) / anterior * 100
+
+
+def _kpi_card(col, icon, etiqueta, valor, delta_pct=None, ayuda=None):
+    """Tarjeta KPI estilo BI: icono, valor grande, y flecha de tendencia
+    (verde arriba / roja abajo) comparado contra el periodo anterior."""
+    flecha_html = ""
+    if delta_pct is not None:
+        color = "#1a8754" if delta_pct >= 0 else "#c0392b"
+        signo = "▲" if delta_pct >= 0 else "▼"
+        flecha_html = (
+            f'<span style="color:{color}; font-size:13px; font-weight:600; margin-left:6px;">'
+            f'{signo} {abs(delta_pct):.0f}%</span>'
+        )
+    with col:
+        st.markdown(
+            f"""
+            <div style="background:white; border:1px solid #e8e8e8; border-radius:10px;
+                        padding:14px 16px; height:100%;" title="{ayuda or ''}">
+                <div style="font-size:12px; color:#777; font-weight:600;">{icon} {etiqueta}</div>
+                <div style="font-size:24px; font-weight:800; color:#222; margin-top:4px;">
+                    {valor}{flecha_html}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def _tarjeta_metrica(col, etiqueta, valor, ayuda=None, delta=None):
+    """Se mantiene para compatibilidad -- tarjeta simple sin tendencia."""
     with col.container(border=True):
         st.metric(etiqueta, valor, delta=delta, help=ayuda)
+
+
+def _grafico_barras(serie, titulo=None, color=VERDE, horizontal=False):
+    if serie.empty:
+        return
+    fig = go.Figure()
+    if horizontal:
+        fig.add_bar(y=serie.index.astype(str), x=serie.values, orientation="h", marker_color=color)
+    else:
+        fig.add_bar(x=serie.index.astype(str), y=serie.values, marker_color=color)
+    fig.update_layout(height=300, title=titulo, **_LAYOUT_BASE)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def _grafico_barras_apiladas(df, columnas, titulo=None):
+    if df.empty:
+        return
+    fig = go.Figure()
+    for i, col in enumerate(columnas):
+        fig.add_bar(name=col.replace("horas_", "").capitalize(), x=df.index.astype(str), y=df[col], marker_color=PALETA[i % len(PALETA)])
+    fig.update_layout(barmode="stack", height=320, title=titulo, **_LAYOUT_BASE)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def _grafico_dona(labels, valores, titulo=None):
+    valores = list(valores)
+    if not valores or sum(valores) <= 0:
+        return
+    fig = go.Figure(data=[go.Pie(
+        labels=labels, values=valores, hole=0.55,
+        marker=dict(colors=PALETA), textinfo="percent",
+    )])
+    fig.update_layout(height=300, title=titulo, **_LAYOUT_BASE)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+def _calcular_kpis_resumen(produccion, limpieza, desde, hasta):
+    """Mismos calculos que siempre se hicieron para el resumen ejecutivo,
+    factorizados en una funcion para poder llamarlos tambien con el periodo
+    anterior (y asi calcular la tendencia %)."""
+    prod_f = _filtrar_por_fecha(produccion, desde, hasta)
+    limpieza_f = _filtrar_por_fecha(limpieza, desde, hasta)
+    prod_costos = prod_f.copy()
+    if not prod_costos.empty:
+        for col in ["costo_total", "kg_real", "agua_litros"]:
+            prod_costos[col] = pd.to_numeric(prod_costos[col], errors="coerce").fillna(0)
+    costo_total = prod_costos["costo_total"].sum() if not prod_costos.empty else 0.0
+    kg_total = prod_costos["kg_real"].sum() if not prod_costos.empty else 0.0
+    costo_por_kg = costo_total / kg_total if kg_total > 0 else 0
+    agua_prod = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
+    agua_limp = _num(limpieza_f, "agua_litros").sum()
+    return {
+        "kg_total": kg_total, "costo_total": costo_total,
+        "costo_por_kg": costo_por_kg, "agua_total": agua_prod + agua_limp,
+    }
 
 
 def render(db, username, rol):
@@ -94,13 +214,17 @@ def render(db, username, rol):
     agua_produccion = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
     agua_limpieza = _num(limpieza_f, "agua_litros").sum()
 
-    # ======================== RESUMEN EJECUTIVO ========================
+    # ======================== RESUMEN EJECUTIVO (con tendencia vs. periodo anterior) ========================
+    desde_ant, hasta_ant = _periodo_anterior(desde, hasta)
+    kpis_ant = _calcular_kpis_resumen(produccion, limpieza, desde_ant, hasta_ant)
+
     st.markdown("### 🎯 Resumen del período")
+    st.caption(f"Comparado contra el período anterior equivalente: {desde_ant.strftime('%d/%m')} → {hasta_ant.strftime('%d/%m')}")
     r1, r2, r3, r4 = st.columns(4)
-    _tarjeta_metrica(r1, "Kg producidos", f"{kg_total_periodo:,.1f}", "Suma de kg reales de todos los lotes (huevo entero + clara + yema)")
-    _tarjeta_metrica(r2, "Costo promedio /kg", f"{costo_por_kg_general:,.3f}", "Costo total de producción ÷ kg reales producidos")
-    _tarjeta_metrica(r3, "Costo total producción", f"{costo_total_periodo:,.2f}")
-    _tarjeta_metrica(r4, "Agua total (L)", f"{agua_produccion + agua_limpieza:,.0f}", "Producción + limpieza y desinfección")
+    _kpi_card(r1, "🥚", "Kg producidos", f"{kg_total_periodo:,.1f}", _delta_pct(kg_total_periodo, kpis_ant["kg_total"]), "Suma de kg reales de todos los lotes (huevo entero + clara + yema)")
+    _kpi_card(r2, "💲", "Costo promedio /kg", f"{costo_por_kg_general:,.3f}", _delta_pct(costo_por_kg_general, kpis_ant["costo_por_kg"]), "Costo total de producción ÷ kg reales producidos")
+    _kpi_card(r3, "💰", "Costo total producción", f"{costo_total_periodo:,.2f}", _delta_pct(costo_total_periodo, kpis_ant["costo_total"]))
+    _kpi_card(r4, "💧", "Agua total (L)", f"{agua_produccion + agua_limpieza:,.0f}", _delta_pct(agua_produccion + agua_limpieza, kpis_ant["agua_total"]), "Producción + limpieza y desinfección")
 
     st.write("")
 
@@ -140,14 +264,18 @@ def render(db, username, rol):
                         inv_huevo["categoria_nombre"] = inv_huevo["categoria_id"]
 
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("Cubetas disponibles", f"{inv_huevo['cubetas_saldo'].sum():,.0f}")
-                    c2.metric("Huevos disponibles", f"{inv_huevo['cubetas_saldo'].sum() * 30:,.0f}")
-                    c3.metric("Valor en bodega", f"{inv_huevo['valor'].sum():,.2f}")
+                    _kpi_card(c1, "📦", "Cubetas disponibles", f"{inv_huevo['cubetas_saldo'].sum():,.0f}")
+                    _kpi_card(c2, "🥚", "Huevos disponibles", f"{inv_huevo['cubetas_saldo'].sum() * 30:,.0f}")
+                    _kpi_card(c3, "💲", "Valor en bodega", f"{inv_huevo['valor'].sum():,.2f}")
+                    st.write("")
 
                     resumen_categoria = inv_huevo.groupby("categoria_nombre").agg(
                         cubetas=("cubetas_saldo", "sum"), valor=("valor", "sum"),
                     ).reset_index()
-                    st.dataframe(resumen_categoria, use_container_width=True, hide_index=True)
+                    col_tabla, col_graf = st.columns([3, 2])
+                    col_tabla.dataframe(resumen_categoria, use_container_width=True, hide_index=True)
+                    with col_graf:
+                        _grafico_dona(resumen_categoria["categoria_nombre"], resumen_categoria["cubetas"], "Cubetas por categoría")
                     with st.expander("Ver detalle por lote"):
                         st.dataframe(
                             inv_huevo[["recepcion_id", "categoria_nombre", "cubetas_saldo", "costo_cubeta", "valor", "fecha_vencimiento"]],
@@ -174,6 +302,7 @@ def render(db, username, rol):
                     if not negativos_env.empty:
                         st.warning(f"⚠️ {len(negativos_env)} presentación(es) con saldo negativo.")
                     st.dataframe(df_env, use_container_width=True, hide_index=True)
+                    _grafico_barras(df_env.set_index("Presentación")["Saldo"], color=NARANJA)
 
         with col_quim:
             with st.container(border=True):
@@ -193,15 +322,16 @@ def render(db, username, rol):
                     if not negativos_quim.empty:
                         st.warning(f"⚠️ {len(negativos_quim)} insumo(s) con saldo negativo.")
                     st.dataframe(df_quim, use_container_width=True, hide_index=True)
+                    _grafico_barras(df_quim.set_index("Insumo")["Saldo"], color=TEAL)
 
     # ======================== TAB: PRODUCCION Y COSTOS ========================
     with tabs[1]:
         with st.container(border=True):
             st.markdown("##### 🥚 Huevo procesado (Bodega MP → Producción)")
             c1, c2, c3 = st.columns(3)
-            c1.metric("Cubetas usadas", f"{cubetas_total:,.0f}")
-            c2.metric("Huevos procesados", f"{cubetas_total * 30:,.0f}")
-            c3.metric("Costo de huevo consumido", f"{costo_huevo_total:,.2f}")
+            _kpi_card(c1, "📦", "Cubetas usadas", f"{cubetas_total:,.0f}")
+            _kpi_card(c2, "🥚", "Huevos procesados", f"{cubetas_total * 30:,.0f}")
+            _kpi_card(c3, "💲", "Costo de huevo consumido", f"{costo_huevo_total:,.2f}")
 
         st.write("")
 
@@ -217,8 +347,8 @@ def render(db, username, rol):
                 else:
                     fuera_de_rango = balance_vals[(balance_vals > 100.5) | (balance_vals < 85)]
                     c1, c2 = st.columns(2)
-                    c1.metric("Balance promedio", f"{balance_vals.mean():.1f}%")
-                    c2.metric("Lotes fuera de rango (85-100%)", f"{len(fuera_de_rango)} de {len(balance_vals)}")
+                    _kpi_card(c1, "⚖️", "Balance promedio", f"{balance_vals.mean():.1f}%")
+                    _kpi_card(c2, "🔍", "Lotes fuera de rango (85-100%)", f"{len(fuera_de_rango)} de {len(balance_vals)}")
                     if not fuera_de_rango.empty:
                         st.warning("Hay lotes con balance de masa fuera de rango — revísalos en Producción → 'Teórico vs. real'.")
 
@@ -235,30 +365,43 @@ def render(db, username, rol):
                 por_tipo["costo_por_kg"] = por_tipo.apply(
                     lambda r: r["costo_total"] / r["kg_real"] if r["kg_real"] > 0 else 0, axis=1,
                 )
-                st.dataframe(
+                col_tabla, col_graf = st.columns([3, 2])
+                col_tabla.dataframe(
                     por_tipo.rename(columns={
                         "tipo_producto": "Producto", "costo_total": "Costo total",
                         "kg_real": "Kg producidos", "costo_por_kg": "Costo/kg",
                     }),
                     use_container_width=True, hide_index=True,
                 )
+                with col_graf:
+                    _grafico_dona(por_tipo["tipo_producto"], por_tipo["kg_real"], "Kg por tipo de producto")
 
                 st.caption("De qué se compone el costo total del período:")
                 costo_huevo_sum = prod_costos["costo_huevo"].sum()
                 costo_insumos_sum = prod_costos["costo_insumos"].sum()
                 costo_mo_sum = prod_costos["costo_mano_obra"].sum()
                 pct = lambda v: (v / costo_total_periodo * 100) if costo_total_periodo > 0 else 0
-                c1, c2, c3 = st.columns(3)
-                c1.metric("🥚 Huevo", f"{costo_huevo_sum:,.2f}", f"{pct(costo_huevo_sum):.0f}%")
-                c2.metric("🧴 Insumos", f"{costo_insumos_sum:,.2f}", f"{pct(costo_insumos_sum):.0f}%")
-                c3.metric("👷 Mano de obra directa", f"{costo_mo_sum:,.2f}", f"{pct(costo_mo_sum):.0f}%")
 
+                col_comp_tabla, col_comp_graf = st.columns([3, 2])
+                with col_comp_tabla:
+                    c1, c2, c3 = st.columns(3)
+                    _kpi_card(c1, "🥚", "Huevo", f"{costo_huevo_sum:,.2f}", None, f"{pct(costo_huevo_sum):.0f}% del costo total")
+                    _kpi_card(c2, "🧴", "Insumos", f"{costo_insumos_sum:,.2f}", None, f"{pct(costo_insumos_sum):.0f}% del costo total")
+                    _kpi_card(c3, "👷", "Mano de obra directa", f"{costo_mo_sum:,.2f}", None, f"{pct(costo_mo_sum):.0f}% del costo total")
+                with col_comp_graf:
+                    _grafico_dona(
+                        ["Huevo", "Insumos", "Mano de obra"],
+                        [costo_huevo_sum, costo_insumos_sum, costo_mo_sum],
+                        "Composición del costo",
+                    )
+
+                st.write("")
                 superv_periodo = _filtrar_por_fecha(db.get_df("supervision_diaria"), desde, hasta)
                 costo_superv = _num(superv_periodo, "costo_calculado").sum()
-                st.metric(
-                    "👔 Costo de supervisión/calidad (overhead, NO incluido arriba)",
+                _kpi_card(
+                    st.container(), "👔", "Costo de supervisión/calidad (overhead, NO incluido arriba)",
                     f"{costo_superv:,.2f}",
-                    help="Costo del Jefe de planta / Jefe de calidad del período — se muestra aparte a propósito, no se reparte en el costo/kg de los lotes.",
+                    ayuda="Costo del Jefe de planta / Jefe de calidad del período — se muestra aparte a propósito, no se reparte en el costo/kg de los lotes.",
                 )
 
         st.write("")
@@ -276,9 +419,7 @@ def render(db, username, rol):
                     )
                     past_tipo["kg_usado"] = pd.to_numeric(past_tipo["kg_usado"], errors="coerce").fillna(0)
                     kg_pasteurizado_tipo = past_tipo.groupby("tipo_producto")["kg_usado"].sum()
-                    st.metric("Huevo entero", f"{kg_pasteurizado_tipo.get('Huevo entero', 0):,.1f} kg")
-                    st.metric("Clara", f"{kg_pasteurizado_tipo.get('Clara', 0):,.1f} kg")
-                    st.metric("Yema", f"{kg_pasteurizado_tipo.get('Yema', 0):,.1f} kg")
+                    _grafico_barras(kg_pasteurizado_tipo, color=VERDE)
 
         with col_pend:
             with st.container(border=True):
@@ -289,9 +430,7 @@ def render(db, username, rol):
                     prod_saldo = prod_f.copy()
                     prod_saldo["kg_saldo"] = pd.to_numeric(prod_saldo["kg_saldo"], errors="coerce").fillna(0)
                     kg_saldo_tipo = prod_saldo.groupby("tipo_producto")["kg_saldo"].sum()
-                    st.metric("Huevo entero", f"{kg_saldo_tipo.get('Huevo entero', 0):,.1f} kg")
-                    st.metric("Clara", f"{kg_saldo_tipo.get('Clara', 0):,.1f} kg")
-                    st.metric("Yema", f"{kg_saldo_tipo.get('Yema', 0):,.1f} kg")
+                    _grafico_barras(kg_saldo_tipo, color=DORADO)
 
     # ======================== TAB: PERSONAL ========================
     with tabs[2]:
@@ -359,12 +498,12 @@ def render(db, username, rol):
                 reporte = reporte.reset_index().sort_values("horas_totales", ascending=False)
 
                 c1, c2, c3, c4, c5, c6 = st.columns(6)
-                c1.metric("Horas normales", f"{reporte['horas_normales'].sum():,.1f}")
-                c2.metric("Horas extras", f"{reporte['horas_extras'].sum():,.1f}")
-                c3.metric("Horas dobles", f"{reporte['horas_dobles'].sum():,.1f}")
-                c4.metric("Horas compensadas", f"{reporte['horas_compensadas'].sum():,.1f}")
-                c5.metric("Horas nocturnas", f"{reporte['horas_nocturnas'].sum():,.1f}")
-                c6.metric("Costo mano de obra", f"{reporte['costo'].sum():,.2f}")
+                _kpi_card(c1, "🕐", "H. normales", f"{reporte['horas_normales'].sum():,.1f}")
+                _kpi_card(c2, "⏱️", "H. extras", f"{reporte['horas_extras'].sum():,.1f}")
+                _kpi_card(c3, "✖️2", "H. dobles", f"{reporte['horas_dobles'].sum():,.1f}")
+                _kpi_card(c4, "🔁", "H. compensadas", f"{reporte['horas_compensadas'].sum():,.1f}")
+                _kpi_card(c5, "🌙", "H. nocturnas", f"{reporte['horas_nocturnas'].sum():,.1f}")
+                _kpi_card(c6, "💲", "Costo M.O.", f"{reporte['costo'].sum():,.2f}")
 
                 sin_trabajar = reporte[~reporte["trabajo"]]
                 if not sin_trabajar.empty:
@@ -373,6 +512,7 @@ def render(db, username, rol):
                         f"{', '.join(sin_trabajar['nombre'])}"
                     )
 
+                st.write("")
                 st.caption("'Nocturnas' es un eje aparte (cuándo se trabajó) — esas horas también están incluidas en normales/extras/dobles según corresponda.")
                 st.caption("El costo de esta tabla incluye mano de obra directa de producción + supervisión/calidad combinados — para el costo por kg de cada lote (que NO incluye supervisión), ve a la pestaña 'Producción y costos'.")
                 columnas_mostrar = [c for c in [
@@ -382,10 +522,9 @@ def render(db, username, rol):
                 st.dataframe(reporte[columnas_mostrar], use_container_width=True, hide_index=True)
 
                 st.markdown("**Desglose de horas por persona**")
-                st.bar_chart(
-                    reporte.set_index("nombre")[
-                        ["horas_normales", "horas_extras", "horas_dobles", "horas_compensadas"]
-                    ]
+                _grafico_barras_apiladas(
+                    reporte.set_index("nombre"),
+                    ["horas_normales", "horas_extras", "horas_dobles", "horas_compensadas"],
                 )
 
                 st.write("")
@@ -428,7 +567,8 @@ def render(db, username, rol):
                     resumen_insumos = salidas_insumos.groupby(["nombre", "unidad"]).agg(
                         cantidad=("cantidad", "sum"), costo=("costo_total", "sum"),
                     ).reset_index().sort_values("cantidad", ascending=False)
-                    st.metric("Costo total insumos", f"{resumen_insumos['costo'].sum():,.2f}")
+                    _kpi_card(st.container(), "💲", "Costo total insumos", f"{resumen_insumos['costo'].sum():,.2f}")
+                    st.write("")
                     st.dataframe(resumen_insumos, use_container_width=True, hide_index=True)
 
         with col_env:
@@ -453,9 +593,10 @@ def render(db, username, rol):
                         salidas_envases["nombre"] = salidas_envases["item_id"]
                     resumen_envases = salidas_envases.groupby("nombre")["cantidad"].sum().reset_index()
                     resumen_envases.columns = ["Presentación", "Unidades"]
-                    st.metric("Total unidades", f"{int(resumen_envases['Unidades'].sum()):,}")
+                    _kpi_card(st.container(), "📦", "Total unidades", f"{int(resumen_envases['Unidades'].sum()):,}")
+                    st.write("")
                     st.dataframe(resumen_envases, use_container_width=True, hide_index=True)
-                    st.bar_chart(resumen_envases.set_index("Presentación")["Unidades"])
+                    _grafico_barras(resumen_envases.set_index("Presentación")["Unidades"], color=NARANJA)
 
     # ======================== TAB: RESIDUOS Y MERMAS ========================
     with tabs[4]:
@@ -464,9 +605,9 @@ def render(db, username, rol):
         costo_mermas_mp = _num(mermas_mp_f, "costo_estimado").sum()
 
         m1, m2, m3 = st.columns(3)
-        _tarjeta_metrica(m1, "Cáscara generada", f"{cascara_total:,.1f} kg")
-        _tarjeta_metrica(m2, "Huevos dañados en bodega", f"{huevos_danados_total:,.0f}")
-        _tarjeta_metrica(m3, "Costo huevo perdido", f"{costo_mermas_mp:,.2f}")
+        _kpi_card(m1, "🥚", "Cáscara generada", f"{cascara_total:,.1f} kg")
+        _kpi_card(m2, "💔", "Huevos dañados en bodega", f"{huevos_danados_total:,.0f}")
+        _kpi_card(m3, "💲", "Costo huevo perdido", f"{costo_mermas_mp:,.2f}")
 
         st.write("")
         with st.container(border=True):
@@ -490,17 +631,23 @@ def render(db, username, rol):
                     mermas_envases["nombre"] = mermas_envases["item_id"]
                 resumen_mermas_env = mermas_envases.groupby("nombre")["cantidad"].sum().reset_index()
                 resumen_mermas_env.columns = ["Presentación", "Unidades dañadas"]
-                st.dataframe(resumen_mermas_env, use_container_width=True, hide_index=True)
+                col_tabla, col_graf = st.columns([3, 2])
+                col_tabla.dataframe(resumen_mermas_env, use_container_width=True, hide_index=True)
+                with col_graf:
+                    _grafico_barras(resumen_mermas_env.set_index("Presentación")["Unidades dañadas"], color="#c0392b", horizontal=True)
 
     # ======================== TAB: AGUA ========================
     with tabs[5]:
         with st.container(border=True):
             st.markdown("##### 💧 Agua usada")
             c1, c2, c3 = st.columns(3)
-            c1.metric("En producción", f"{agua_produccion:,.0f} L")
-            c2.metric("En limpieza/desinfección", f"{agua_limpieza:,.0f} L")
-            c3.metric("Total", f"{agua_produccion + agua_limpieza:,.0f} L")
+            _kpi_card(c1, "🏭", "En producción", f"{agua_produccion:,.0f} L")
+            _kpi_card(c2, "🧽", "En limpieza/desinfección", f"{agua_limpieza:,.0f} L")
+            _kpi_card(c3, "💧", "Total", f"{agua_produccion + agua_limpieza:,.0f} L")
+            st.write("")
             if agua_produccion + agua_limpieza > 0:
-                st.bar_chart(pd.Series({
-                    "Producción": agua_produccion, "Limpieza/desinfección": agua_limpieza,
-                }))
+                _grafico_dona(
+                    ["Producción", "Limpieza/desinfección"],
+                    [agua_produccion, agua_limpieza],
+                    "Distribución de agua usada",
+                )
