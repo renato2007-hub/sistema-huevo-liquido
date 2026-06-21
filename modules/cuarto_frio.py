@@ -142,11 +142,25 @@ def render(db, username, rol):
                     "presentaciones distintas en una misma carga (deja en 0 / sin cliente "
                     "lo que no vayas a despachar)."
                 )
+                pedidos_df = db.get_df("pedidos")
+                opciones_pedido = [""]
+                mapa_pedido_cliente = {}
+                if not pedidos_df.empty:
+                    prod_bool = pedidos_df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+                    pedidos_pend = pedidos_df[~prod_bool]
+                    nombres_cli_pedido = clientes.set_index("cliente_id")["nombre"] if not clientes.empty else {}
+                    for _, pr in pedidos_pend.iterrows():
+                        cli_nombre = nombres_cli_pedido.get(pr["cliente_id"], pr["cliente_id"])
+                        etiqueta = f"{pr['pedido_id']} ({cli_nombre} - {pr['tipo_producto']}, {pr['cantidad_kg']}kg)"
+                        opciones_pedido.append(etiqueta)
+                        mapa_pedido_cliente[etiqueta] = (pr["pedido_id"], pr["cliente_id"])
+
                 tabla_base = disponibles[
                     ["entrada_id", "lote_origen", "presentacion_nombre", "saldo", "fecha_vencimiento"]
                 ].copy()
                 tabla_base["cliente_id"] = ""
                 tabla_base["cantidad_a_despachar"] = 0
+                tabla_base["pedido_ref"] = ""
                 tabla_editada = st.data_editor(
                     tabla_base,
                     use_container_width=True,
@@ -160,8 +174,15 @@ def render(db, username, rol):
                             "Cantidad a despachar", min_value=0, step=1,
                         ),
                         "saldo": st.column_config.NumberColumn("Saldo disponible"),
+                        "pedido_ref": st.column_config.SelectboxColumn(
+                            "Pedido que cumple (opcional)", options=opciones_pedido,
+                        ),
                     },
                     key=f"editor_despacho_{vehiculo_id}_{fecha}",
+                )
+                st.caption(
+                    "💡 Si esta línea cumple un pedido pendiente, selecciónalo en 'Pedido que cumple' — "
+                    "queda enlazado en Trazabilidad y el pedido se marca como producido automáticamente."
                 )
 
                 tabla_editada["cantidad_a_despachar"] = pd.to_numeric(
@@ -196,9 +217,19 @@ def render(db, username, rol):
                     else:
                         info_entradas = disponibles.set_index("entrada_id")
                         salidas_generadas = []
+                        pedidos_marcados = []
                         for _, linea in lineas.iterrows():
                             entrada_id_linea = linea["entrada_id"]
                             cantidad_linea = float(linea["cantidad_a_despachar"])
+                            etiqueta_pedido = linea.get("pedido_ref", "")
+                            pedido_id_real = ""
+                            if etiqueta_pedido and etiqueta_pedido in mapa_pedido_cliente:
+                                pedido_id_real, cliente_del_pedido = mapa_pedido_cliente[etiqueta_pedido]
+                                if cliente_del_pedido != linea["cliente_id"]:
+                                    st.warning(
+                                        f"⚠️ El pedido {pedido_id_real} es de otro cliente distinto al "
+                                        f"de esta línea — se guardó igual, pero revisa si fue un error."
+                                    )
                             salida_id = db.siguiente_id("cuarto_frio_salidas", "SAL", fecha)
                             db.append_row("cuarto_frio_salidas", {
                                 "salida_id": salida_id,
@@ -207,6 +238,7 @@ def render(db, username, rol):
                                 "cliente_id": linea["cliente_id"],
                                 "cantidad": cantidad_linea,
                                 "vehiculo_id": vehiculo_id,
+                                "pedido_ref": pedido_id_real,
                                 "usuario": username,
                                 "observaciones": observaciones,
                             })
@@ -215,9 +247,13 @@ def render(db, username, rol):
                                 "saldo": saldo_actual - cantidad_linea,
                             })
                             salidas_generadas.append(salida_id)
+                            if pedido_id_real and pedido_id_real not in pedidos_marcados:
+                                db.update_row("pedidos", "pedido_id", pedido_id_real, {"producido": True})
+                                pedidos_marcados.append(pedido_id_real)
+                        mensaje_pedidos = f" — pedido(s) {', '.join(pedidos_marcados)} marcado(s) como producido." if pedidos_marcados else ""
                         st.success(
                             f"Despacho registrado: {len(salidas_generadas)} línea(s) — "
-                            f"{', '.join(salidas_generadas)}"
+                            f"{', '.join(salidas_generadas)}{mensaje_pedidos}"
                         )
                         st.rerun()
 

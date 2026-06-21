@@ -124,7 +124,7 @@ SHEET_SCHEMAS = {
     ],
     "cuarto_frio_salidas": [
         "salida_id", "fecha", "entrada_id", "cliente_id", "cantidad", "vehiculo_id",
-        "usuario", "observaciones",
+        "pedido_ref", "usuario", "observaciones",
     ],
 
     # ---------- Limpieza y desinfeccion ----------
