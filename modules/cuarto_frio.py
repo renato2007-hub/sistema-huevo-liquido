@@ -20,6 +20,7 @@ def render(db, username, rol):
     clientes = db.get_df("clientes")
     presentaciones = db.get_df("presentaciones")
     vehiculos = db.get_df("vehiculos")
+    produccion_semi = db.get_df("produccion_semielaborados")
 
     with tab_ingreso:
         if pasteurizado.empty:
@@ -242,13 +243,14 @@ def render(db, username, rol):
                 inventario["presentacion_nombre"] = inventario["presentacion_id"]
             if not pasteurizado.empty:
                 inventario = inventario.merge(
-                    pasteurizado[["lote_producto_id", "lote_semielaborado_id"]].rename(
+                    pasteurizado[["lote_producto_id", "lote_semielaborado_id", "pasteurizado"]].rename(
                         columns={"lote_semielaborado_id": "lote_origen"}
                     ),
                     on="lote_producto_id", how="left",
                 )
             else:
                 inventario["lote_origen"] = ""
+                inventario["pasteurizado"] = True
             columnas_inv = [
                 "entrada_id", "lote_origen", "lote_producto_id", "presentacion_nombre",
                 "saldo", "fecha_vencimiento",
@@ -256,7 +258,49 @@ def render(db, username, rol):
             if ve_costos(rol):
                 columnas_inv[5:5] = ["costo_unitario", "valor"]
             st.dataframe(inventario[columnas_inv], use_container_width=True)
+
+            # ---- desglose en kg por tipo de producto y estado de pasteurizacion ----
+            st.markdown("##### Kg disponibles en cuarto frío")
+            inv_kg = inventario.copy()
+            if not presentaciones.empty:
+                inv_kg = inv_kg.merge(
+                    presentaciones[["presentacion_id", "kg_nominal"]], on="presentacion_id", how="left",
+                )
+            else:
+                inv_kg["kg_nominal"] = 0
+            inv_kg["kg_nominal"] = pd.to_numeric(inv_kg["kg_nominal"], errors="coerce").fillna(0)
+            if not produccion_semi.empty:
+                inv_kg = inv_kg.merge(
+                    produccion_semi[["lote_semielaborado_id", "tipo_producto"]].rename(
+                        columns={"lote_semielaborado_id": "lote_origen"}
+                    ),
+                    on="lote_origen", how="left",
+                )
+            else:
+                inv_kg["tipo_producto"] = ""
+            inv_kg["tipo_producto"] = inv_kg["tipo_producto"].fillna("")
+            inv_kg["pasteurizado"] = inv_kg["pasteurizado"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+            inv_kg["kg"] = inv_kg["saldo"] * inv_kg["kg_nominal"]
+
+            resumen_kg = inv_kg.groupby(["tipo_producto", "pasteurizado"])["kg"].sum().reset_index()
+            resumen_kg = resumen_kg[resumen_kg["kg"] > 0]
+
+            def _etiqueta(tipo, pasteurizado):
+                tipo_legible = {"Huevo entero": "Huevo", "Clara": "Clara", "Yema": "Yema"}.get(tipo, tipo or "Producto")
+                sufijo = "a" if tipo_legible in ("Clara", "Yema") else "o"
+                if pasteurizado:
+                    return f"{tipo_legible} pasteurizad{sufijo}"
+                return f"{tipo_legible} sin pasteurizar"
+
+            if resumen_kg.empty:
+                st.info("No hay datos suficientes para calcular el desglose en kg.")
+            else:
+                cols = st.columns(len(resumen_kg))
+                for col, (_, fila) in zip(cols, resumen_kg.iterrows()):
+                    col.metric(_etiqueta(fila["tipo_producto"], fila["pasteurizado"]), f"{fila['kg']:,.1f} kg")
+
             if ve_costos(rol):
+                st.write("")
                 st.metric("Valor total en cuarto frío", f"{inventario['valor'].sum():,.2f}")
 
     with tab_vehiculos:
