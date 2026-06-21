@@ -82,6 +82,10 @@ def _boton_modulo(nombre, icono):
 
 _boton_modulo("Inicio", "🏠")
 
+if puede_ver_modulo(rol, "Recepción de pedidos"):
+    _categoria("📋&nbsp;&nbsp;PLANIFICACIÓN", "#2D6CA2")
+    _boton_modulo("Recepción de pedidos", "🧾")
+
 _categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
 _boton_modulo("Bodega de materia prima", "🥚")
 _boton_modulo("Bodega de envases e insumos", "📦")
@@ -95,11 +99,9 @@ if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "T
     _boton_modulo("Supervisión y calidad", "👔")
     _boton_modulo("Trazabilidad", "📄")
 
-if (puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Recepción de pedidos")
-        or puede_ver_modulo(rol, "Catálogos y configuración")):
+if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
     _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
     _boton_modulo("Dashboard", "📊")
-    _boton_modulo("Recepción de pedidos", "🧾")
     _boton_modulo("Catálogos y configuración", "⚙️")
 
 st.sidebar.markdown(
