@@ -161,6 +161,8 @@ def render(db, username, rol):
                 tabla_base["cliente_id"] = ""
                 tabla_base["cantidad_a_despachar"] = 0
                 tabla_base["pedido_ref"] = ""
+                opciones_cliente_nombres = [""] + list(clientes["nombre"])
+                mapa_nombre_a_cliente_id = dict(zip(clientes["nombre"], clientes["cliente_id"]))
                 tabla_editada = st.data_editor(
                     tabla_base,
                     use_container_width=True,
@@ -168,7 +170,7 @@ def render(db, username, rol):
                     disabled=["entrada_id", "lote_origen", "presentacion_nombre", "saldo", "fecha_vencimiento"],
                     column_config={
                         "cliente_id": st.column_config.SelectboxColumn(
-                            "Cliente (cliente_id)", options=[""] + list(clientes["cliente_id"]),
+                            "Cliente", options=opciones_cliente_nombres,
                         ),
                         "cantidad_a_despachar": st.column_config.NumberColumn(
                             "Cantidad a despachar", min_value=0, step=1,
@@ -183,6 +185,10 @@ def render(db, username, rol):
                 st.caption(
                     "💡 Si esta línea cumple un pedido pendiente, selecciónalo en 'Pedido que cumple' — "
                     "queda enlazado en Trazabilidad y el pedido se marca como producido automáticamente."
+                )
+
+                tabla_editada["cliente_id"] = tabla_editada["cliente_id"].apply(
+                    lambda nombre: mapa_nombre_a_cliente_id.get(nombre, nombre)
                 )
 
                 tabla_editada["cantidad_a_despachar"] = pd.to_numeric(

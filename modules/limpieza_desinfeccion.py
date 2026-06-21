@@ -55,12 +55,13 @@ def render(db, username, rol):
             st.markdown("##### 💧 Agua e insumos usados")
             agua_litros = st.number_input("Agua usada (litros)", min_value=0.0, step=1.0)
             st.caption("Insumos usados — deja la tabla vacía si esta limpieza fue solo con agua")
-            opciones_insumo = list(insumos["insumo_id"]) if not insumos.empty else []
+            opciones_insumo_nombres = list(insumos["nombre"]) if not insumos.empty else []
+            mapa_nombre_a_insumo_id = dict(zip(insumos["nombre"], insumos["insumo_id"])) if not insumos.empty else {}
             df_insumos_input = st.data_editor(
                 pd.DataFrame({"insumo_id": pd.Series(dtype="object"), "cantidad": pd.Series(dtype="float")}),
                 num_rows="dynamic", use_container_width=True, hide_index=True,
                 key=f"editor_limp_insumos_{area_id}_{fecha}",
-                column_config={"insumo_id": st.column_config.SelectboxColumn("Insumo", options=opciones_insumo)},
+                column_config={"insumo_id": st.column_config.SelectboxColumn("Insumo", options=opciones_insumo_nombres)},
             )
 
         st.write("")
@@ -93,11 +94,12 @@ def render(db, username, rol):
             for _, fila in df_insumos_input.iterrows():
                 if pd.isna(fila.get("insumo_id")) or not fila.get("insumo_id"):
                     continue
-                costo_unit = float(insumos.set_index("insumo_id").loc[fila["insumo_id"], "costo_unitario"])
+                insumo_id_real = mapa_nombre_a_insumo_id.get(fila["insumo_id"], fila["insumo_id"])
+                costo_unit = float(insumos.set_index("insumo_id").loc[insumo_id_real, "costo_unitario"])
                 cant = float(fila["cantidad"]) if pd.notna(fila.get("cantidad")) else 0.0
                 costo_insumos_total += costo_unit * cant
                 detalle_insumos.append({
-                    "insumo_id": fila["insumo_id"], "cantidad": cant, "costo_calculado": costo_unit * cant,
+                    "insumo_id": insumo_id_real, "cantidad": cant, "costo_calculado": costo_unit * cant,
                 })
 
             if agua_litros <= 0 and not detalle_insumos:

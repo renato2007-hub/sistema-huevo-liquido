@@ -31,7 +31,8 @@ def render(db, username, rol):
             return
 
         fecha = st.date_input("Fecha", value=datetime.date.today(), key="superv_fecha")
-        opciones_personal = list(personal["personal_id"])
+        opciones_personal_nombres = list(personal["nombre"])
+        mapa_nombre_a_personal_id = dict(zip(personal["nombre"], personal["personal_id"]))
         df_input = st.data_editor(
             pd.DataFrame({
                 "personal_id": pd.Series(dtype="object"),
@@ -41,7 +42,7 @@ def render(db, username, rol):
             num_rows="dynamic", use_container_width=True, hide_index=True,
             key=f"editor_supervision_{fecha}",
             column_config={
-                "personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal),
+                "personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal_nombres),
                 "hora_entrada": st.column_config.TimeColumn("Hora entrada", format="HH:mm"),
                 "hora_salida": st.column_config.TimeColumn("Hora salida", format="HH:mm"),
             },
@@ -53,16 +54,18 @@ def render(db, username, rol):
             for _, fila in df_input.iterrows():
                 if pd.isna(fila.get("personal_id")) or not fila.get("personal_id"):
                     continue
+                nombre_seleccionado = fila["personal_id"]
+                personal_id_real = mapa_nombre_a_personal_id.get(nombre_seleccionado, nombre_seleccionado)
                 if pd.isna(fila.get("hora_entrada")) or pd.isna(fila.get("hora_salida")):
-                    st.error(f"Falta hora de entrada o salida para {fila['personal_id']}. Completa ambas.")
+                    st.error(f"Falta hora de entrada o salida para {nombre_seleccionado}. Completa ambas.")
                     return
-                costo_hora = float(personal.set_index("personal_id").loc[fila["personal_id"], "costo_hora"])
+                costo_hora = float(personal.set_index("personal_id").loc[personal_id_real, "costo_hora"])
                 horas, horas_nocturnas = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
                 registro_id = db.siguiente_id("supervision_diaria", "SUP", fecha)
                 db.append_row("supervision_diaria", {
                     "registro_id": registro_id,
                     "fecha": fecha.isoformat(),
-                    "personal_id": fila["personal_id"],
+                    "personal_id": personal_id_real,
                     "hora_entrada": fila["hora_entrada"].strftime("%H:%M"),
                     "hora_salida": fila["hora_salida"].strftime("%H:%M"),
                     "horas": horas,

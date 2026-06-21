@@ -149,16 +149,18 @@ def render(db, username, rol):
             )
 
         st.markdown("**Insumos de limpieza usados**")
-        opciones_insumo = list(insumos["insumo_id"]) if not insumos.empty else []
+        opciones_insumo_nombres = list(insumos["nombre"]) if not insumos.empty else []
+        mapa_nombre_a_insumo_id = dict(zip(insumos["nombre"], insumos["insumo_id"])) if not insumos.empty else {}
         df_insumos_input = st.data_editor(
             pd.DataFrame({"insumo_id": pd.Series(dtype="object"), "cantidad": pd.Series(dtype="float")}),
             num_rows="dynamic", use_container_width=True, key="editor_insumos",
-            column_config={"insumo_id": st.column_config.SelectboxColumn("Insumo", options=opciones_insumo)},
+            column_config={"insumo_id": st.column_config.SelectboxColumn("Insumo", options=opciones_insumo_nombres)},
         )
 
         st.markdown("**Personal que trabajó la jornada**")
         st.caption("Ingresa hora de entrada y salida — el sistema calcula las horas totales y cuántas son nocturnas (19:00-05:00).")
-        opciones_personal = list(personal["personal_id"]) if not personal.empty else []
+        opciones_personal_nombres = list(personal["nombre"]) if not personal.empty else []
+        mapa_nombre_a_personal_id = dict(zip(personal["nombre"], personal["personal_id"])) if not personal.empty else {}
         df_personal_input = st.data_editor(
             pd.DataFrame({
                 "personal_id": pd.Series(dtype="object"),
@@ -167,7 +169,7 @@ def render(db, username, rol):
             }),
             num_rows="dynamic", use_container_width=True, key="editor_personal",
             column_config={
-                "personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal),
+                "personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal_nombres),
                 "hora_entrada": st.column_config.TimeColumn("Hora entrada", format="HH:mm"),
                 "hora_salida": st.column_config.TimeColumn("Hora salida", format="HH:mm"),
             },
@@ -251,11 +253,12 @@ def render(db, username, rol):
             for _, fila in df_insumos_input.iterrows():
                 if pd.isna(fila.get("insumo_id")) or not fila.get("insumo_id"):
                     continue
-                costo_unit = float(insumos.set_index("insumo_id").loc[fila["insumo_id"], "costo_unitario"])
+                insumo_id_real = mapa_nombre_a_insumo_id.get(fila["insumo_id"], fila["insumo_id"])
+                costo_unit = float(insumos.set_index("insumo_id").loc[insumo_id_real, "costo_unitario"])
                 cant = float(fila["cantidad"]) if pd.notna(fila.get("cantidad")) else 0.0
                 costo_insumos_total += costo_unit * cant
                 detalle_insumos.append({
-                    "insumo_id": fila["insumo_id"], "cantidad": cant, "costo_calculado": costo_unit * cant,
+                    "insumo_id": insumo_id_real, "cantidad": cant, "costo_calculado": costo_unit * cant,
                 })
 
             costo_mano_obra_total = 0.0
@@ -263,17 +266,19 @@ def render(db, username, rol):
             for _, fila in df_personal_input.iterrows():
                 if pd.isna(fila.get("personal_id")) or not fila.get("personal_id"):
                     continue
+                nombre_seleccionado = fila["personal_id"]
+                personal_id_real = mapa_nombre_a_personal_id.get(nombre_seleccionado, nombre_seleccionado)
                 if pd.isna(fila.get("hora_entrada")) or pd.isna(fila.get("hora_salida")):
                     st.error(
-                        f"Falta hora de entrada o salida para {fila['personal_id']}. "
+                        f"Falta hora de entrada o salida para {nombre_seleccionado}. "
                         f"Completa ambas antes de guardar."
                     )
                     return
-                costo_hora = float(personal.set_index("personal_id").loc[fila["personal_id"], "costo_hora"])
+                costo_hora = float(personal.set_index("personal_id").loc[personal_id_real, "costo_hora"])
                 horas, horas_nocturnas = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
                 costo_mano_obra_total += costo_hora * horas
                 detalle_personal.append({
-                    "personal_id": fila["personal_id"],
+                    "personal_id": personal_id_real,
                     "hora_entrada": fila["hora_entrada"].strftime("%H:%M"),
                     "hora_salida": fila["hora_salida"].strftime("%H:%M"),
                     "horas": horas,
