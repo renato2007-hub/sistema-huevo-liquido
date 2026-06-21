@@ -11,6 +11,7 @@ from modules import (
     cuarto_frio,
     limpieza_desinfeccion,
     supervision,
+    pedidos,
     dashboard,
     trazabilidad,
     catalogos,
@@ -94,9 +95,11 @@ if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "T
     _boton_modulo("Supervisión y calidad", "👔")
     _boton_modulo("Trazabilidad", "📄")
 
-if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
+if (puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Recepción de pedidos")
+        or puede_ver_modulo(rol, "Catálogos y configuración")):
     _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
     _boton_modulo("Dashboard", "📊")
+    _boton_modulo("Recepción de pedidos", "🧾")
     _boton_modulo("Catálogos y configuración", "⚙️")
 
 st.sidebar.markdown(
@@ -178,5 +181,7 @@ elif modulo == "Supervisión y calidad":
     supervision.render(db, username, rol)
 elif modulo == "Trazabilidad":
     trazabilidad.render(db, username, rol)
+elif modulo == "Recepción de pedidos":
+    pedidos.render(db, username, rol)
 elif modulo == "Catálogos y configuración":
     catalogos.render(db, username, rol)

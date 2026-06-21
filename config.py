@@ -21,6 +21,13 @@ SHEET_SCHEMAS = {
     "etiquetas": ["etiqueta_id", "nombre", "origen", "costo_unitario", "activo"],
     "cartones": ["carton_id", "nombre", "capacidad", "costo_unitario", "activo"],
     "liners": ["liner_id", "nombre", "costo_unitario", "activo"],
+
+    "pedidos": [
+        "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
+        "tipo_producto", "presentacion_id", "cantidad_kg",
+        "fecha_pedido", "fecha_produccion", "fecha_entrega",
+        "producido", "usuario", "observaciones",
+    ],
     "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
