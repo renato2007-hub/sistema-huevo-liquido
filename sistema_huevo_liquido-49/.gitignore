@@ -1,0 +1,13 @@
+# Entorno virtual de Python -- no se sube, cada quien lo crea localmente
+venv/
+.venv/
+
+# Credenciales -- NUNCA debe subirse a GitHub
+.streamlit/secrets.toml
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Archivos del sistema operativo
+.DS_Store
