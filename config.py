@@ -22,6 +22,14 @@ SHEET_SCHEMAS = {
     "cartones": ["carton_id", "nombre", "capacidad", "costo_unitario", "activo"],
     "liners": ["liner_id", "nombre", "costo_unitario", "activo"],
 
+    "solicitudes_compra": [
+        "solicitud_id", "numero_oc", "fecha_solicitud", "fecha_maxima_recepcion",
+        "proveedor_recomendado", "recibido", "usuario", "observaciones",
+    ],
+    "solicitud_compra_items": [
+        "detalle_id", "solicitud_id", "categoria", "nombre_item", "cantidad", "unidad",
+    ],
+
     "pedidos": [
         "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
         "tipo_producto", "presentacion_id", "unidades_solicitadas", "cantidad_kg",
@@ -32,6 +40,7 @@ SHEET_SCHEMAS = {
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
     "areas_limpieza": ["area_id", "nombre", "activo"],
+    "materiales_limpieza": ["material_id", "nombre", "unidad", "activo"],
     "turnos": ["turno_id", "nombre", "hora_inicio", "hora_fin", "activo"],
     "feriados": ["fecha", "nombre", "activo"],
     "compensaciones_feriado": ["compensacion_id", "fecha", "personal_id", "observaciones", "usuario"],

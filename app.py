@@ -11,6 +11,7 @@ from modules import (
     cuarto_frio,
     limpieza_desinfeccion,
     supervision,
+    solicitud_compra,
     pedidos,
     dashboard,
     trazabilidad,
@@ -82,8 +83,9 @@ def _boton_modulo(nombre, icono):
 
 _boton_modulo("Inicio", "🏠")
 
-if puede_ver_modulo(rol, "Recepción de pedidos"):
+if puede_ver_modulo(rol, "Solicitud MP e Insumos") or puede_ver_modulo(rol, "Recepción de pedidos"):
     _categoria("📋&nbsp;&nbsp;PLANIFICACIÓN", "#2D6CA2")
+    _boton_modulo("Solicitud MP e Insumos", "📑")
     _boton_modulo("Recepción de pedidos", "🧾")
 
 _categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
@@ -183,6 +185,8 @@ elif modulo == "Supervisión y calidad":
     supervision.render(db, username, rol)
 elif modulo == "Trazabilidad":
     trazabilidad.render(db, username, rol)
+elif modulo == "Solicitud MP e Insumos":
+    solicitud_compra.render(db, username, rol)
 elif modulo == "Recepción de pedidos":
     pedidos.render(db, username, rol)
 elif modulo == "Catálogos y configuración":

@@ -157,7 +157,7 @@ def render(db, username, rol):
         "Catálogo a administrar",
         [
             "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
-            "Insumos", "Presentaciones de envase", "Tapas (PET)", "Etiquetas", "Cartones", "Liners de aluminio", "Personal", "Clientes",
+            "Insumos", "Materiales de limpieza", "Presentaciones de envase", "Tapas (PET)", "Etiquetas", "Cartones", "Liners de aluminio", "Personal", "Clientes",
             "Vehículos", "Áreas de limpieza", "Turnos", "Feriados", "Usuarios",
         ],
     )
@@ -188,6 +188,14 @@ def render(db, username, rol):
         _seccion_simple(db, "insumos", "Insumos de limpieza", [
             ("insumo_id", "texto"), ("nombre", "texto"), ("tipo", "texto"),
             ("unidad", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
+        ])
+    elif seccion == "Materiales de limpieza":
+        st.caption(
+            "Materiales físicos (no químicos) de limpieza y desinfección — trapeadores, "
+            "escobillas, guantes, etc. — distintos de los insumos químicos."
+        )
+        _seccion_simple(db, "materiales_limpieza", "Materiales de limpieza", [
+            ("material_id", "texto"), ("nombre", "texto"), ("unidad", "texto"), ("activo", "bool"),
         ])
     elif seccion == "Presentaciones de envase":
         st.caption(
