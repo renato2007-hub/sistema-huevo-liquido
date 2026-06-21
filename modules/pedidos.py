@@ -128,6 +128,17 @@ def render(db, username, rol):
             df["presentacion_nombre"] = df["presentacion_id"]
         df["producido_bool"] = df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
         df["cantidad_kg"] = pd.to_numeric(df["cantidad_kg"], errors="coerce").fillna(0)
+        hoy_str = datetime.date.today().isoformat()
+        df["atrasado"] = (~df["producido_bool"]) & (df["fecha_entrega"].astype(str) < hoy_str)
+
+        def _estado(row):
+            if row["producido_bool"]:
+                return "✅ Producido"
+            if row["atrasado"]:
+                return "🔴 Atrasado"
+            return "🟡 Pendiente"
+
+        df["estado"] = df.apply(_estado, axis=1)
         return df
 
     columnas_mostrar = [
@@ -146,13 +157,15 @@ def render(db, username, rol):
             if pendientes.empty:
                 st.success("🎉 No hay pedidos pendientes — todo lo registrado ya está marcado como producido.")
             else:
-                hoy = datetime.date.today().isoformat()
-                atrasados = pendientes[pendientes["fecha_entrega"] < hoy]
+                atrasados = pendientes[pendientes["atrasado"]]
                 if not atrasados.empty:
                     st.error(f"⚠️ {len(atrasados)} pedido(s) con fecha de entrega ya vencida.")
 
                 st.metric("Pedidos pendientes de producir", len(pendientes))
-                st.dataframe(pendientes[columnas_mostrar], use_container_width=True, hide_index=True)
+                st.dataframe(
+                    pendientes[["estado"] + columnas_mostrar].rename(columns={"estado": "Estado"}),
+                    use_container_width=True, hide_index=True,
+                )
 
                 st.write("")
                 st.markdown("##### ✅ Marcar pedido como producido")
@@ -189,9 +202,11 @@ def render(db, username, rol):
                 df_mostrar = df_mostrar[df_mostrar["cliente_nombre"] == filtro_cliente]
 
             df_mostrar = df_mostrar.copy()
-            df_mostrar["Producido"] = df_mostrar["producido_bool"].map({True: "✅ Sí", False: "🟡 No"})
+            atrasados_total = df_mostrar[df_mostrar["atrasado"]]
+            if not atrasados_total.empty:
+                st.error(f"⚠️ {len(atrasados_total)} pedido(s) con fecha de entrega ya vencida sin producir.")
             st.dataframe(
-                df_mostrar[["Producido"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
+                df_mostrar.rename(columns={"estado": "Estado"})[["Estado"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
                 use_container_width=True, hide_index=True,
             )
 
