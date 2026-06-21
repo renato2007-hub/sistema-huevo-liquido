@@ -85,6 +85,7 @@ def render(db, username, rol):
                         "unidades_saldo": cantidad_max - cantidad,
                     })
                     st.success(f"Ingreso {entrada_id} registrado en cuarto frío.")
+                    st.rerun()
 
     with tab_despacho:
         entradas = db.get_df("cuarto_frio_entradas")

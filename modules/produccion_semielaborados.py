@@ -203,9 +203,11 @@ def render(db, username, rol):
             help="100% = toda la masa que entró quedó contabilizada entre líquido y cáscara. Nunca debería superar 100%, eso violaría la conservación de masa.",
         )
         if balance_masa_pct > 100.5:
-            st.error(
-                "⚠️ El balance de masa supera el 100% — físicamente no es posible. "
-                "Revisa la cantidad de cubetas, la categoría seleccionada, o los kg reales digitados antes de guardar."
+            st.info(
+                "ℹ️ El balance de masa superó el 100% — esto es solo informativo, no impide guardar. "
+                "Puede pasar por mezclar huevo de distintas categorías, una báscula no calibrada, u "
+                "otro factor real de planta. Si te parece raro, vale la pena revisar cubetas/categoría/kg, "
+                "pero no es obligatorio corregir antes de guardar."
             )
         elif masa_real_total > 0 and balance_masa_pct < 85:
             st.warning(
@@ -528,15 +530,17 @@ def render(db, username, rol):
             anomalos = df[df["rendimiento_pct"] > 100]
             balance_anomalo = df[df["balance_masa_pct"] > 100.5]
             if not anomalos.empty:
-                st.warning(
-                    f"⚠️ {len(anomalos)} lote(s) muestran rendimiento mayor a 100%, lo cual no "
-                    f"debería ser físicamente posible — revisa si el kg real se digitó bien, o "
-                    f"si el kg_promedio_cubeta de la categoría usada está desactualizado."
+                st.info(
+                    f"ℹ️ {len(anomalos)} lote(s) muestran rendimiento mayor a 100% — puede deberse a "
+                    f"mezclar huevo de varias categorías u otros factores reales de planta, no "
+                    f"necesariamente un error. Si quieres, revisa el kg real digitado o el "
+                    f"kg_promedio_cubeta de la categoría usada."
                 )
             if not balance_anomalo.empty:
-                st.error(
-                    f"❌ {len(balance_anomalo)} lote(s) muestran un balance de masa mayor a 100% — "
-                    f"esto viola la conservación de masa, revisa esos registros con prioridad."
+                st.info(
+                    f"ℹ️ {len(balance_anomalo)} lote(s) muestran un balance de masa mayor a 100% — "
+                    f"solo informativo, no es necesariamente un error (mezcla de categorías, "
+                    f"variación normal de báscula, etc.)."
                 )
 
             st.caption("Rendimiento = kg real ÷ kg líquido teórico (sin cáscara). Balance de masa = (líquido + cáscara real) ÷ peso bruto teórico del huevo.")
