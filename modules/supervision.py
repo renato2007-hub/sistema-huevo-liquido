@@ -33,30 +33,26 @@ def render(db, username, rol):
         fecha = st.date_input("Fecha", value=datetime.date.today(), key="superv_fecha")
         opciones_personal_nombres = list(personal["nombre"])
         mapa_nombre_a_personal_id = dict(zip(personal["nombre"], personal["personal_id"]))
-        df_input = st.data_editor(
-            pd.DataFrame({
-                "personal_id": pd.Series(dtype="object"),
-                "hora_entrada": pd.Series(dtype="object"),
-                "hora_salida": pd.Series(dtype="object"),
-            }),
-            num_rows="dynamic", use_container_width=True, hide_index=True,
-            key=f"editor_supervision_{fecha}",
-            column_config={
-                "personal_id": st.column_config.SelectboxColumn("Persona", options=opciones_personal_nombres),
-                "hora_entrada": st.column_config.TimeColumn("Hora entrada", format="HH:mm"),
-                "hora_salida": st.column_config.TimeColumn("Hora salida", format="HH:mm"),
-            },
+
+        personas_seleccionadas = st.multiselect(
+            "Personas que trabajaron esta jornada", opciones_personal_nombres, key="personas_seleccionadas_superv",
         )
+        filas_personal_horas = []
+        for nombre_persona in personas_seleccionadas:
+            c1, c2, c3 = st.columns([2, 1, 1])
+            c1.markdown(f"**{nombre_persona}**")
+            entrada_p = c2.time_input("Hora entrada", value=None, key=f"superv_entrada_{nombre_persona}")
+            salida_p = c3.time_input("Hora salida", value=None, key=f"superv_salida_{nombre_persona}")
+            filas_personal_horas.append({"nombre": nombre_persona, "hora_entrada": entrada_p, "hora_salida": salida_p})
+
         observaciones = st.text_area("Observaciones", "", key="superv_obs")
 
         if st.button("💾 Guardar jornada de supervisión"):
             registros_guardados = []
-            for _, fila in df_input.iterrows():
-                if pd.isna(fila.get("personal_id")) or not fila.get("personal_id"):
-                    continue
-                nombre_seleccionado = fila["personal_id"]
+            for fila in filas_personal_horas:
+                nombre_seleccionado = fila["nombre"]
                 personal_id_real = mapa_nombre_a_personal_id.get(nombre_seleccionado, nombre_seleccionado)
-                if pd.isna(fila.get("hora_entrada")) or pd.isna(fila.get("hora_salida")):
+                if fila["hora_entrada"] is None or fila["hora_salida"] is None:
                     st.error(f"Falta hora de entrada o salida para {nombre_seleccionado}. Completa ambas.")
                     return
                 costo_hora = float(personal.set_index("personal_id").loc[personal_id_real, "costo_hora"])
