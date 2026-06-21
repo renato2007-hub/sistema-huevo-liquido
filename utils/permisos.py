@@ -59,3 +59,9 @@ def ve_costos(rol) -> bool:
 
 def es_admin(rol) -> bool:
     return rol_normalizado(rol) == "admin"
+
+
+def puede_editar_pedidos(rol) -> bool:
+    """Editar/eliminar pedidos queda reservado a admin (Renato) y Gerencia
+    -- ni siquiera Jefe de planta, a pedido explicito del negocio."""
+    return rol_normalizado(rol) in ("admin", "gerencia")

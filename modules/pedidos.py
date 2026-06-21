@@ -11,15 +11,18 @@ de "producido: si/no" que se actualiza a mano conforme se va cumpliendo.
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.permisos import puede_editar_pedidos
 
 MEDIOS_RECEPCION = ["Correo", "WhatsApp", "Mensaje de texto", "Llamada", "Otro"]
 
 
 def render(db, username, rol):
     st.title("🧾 Recepción de pedidos")
-    tab_nuevo, tab_pendientes, tab_todos = st.tabs(
-        ["➕ Registrar pedido", "🟡 Pendientes de producir", "📋 Todos los pedidos"]
-    )
+    nombres_tabs = ["➕ Registrar pedido", "🟡 Pendientes de producir", "📋 Todos los pedidos"]
+    if puede_editar_pedidos(rol):
+        nombres_tabs.append("✏️ Editar / eliminar")
+    tabs_pedidos = st.tabs(nombres_tabs)
+    tab_nuevo, tab_pendientes, tab_todos = tabs_pedidos[0], tabs_pedidos[1], tabs_pedidos[2]
 
     clientes = db.get_df("clientes")
     presentaciones = db.get_df("presentaciones")
@@ -191,3 +194,96 @@ def render(db, username, rol):
                 df_mostrar[["Producido"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
                 use_container_width=True, hide_index=True,
             )
+
+    # ======================== EDITAR / ELIMINAR (solo admin y gerencia) ========================
+    if puede_editar_pedidos(rol):
+        with tabs_pedidos[3]:
+            st.caption("Disponible solo para administrador y gerencia.")
+            df = _enriquecer(db.get_df("pedidos"))
+            if df.empty:
+                st.info("No hay pedidos registrados todavía.")
+            else:
+                pedido_sel = st.selectbox(
+                    "Pedido a editar", df["pedido_id"].sort_values(ascending=False),
+                    format_func=lambda x: (
+                        f"{x} — {df.set_index('pedido_id').loc[x, 'cliente_nombre']} "
+                        f"({df.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
+                    ),
+                    key="editar_pedido_select",
+                )
+                fila = df.set_index("pedido_id").loc[pedido_sel]
+
+                with st.form(f"form_editar_pedido_{pedido_sel}"):
+                    c1, c2, c3 = st.columns(3)
+                    cliente_id_e = c1.selectbox(
+                        "Cliente", clientes["cliente_id"],
+                        index=list(clientes["cliente_id"]).index(fila["cliente_id"]) if fila["cliente_id"] in list(clientes["cliente_id"]) else 0,
+                        format_func=lambda x: clientes.set_index("cliente_id").loc[x, "nombre"],
+                    )
+                    medio_e = c2.selectbox(
+                        "Medio de recepción", MEDIOS_RECEPCION,
+                        index=MEDIOS_RECEPCION.index(fila["medio_recepcion"]) if fila["medio_recepcion"] in MEDIOS_RECEPCION else 0,
+                    )
+                    ciudad_e = c3.text_input("Ciudad", str(fila["ciudad"]))
+
+                    c4, c5 = st.columns(2)
+                    pedido_cliente_ref_e = c4.text_input("N° de pedido del cliente", str(fila.get("pedido_cliente_ref", "")))
+                    fecha_pedido_e = c5.date_input("Fecha del pedido", value=pd.to_datetime(fila["fecha_pedido"]).date())
+
+                    opciones_producto = ["Huevo entero", "Clara", "Yema"]
+                    c6, c7, c8, c9 = st.columns(4)
+                    tipo_producto_e = c6.selectbox(
+                        "Producto", opciones_producto,
+                        index=opciones_producto.index(fila["tipo_producto"]) if fila["tipo_producto"] in opciones_producto else 0,
+                    )
+                    presentacion_id_e = c7.selectbox(
+                        "Presentación", presentaciones["presentacion_id"],
+                        index=list(presentaciones["presentacion_id"]).index(fila["presentacion_id"]) if fila["presentacion_id"] in list(presentaciones["presentacion_id"]) else 0,
+                        format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
+                    )
+                    unidades_e = c8.number_input(
+                        "N° de envases", min_value=0, step=1,
+                        value=int(pd.to_numeric(fila.get("unidades_solicitadas", 0), errors="coerce") or 0),
+                    )
+                    cantidad_kg_e = c9.number_input(
+                        "Cantidad (kg)", min_value=0.0, step=0.5, value=float(fila["cantidad_kg"]),
+                    )
+
+                    c10, c11 = st.columns(2)
+                    fecha_produccion_e = c10.date_input("Fecha de producción planeada", value=pd.to_datetime(fila["fecha_produccion"]).date())
+                    fecha_entrega_e = c11.date_input("Fecha de entrega", value=pd.to_datetime(fila["fecha_entrega"]).date())
+
+                    producido_e = st.checkbox("Producido", value=bool(fila["producido_bool"]))
+                    observaciones_e = st.text_area("Observaciones", str(fila.get("observaciones", "")))
+
+                    guardar = st.form_submit_button("💾 Guardar cambios", type="primary")
+
+                if guardar:
+                    db.update_row("pedidos", "pedido_id", pedido_sel, {
+                        "cliente_id": cliente_id_e,
+                        "medio_recepcion": medio_e,
+                        "ciudad": ciudad_e,
+                        "pedido_cliente_ref": pedido_cliente_ref_e,
+                        "fecha_pedido": fecha_pedido_e.isoformat(),
+                        "tipo_producto": tipo_producto_e,
+                        "presentacion_id": presentacion_id_e,
+                        "unidades_solicitadas": unidades_e,
+                        "cantidad_kg": cantidad_kg_e,
+                        "fecha_produccion": fecha_produccion_e.isoformat(),
+                        "fecha_entrega": fecha_entrega_e.isoformat(),
+                        "producido": producido_e,
+                        "observaciones": observaciones_e,
+                    })
+                    st.success(f"Pedido {pedido_sel} actualizado.")
+                    st.rerun()
+
+                st.divider()
+                st.markdown("##### 🗑️ Eliminar pedido")
+                confirmar = st.checkbox(f"Confirmo que quiero eliminar el pedido {pedido_sel}", key=f"confirmar_del_pedido_{pedido_sel}")
+                if st.button("🗑️ Eliminar este pedido"):
+                    if not confirmar:
+                        st.error("Marca la casilla de confirmación antes de eliminar.")
+                    else:
+                        db.delete_row("pedidos", "pedido_id", pedido_sel)
+                        st.success(f"Pedido {pedido_sel} eliminado.")
+                        st.rerun()
