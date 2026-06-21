@@ -49,17 +49,25 @@ def render(db, username, rol):
 
         with st.container(border=True):
             st.markdown("##### 🥚 Qué piden")
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             tipo_producto = c1.selectbox("Producto", ["Huevo entero", "Clara", "Yema"])
             presentacion_id = c2.selectbox(
                 "Presentación", presentaciones["presentacion_id"],
                 format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
             )
-            cantidad_kg = c3.number_input("Cantidad (kg)", min_value=0.0, step=0.5)
+            unidades_solicitadas = c3.number_input("N° de envases solicitados", min_value=0, step=1)
+            cantidad_kg = c4.number_input("Cantidad (kg)", min_value=0.0, step=0.5)
 
             kg_nominal = float(presentaciones.set_index("presentacion_id").loc[presentacion_id, "kg_nominal"])
-            if cantidad_kg > 0 and kg_nominal > 0:
-                st.caption(f"≈ {cantidad_kg / kg_nominal:.1f} unidades de esa presentación")
+            if unidades_solicitadas > 0 and kg_nominal > 0:
+                kg_sugerido = unidades_solicitadas * kg_nominal
+                if cantidad_kg > 0 and abs(kg_sugerido - cantidad_kg) > 0.1:
+                    st.caption(
+                        f"⚠️ {unidades_solicitadas:.0f} envases × {kg_nominal:.2f}kg = {kg_sugerido:.1f} kg, "
+                        f"pero pusiste {cantidad_kg:.1f} kg — revisa si está bien así."
+                    )
+                else:
+                    st.caption(f"≈ {kg_sugerido:.1f} kg para {unidades_solicitadas:.0f} envases de esta presentación")
 
         with st.container(border=True):
             st.markdown("##### 📅 Fechas comprometidas")
@@ -82,6 +90,7 @@ def render(db, username, rol):
                     "ciudad": ciudad,
                     "tipo_producto": tipo_producto,
                     "presentacion_id": presentacion_id,
+                    "unidades_solicitadas": unidades_solicitadas,
                     "cantidad_kg": cantidad_kg,
                     "fecha_pedido": fecha_pedido.isoformat(),
                     "fecha_produccion": fecha_produccion.isoformat(),
@@ -120,7 +129,7 @@ def render(db, username, rol):
 
     columnas_mostrar = [
         "pedido_id", "pedido_cliente_ref", "cliente_nombre", "ciudad", "medio_recepcion",
-        "tipo_producto", "presentacion_nombre", "cantidad_kg",
+        "tipo_producto", "presentacion_nombre", "unidades_solicitadas", "cantidad_kg",
         "fecha_pedido", "fecha_produccion", "fecha_entrega", "observaciones",
     ]
 

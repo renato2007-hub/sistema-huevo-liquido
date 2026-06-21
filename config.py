@@ -24,7 +24,7 @@ SHEET_SCHEMAS = {
 
     "pedidos": [
         "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
-        "tipo_producto", "presentacion_id", "cantidad_kg",
+        "tipo_producto", "presentacion_id", "unidades_solicitadas", "cantidad_kg",
         "fecha_pedido", "fecha_produccion", "fecha_entrega",
         "producido", "usuario", "observaciones",
     ],
