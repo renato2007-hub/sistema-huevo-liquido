@@ -12,14 +12,15 @@ from utils.permisos import ve_costos
 
 def render(db, username, rol):
     st.title("Cuarto frío")
-    tab_ingreso, tab_despacho, tab_inventario, tab_vehiculos = st.tabs(
-        ["Ingreso desde envasado", "Despacho a cliente", "Inventario actual", "🚚 Cargas por vehículo"]
+    tab_ingreso, tab_despacho, tab_inventario, tab_vehiculos, tab_verificacion = st.tabs(
+        ["Ingreso desde envasado", "Despacho a cliente", "Inventario actual", "🚚 Cargas por vehículo", "✅ Verificación de cargas"]
     )
 
     pasteurizado = db.get_df("pasteurizacion_envasado")
     clientes = db.get_df("clientes")
     presentaciones = db.get_df("presentaciones")
     vehiculos = db.get_df("vehiculos")
+    usuarios_cat = db.get_df("usuarios")
     produccion_semi = db.get_df("produccion_semielaborados")
 
     with tab_ingreso:
@@ -386,3 +387,133 @@ def render(db, username, rol):
                         unidades=("cantidad", "sum"), kg=("kg", "sum"),
                     )
                     st.dataframe(resumen_cliente, use_container_width=True)
+
+    # ======================== VERIFICACION DE CARGAS ========================
+    with tab_verificacion:
+        st.caption(
+            "Para cuando un conductor reporta que faltó algo por cargar — registra "
+            "si la carga estuvo correcta o no, y queda asociado a quién hizo el despacho."
+        )
+        sub_registrar, sub_historial = st.tabs(["➕ Registrar verificación", "📊 Historial y conteo de errores"])
+
+        def _nombre_usuario(username_login):
+            if usuarios_cat.empty or "username" not in usuarios_cat.columns:
+                return username_login
+            fila = usuarios_cat[usuarios_cat["username"] == username_login]
+            if fila.empty or not str(fila.iloc[0].get("nombre", "")).strip():
+                return username_login
+            return fila.iloc[0]["nombre"]
+
+        with sub_registrar:
+            salidas_v = db.get_df("cuarto_frio_salidas")
+            if salidas_v.empty:
+                st.info("Todavía no hay despachos registrados para verificar.")
+            elif vehiculos.empty:
+                st.info("Configura vehículos en Catálogos antes de usar esto.")
+            else:
+                c1, c2 = st.columns(2)
+                fecha_v = c1.date_input("Fecha de la carga", value=datetime.date.today(), key="verif_fecha")
+                vehiculo_v = c2.selectbox(
+                    "Vehículo", vehiculos["vehiculo_id"],
+                    format_func=lambda x: vehiculos.set_index("vehiculo_id").loc[x, "placa"],
+                    key="verif_vehiculo",
+                )
+
+                despachos_dia = salidas_v[
+                    (salidas_v["fecha"].astype(str) == fecha_v.isoformat())
+                    & (salidas_v["vehiculo_id"].astype(str) == str(vehiculo_v))
+                ]
+
+                if despachos_dia.empty:
+                    st.warning("No hay despachos registrados para esa fecha y vehículo — no hay nada que verificar todavía.")
+                else:
+                    usuarios_involucrados = sorted(despachos_dia["usuario"].dropna().unique().tolist())
+                    st.markdown(f"**Despachos registrados ese día para este vehículo:** {len(despachos_dia)}")
+                    st.dataframe(
+                        despachos_dia[[c for c in ["salida_id", "cliente_id", "cantidad", "usuario"] if c in despachos_dia.columns]],
+                        use_container_width=True, hide_index=True,
+                    )
+
+                    if len(usuarios_involucrados) > 1:
+                        st.caption("Más de una persona registró despachos para este vehículo ese día — elige a quién corresponde la verificación.")
+                    despachador_sel = st.selectbox(
+                        "Despachador responsable", usuarios_involucrados,
+                        format_func=_nombre_usuario, key="verif_despachador",
+                    )
+
+                    correcto = st.radio("¿La carga estuvo correcta?", ["✅ Sí, todo correcto", "❌ Hubo un error"], key="verif_correcto")
+                    descripcion_error = ""
+                    if correcto == "❌ Hubo un error":
+                        descripcion_error = st.text_area(
+                            "¿Qué faltó o estuvo mal? (ej. 'faltaron 10 fundas de clara para Cliente X')",
+                            key="verif_descripcion",
+                        )
+                    observaciones_v = st.text_input("Observaciones (opcional)", key="verif_obs")
+
+                    if st.button("💾 Guardar verificación", type="primary"):
+                        if correcto == "❌ Hubo un error" and not descripcion_error.strip():
+                            st.error("Describe qué faltó o estuvo mal antes de guardar.")
+                        else:
+                            verificacion_id = db.siguiente_id("verificacion_cargas", "VC", fecha_v)
+                            db.append_row("verificacion_cargas", {
+                                "verificacion_id": verificacion_id,
+                                "fecha": fecha_v.isoformat(),
+                                "vehiculo_id": vehiculo_v,
+                                "correcto": correcto == "✅ Sí, todo correcto",
+                                "despachador": despachador_sel,
+                                "descripcion_error": descripcion_error,
+                                "usuario": username,
+                                "observaciones": observaciones_v,
+                            })
+                            st.success(f"Verificación {verificacion_id} guardada.")
+                            st.rerun()
+
+        with sub_historial:
+            verif = db.get_df("verificacion_cargas")
+            if verif.empty:
+                st.info("No hay verificaciones registradas todavía.")
+            else:
+                verif = verif.copy()
+                verif["correcto_bool"] = verif["correcto"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+                verif["despachador_nombre"] = verif["despachador"].apply(_nombre_usuario)
+
+                c1, c2 = st.columns(2)
+                desde_v = c1.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="verif_hist_desde")
+                hasta_v = c2.date_input("Hasta", value=datetime.date.today(), key="verif_hist_hasta")
+                verif_periodo = verif[
+                    (verif["fecha"].astype(str) >= desde_v.isoformat()) & (verif["fecha"].astype(str) <= hasta_v.isoformat())
+                ]
+
+                if verif_periodo.empty:
+                    st.info("No hay verificaciones en ese período.")
+                else:
+                    total_verif = len(verif_periodo)
+                    total_errores = (~verif_periodo["correcto_bool"]).sum()
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Cargas verificadas", total_verif)
+                    c2.metric("Con error", int(total_errores))
+                    c3.metric("% correctas", f"{(total_verif - total_errores) / total_verif * 100:.0f}%" if total_verif else "—")
+
+                    st.markdown("##### Conteo de errores por despachador")
+                    conteo = verif_periodo.groupby("despachador_nombre").agg(
+                        cargas_verificadas=("verificacion_id", "count"),
+                        errores=("correcto_bool", lambda s: (~s).sum()),
+                    ).reset_index().sort_values("errores", ascending=False)
+                    st.dataframe(conteo, use_container_width=True, hide_index=True)
+                    st.bar_chart(conteo.set_index("despachador_nombre")["errores"])
+
+                    st.markdown("##### Detalle de errores")
+                    errores_detalle = verif_periodo[~verif_periodo["correcto_bool"]]
+                    if errores_detalle.empty:
+                        st.success("🎉 Sin errores registrados en este período.")
+                    else:
+                        if not vehiculos.empty:
+                            errores_detalle = errores_detalle.merge(
+                                vehiculos[["vehiculo_id", "placa"]], on="vehiculo_id", how="left",
+                            )
+                        st.dataframe(
+                            errores_detalle[[c for c in [
+                                "fecha", "placa", "despachador_nombre", "descripcion_error", "observaciones",
+                            ] if c in errores_detalle.columns]],
+                            use_container_width=True, hide_index=True,
+                        )

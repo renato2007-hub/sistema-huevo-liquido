@@ -30,6 +30,11 @@ SHEET_SCHEMAS = {
         "detalle_id", "solicitud_id", "categoria", "nombre_item", "cantidad", "unidad",
     ],
 
+    "verificacion_cargas": [
+        "verificacion_id", "fecha", "vehiculo_id", "correcto", "despachador",
+        "descripcion_error", "usuario", "observaciones",
+    ],
+
     "pedidos": [
         "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
         "tipo_producto", "presentacion_id", "unidades_solicitadas", "cantidad_kg",

@@ -25,6 +25,52 @@ def render(db, username, rol):
     turnos = db.get_df("turnos")
 
     with tab_nueva:
+        # ---- alerta temprana: pedidos que requieren produccion pronto ----
+        pedidos_df = db.get_df("pedidos")
+        if not pedidos_df.empty:
+            producido_bool = pedidos_df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+            pendientes_prod = pedidos_df[~producido_bool].copy()
+            if not pendientes_prod.empty:
+                hoy_date = datetime.date.today()
+                hoy_str = hoy_date.isoformat()
+                limite_str = (hoy_date + datetime.timedelta(days=3)).isoformat()
+                atrasados_prod = pendientes_prod[pendientes_prod["fecha_produccion"].astype(str) < hoy_str]
+                proximos_prod = pendientes_prod[
+                    (pendientes_prod["fecha_produccion"].astype(str) >= hoy_str)
+                    & (pendientes_prod["fecha_produccion"].astype(str) <= limite_str)
+                ]
+                if not atrasados_prod.empty or not proximos_prod.empty:
+                    with st.container(border=True):
+                        st.markdown("##### 📋 Pedidos que requieren producción pronto")
+                        if not atrasados_prod.empty:
+                            atrasados_prod = atrasados_prod.copy()
+                            atrasados_prod["cantidad_kg"] = pd.to_numeric(atrasados_prod["cantidad_kg"], errors="coerce").fillna(0)
+                            resumen_atrasados = atrasados_prod.groupby("tipo_producto").agg(
+                                kg=("cantidad_kg", "sum"), pedidos=("pedido_id", "count"),
+                            )
+                            st.error("🔴 Ya debiste haber producido:")
+                            for tipo, fila in resumen_atrasados.iterrows():
+                                st.markdown(f"- **{tipo}**: {fila['kg']:.1f} kg ({int(fila['pedidos'])} pedido(s))")
+                        if not proximos_prod.empty:
+                            proximos_prod = proximos_prod.copy()
+                            proximos_prod["cantidad_kg"] = pd.to_numeric(proximos_prod["cantidad_kg"], errors="coerce").fillna(0)
+                            resumen_proximos = proximos_prod.groupby("tipo_producto").agg(
+                                kg=("cantidad_kg", "sum"), pedidos=("pedido_id", "count"),
+                            )
+                            st.warning("🟡 Producción próxima (siguientes 3 días):")
+                            for tipo, fila in resumen_proximos.iterrows():
+                                st.markdown(f"- **{tipo}**: {fila['kg']:.1f} kg ({int(fila['pedidos'])} pedido(s))")
+                        with st.expander("Ver detalle de estos pedidos"):
+                            cols_detalle = [c for c in [
+                                "pedido_id", "cliente_id", "tipo_producto", "cantidad_kg",
+                                "fecha_produccion", "fecha_entrega",
+                            ] if c in pendientes_prod.columns]
+                            st.dataframe(
+                                pd.concat([atrasados_prod, proximos_prod])[cols_detalle],
+                                use_container_width=True, hide_index=True,
+                            )
+                    st.write("")
+
         if categorias.empty:
             st.warning("Configura al menos una categoría de huevo (con rendimiento) en Catálogos.")
             return
