@@ -127,10 +127,29 @@ def render(db, username, rol):
             for codigo in (codigo_clara, codigo_yema):
                 if codigo in ids_existentes:
                     st.error(f"⚠️ El código '{codigo}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
+        elif tipo_producto == "Clara":
+            col_c1, col_c2 = st.columns(2)
+            codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha))
+            codigo_coproducto = col_c2.text_input("Código de lote — Yema (co-producto)", value=sugerir_codigo_lote("Yema", fecha))
+            if codigo_lote in ids_existentes:
+                st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
+            if codigo_coproducto in ids_existentes:
+                st.error(f"⚠️ El código co-producto '{codigo_coproducto}' ya existe.")
+            st.caption("La yema que salga también quedará como lote propio en el inventario. Si no hubo yema, deja el campo de yema real en 0 y no se creará ese lote.")
+        elif tipo_producto == "Yema":
+            col_c1, col_c2 = st.columns(2)
+            codigo_lote = col_c1.text_input("Código de lote — Yema (principal)", value=sugerir_codigo_lote("Yema", fecha))
+            codigo_coproducto = col_c2.text_input("Código de lote — Clara (co-producto)", value=sugerir_codigo_lote("Clara", fecha))
+            if codigo_lote in ids_existentes:
+                st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
+            if codigo_coproducto in ids_existentes:
+                st.error(f"⚠️ El código co-producto '{codigo_coproducto}' ya existe.")
+            st.caption("La clara que salga también quedará como lote propio en el inventario. Si no hubo clara, deja el campo en 0 y no se creará ese lote.")
         else:
             codigo_lote = st.text_input(
                 "Código de lote", value=sugerir_codigo_lote(tipo_producto, fecha),
             )
+            codigo_coproducto = ""
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
 
@@ -262,10 +281,26 @@ def render(db, username, rol):
         col5.metric("Cáscara teórica (kg)", f"{teorico['cascara_teorica_kg']:.2f}")
 
         st.markdown("**Valores reales obtenidos** (pesar al final del proceso — compara contra el *líquido* teórico de arriba)")
-        kg_real = st.number_input("Kg reales obtenidos (huevo entero o suma)", min_value=0.0, step=0.1)
+        st.caption("Llena siempre los 4 valores — se usan para calcular eficiencia de separación y balance de masa.")
+        kg_real_input = st.number_input("Kg reales obtenidos (huevo entero o suma líquida)", min_value=0.0, step=0.1)
         clara_real_kg = st.number_input("Clara real (kg)", min_value=0.0, step=0.1)
         yema_real_kg = st.number_input("Yema real (kg)", min_value=0.0, step=0.1)
         cascara_real_kg = st.number_input("Cáscara real (kg)", min_value=0.0, step=0.1)
+
+        # kg_real para el SALDO DEL TANQUE depende del tipo de producto que se va a almacenar:
+        # - Huevo entero → lo que se pesó como líquido total
+        # - Clara → solo los kg de clara (la yema puede venderse/desecharse aparte)
+        # - Yema → solo los kg de yema
+        # - Clara y yema → suma de ambos (cada uno va a su propio lote)
+        if tipo_producto == "Clara":
+            kg_real = clara_real_kg
+        elif tipo_producto == "Yema":
+            kg_real = yema_real_kg
+        elif tipo_producto == "Clara y yema":
+            kg_real = clara_real_kg + yema_real_kg
+        else:
+            # Huevo entero: si llenaron el campo suma úsalo, si no suma clara+yema
+            kg_real = kg_real_input if kg_real_input > 0 else (clara_real_kg + yema_real_kg)
 
         masa_real_total = max(kg_real, clara_real_kg + yema_real_kg) + cascara_real_kg
         balance_masa_pct = (
@@ -505,13 +540,40 @@ def render(db, username, rol):
                     "observaciones": observaciones,
                 })
 
+                # Co-producto: si se produjo Clara también crea lote de Yema (y viceversa)
+                kg_coproducto = yema_real_kg if tipo_producto == "Clara" else (clara_real_kg if tipo_producto == "Yema" else 0)
+                tipo_coproducto = "Yema" if tipo_producto == "Clara" else ("Clara" if tipo_producto == "Yema" else "")
+                if tipo_coproducto and kg_coproducto > 0 and codigo_coproducto:
+                    db.append_row("produccion_semielaborados", {
+                        **base_row,
+                        "lote_semielaborado_id": codigo_coproducto,
+                        "tipo_producto": tipo_coproducto,
+                        "kg_liquido_teorico": 0,
+                        "kg_real": kg_coproducto,
+                        "clara_teorica_kg": 0,
+                        "clara_real_kg": clara_real_kg if tipo_coproducto == "Clara" else 0,
+                        "yema_teorica_kg": 0,
+                        "yema_real_kg": yema_real_kg if tipo_coproducto == "Yema" else 0,
+                        "cascara_teorica_kg": 0,
+                        "cascara_real_kg": 0,
+                        "costo_huevo": 0,
+                        "costo_insumos": 0,
+                        "costo_mano_obra": 0,
+                        "costo_total": 0,
+                        "costo_unitario_kg": 0,
+                        "kg_saldo": kg_coproducto,
+                        "balance_masa_pct": 0,
+                        "observaciones": f"Co-producto de lote {codigo_lote}",
+                    })
+
+                msg_lotes = codigo_lote
+                if tipo_coproducto and kg_coproducto > 0 and codigo_coproducto:
+                    msg_lotes += f" + co-producto {codigo_coproducto} ({tipo_coproducto}, {kg_coproducto:.1f} kg)"
+
                 if ve_costos(rol):
-                    st.success(
-                        f"Lote {codigo_lote} guardado — "
-                        f"costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}"
-                    )
+                    st.success(f"Lote {msg_lotes} guardado — costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}")
                 else:
-                    st.success(f"Lote {codigo_lote} guardado.")
+                    st.success(f"Lote {msg_lotes} guardado.")
                 st.rerun()
 
     with tab_inventario:
