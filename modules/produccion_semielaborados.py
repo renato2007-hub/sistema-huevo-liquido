@@ -480,6 +480,7 @@ def render(db, username, rol):
                     )
                 else:
                     st.success(f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados.")
+                st.rerun()
             else:
                 costo_unitario_kg = costo_total / kg_real if kg_real > 0 else 0
                 db.append_row("produccion_semielaborados", {
@@ -511,6 +512,7 @@ def render(db, username, rol):
                     )
                 else:
                     st.success(f"Lote {codigo_lote} guardado.")
+                st.rerun()
 
     with tab_inventario:
         df = db.get_df("produccion_semielaborados")
