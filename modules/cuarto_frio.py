@@ -94,192 +94,172 @@ def render(db, username, rol):
         elif clientes.empty:
             st.warning("Configura al menos un cliente en Catálogos.")
         elif vehiculos.empty:
-            st.warning("Configura al menos un vehículo en Catálogos antes de registrar un despacho.")
+            st.warning("Configura al menos un vehículo en Catálogos.")
         else:
             entradas["saldo"] = pd.to_numeric(entradas["saldo"], errors="coerce").fillna(0)
             disponibles = entradas[entradas["saldo"] > 0].copy()
             if disponibles.empty:
                 st.info("No hay saldo disponible para despachar.")
             else:
-                disponibles["fecha_vencimiento"] = pd.to_datetime(
-                    disponibles["fecha_vencimiento"], errors="coerce"
-                )
+                disponibles["fecha_vencimiento"] = pd.to_datetime(disponibles["fecha_vencimiento"], errors="coerce")
                 disponibles = disponibles.sort_values("fecha_vencimiento")
                 if not presentaciones.empty:
                     disponibles = disponibles.merge(
-                        presentaciones[["presentacion_id", "nombre"]].rename(
-                            columns={"nombre": "presentacion_nombre"}
-                        ),
+                        presentaciones[["presentacion_id", "nombre"]].rename(columns={"nombre": "presentacion_nombre"}),
                         on="presentacion_id", how="left",
                     )
-                    disponibles["presentacion_nombre"] = disponibles["presentacion_nombre"].fillna(
-                        disponibles["presentacion_id"]
-                    )
+                    disponibles["presentacion_nombre"] = disponibles["presentacion_nombre"].fillna(disponibles["presentacion_id"])
                 else:
                     disponibles["presentacion_nombre"] = disponibles["presentacion_id"]
                 if not pasteurizado.empty:
                     disponibles = disponibles.merge(
                         pasteurizado[["lote_producto_id", "lote_semielaborado_id"]].rename(
-                            columns={"lote_semielaborado_id": "lote_origen"}
-                        ),
+                            columns={"lote_semielaborado_id": "lote_origen"}),
                         on="lote_producto_id", how="left",
                     )
                 else:
                     disponibles["lote_origen"] = ""
 
-                fecha = st.date_input("Fecha de despacho", value=datetime.date.today(), key="cf_out_fecha")
-                vehiculo_id = st.selectbox(
+                # ── Encabezado de la carga ──
+                c1, c2 = st.columns(2)
+                fecha = c1.date_input("Fecha de despacho", value=datetime.date.today(), key="cf_out_fecha")
+                vehiculo_id = c2.selectbox(
                     "Vehículo que se carga",
                     vehiculos["vehiculo_id"],
-                    format_func=lambda x: (
-                        f"{vehiculos.set_index('vehiculo_id').loc[x, 'placa']} — "
-                        f"{vehiculos.set_index('vehiculo_id').loc[x, 'descripcion']}"
-                    ),
+                    format_func=lambda x: f"{vehiculos.set_index('vehiculo_id').loc[x, 'placa']} — {vehiculos.set_index('vehiculo_id').loc[x, 'descripcion']}",
                 )
-
-                st.markdown(
-                    "**Arma la carga de este vehículo**: por cada línea que vayas a despachar, "
-                    "elige el cliente y la cantidad — puedes combinar varios clientes y "
-                    "presentaciones distintas en una misma carga (deja en 0 / sin cliente "
-                    "lo que no vayas a despachar)."
-                )
-                pedidos_df = db.get_df("pedidos")
-                opciones_pedido = [""]
-                mapa_pedido_cliente = {}
-                if not pedidos_df.empty:
-                    prod_bool = pedidos_df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
-                    pedidos_pend = pedidos_df[~prod_bool]
-                    nombres_cli_pedido = clientes.set_index("cliente_id")["nombre"] if not clientes.empty else {}
-                    for _, pr in pedidos_pend.iterrows():
-                        cli_nombre = nombres_cli_pedido.get(pr["cliente_id"], pr["cliente_id"])
-                        etiqueta = f"{pr['pedido_id']} ({cli_nombre} - {pr['tipo_producto']}, {pr['cantidad_kg']}kg)"
-                        opciones_pedido.append(etiqueta)
-                        mapa_pedido_cliente[etiqueta] = (pr["pedido_id"], pr["cliente_id"])
-
-                tabla_base = disponibles[
-                    ["entrada_id", "lote_origen", "presentacion_nombre", "saldo", "fecha_vencimiento"]
-                ].copy()
-                tabla_base["cliente_id"] = ""
-                tabla_base["cantidad_a_despachar"] = 0
-                tabla_base["pedido_ref"] = ""
-                opciones_cliente_nombres = [""] + list(clientes["nombre"])
-                mapa_nombre_a_cliente_id = dict(zip(clientes["nombre"], clientes["cliente_id"]))
-                tabla_editada = st.data_editor(
-                    tabla_base,
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=["entrada_id", "lote_origen", "presentacion_nombre", "saldo", "fecha_vencimiento"],
-                    column_config={
-                        "cliente_id": st.column_config.SelectboxColumn(
-                            "Cliente", options=opciones_cliente_nombres,
-                        ),
-                        "cantidad_a_despachar": st.column_config.NumberColumn(
-                            "Cantidad a despachar", min_value=0, step=1,
-                        ),
-                        "saldo": st.column_config.NumberColumn("Saldo disponible"),
-                        "pedido_ref": st.column_config.SelectboxColumn(
-                            "Pedido que cumple (opcional)", options=opciones_pedido,
-                        ),
-                    },
-                    key=f"editor_despacho_{vehiculo_id}_{fecha}",
-                )
-                st.caption(
-                    "💡 Si esta línea cumple un pedido pendiente, selecciónalo en 'Pedido que cumple' — "
-                    "queda enlazado en Trazabilidad y el pedido se marca como producido automáticamente."
-                )
-
-                tabla_editada["cliente_id"] = tabla_editada["cliente_id"].apply(
-                    lambda nombre: mapa_nombre_a_cliente_id.get(nombre, nombre)
-                )
-
-                tabla_editada["cantidad_a_despachar"] = pd.to_numeric(
-                    tabla_editada["cantidad_a_despachar"], errors="coerce"
-                ).fillna(0)
-                lineas = tabla_editada[tabla_editada["cantidad_a_despachar"] > 0]
-                excedidas = lineas[lineas["cantidad_a_despachar"] > lineas["saldo"]]
-                sin_cliente = lineas[lineas["cliente_id"] == ""]
-
-                if not excedidas.empty:
-                    st.error(
-                        "⚠️ Hay línea(s) donde la cantidad a despachar supera el saldo "
-                        "disponible de ese lote. Corrige antes de guardar."
-                    )
-                if not sin_cliente.empty:
-                    st.error("⚠️ Hay línea(s) con cantidad pero sin cliente seleccionado. Corrige antes de guardar.")
-                if not lineas.empty and excedidas.empty and sin_cliente.empty:
-                    nombres_clientes = clientes.set_index("cliente_id")["nombre"]
-                    resumen = lineas.groupby("cliente_id")["cantidad_a_despachar"].sum()
-                    texto_resumen = ", ".join(
-                        f"{nombres_clientes.get(c, c)}: {int(v)}" for c, v in resumen.items()
-                    )
-                    st.info(f"📦 Carga total: **{int(lineas['cantidad_a_despachar'].sum())} unidades** — {texto_resumen}")
-
                 personal = db.get_df("personal")
                 despachador_personal_id = ""
                 if not personal.empty:
                     opciones_desp = [""] + list(personal["personal_id"])
-                    despachador_sel_id = st.selectbox(
+                    despachador_personal_id = st.selectbox(
                         "Trabajador responsable de la carga",
                         opciones_desp,
                         format_func=lambda x: "— Selecciona quien cargó el camión —" if x == "" else personal.set_index("personal_id").loc[x, "nombre"],
                         key="cf_despachador_personal",
                     )
-                    despachador_personal_id = despachador_sel_id
-                else:
-                    st.caption("Configura personal en Catálogos para asignar el responsable de la carga.")
+                observaciones = st.text_input("Observaciones generales (opcional)", "", key="cf_out_obs")
 
-                observaciones = st.text_area("Observaciones", "", key="cf_out_obs")
+                st.divider()
 
-                if st.button("Registrar despacho"):
-                    if lineas.empty:
-                        st.error("Ingresa una cantidad mayor a cero en al menos una línea.")
-                    elif not excedidas.empty or not sin_cliente.empty:
-                        st.error("Corrige las líneas marcadas en rojo antes de guardar.")
-                    elif not despachador_personal_id:
-                        st.error("Selecciona el trabajador responsable de la carga antes de guardar.")
+                # ── Pedidos pendientes ──
+                pedidos_df = db.get_df("pedidos")
+                opciones_pedido = ["— Sin pedido —"]
+                mapa_pedido_cliente = {}
+                if not pedidos_df.empty:
+                    prod_bool = pedidos_df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+                    pedidos_pend = pedidos_df[~prod_bool]
+                    nombres_cli_ped = clientes.set_index("cliente_id")["nombre"] if not clientes.empty else {}
+                    for _, pr in pedidos_pend.iterrows():
+                        cli_nombre = nombres_cli_ped.get(pr["cliente_id"], pr["cliente_id"])
+                        etiqueta = f"{pr['pedido_id']} ({cli_nombre} — {pr['tipo_producto']}, {pr['cantidad_kg']}kg)"
+                        opciones_pedido.append(etiqueta)
+                        mapa_pedido_cliente[etiqueta] = (pr["pedido_id"], pr["cliente_id"])
+
+                # ── Opciones de lote disponible ──
+                opciones_entrada = [
+                    f"{r['entrada_id']} | {r['presentacion_nombre']} | saldo: {int(r['saldo'])} | vence: {str(r['fecha_vencimiento'])[:10]}"
+                    for _, r in disponibles.iterrows()
+                ]
+                mapa_entrada = {
+                    f"{r['entrada_id']} | {r['presentacion_nombre']} | saldo: {int(r['saldo'])} | vence: {str(r['fecha_vencimiento'])[:10]}": r["entrada_id"]
+                    for _, r in disponibles.iterrows()
+                }
+                mapa_cliente_id = dict(zip(clientes["nombre"], clientes["cliente_id"]))
+
+                # ── Acumulador en session_state ──
+                clave_lineas = f"lineas_despacho_{vehiculo_id}_{fecha}"
+                if clave_lineas not in st.session_state:
+                    st.session_state[clave_lineas] = []
+
+                # ── Formulario de una línea ──
+                st.markdown("##### ➕ Agregar línea a la carga")
+                ca, cb, cc, cd = st.columns([2, 3, 1, 2])
+                cliente_sel = ca.selectbox("Cliente", ["— Elige —"] + list(clientes["nombre"]), key="desp_cliente")
+                entrada_sel = cb.selectbox("Lote / Presentación", opciones_entrada, key="desp_entrada")
+                cantidad_sel = cc.number_input("Cant.", min_value=1, step=1, key="desp_cantidad")
+                pedido_sel = cd.selectbox("Pedido (opcional)", opciones_pedido, key="desp_pedido")
+
+                if st.button("➕ Agregar a la carga", use_container_width=True):
+                    if cliente_sel == "— Elige —":
+                        st.error("Selecciona un cliente.")
                     else:
-                        info_entradas = disponibles.set_index("entrada_id")
-                        salidas_generadas = []
-                        pedidos_marcados = []
-                        for _, linea in lineas.iterrows():
-                            entrada_id_linea = linea["entrada_id"]
-                            cantidad_linea = float(linea["cantidad_a_despachar"])
-                            etiqueta_pedido = linea.get("pedido_ref", "")
-                            pedido_id_real = ""
-                            if etiqueta_pedido and etiqueta_pedido in mapa_pedido_cliente:
-                                pedido_id_real, cliente_del_pedido = mapa_pedido_cliente[etiqueta_pedido]
-                                if cliente_del_pedido != linea["cliente_id"]:
-                                    st.warning(
-                                        f"⚠️ El pedido {pedido_id_real} es de otro cliente distinto al "
-                                        f"de esta línea — se guardó igual, pero revisa si fue un error."
-                                    )
-                            salida_id = db.siguiente_id("cuarto_frio_salidas", "SAL", fecha)
-                            db.append_row("cuarto_frio_salidas", {
-                                "salida_id": salida_id,
-                                "fecha": fecha.isoformat(),
-                                "entrada_id": entrada_id_linea,
-                                "cliente_id": linea["cliente_id"],
-                                "cantidad": cantidad_linea,
-                                "vehiculo_id": vehiculo_id,
-                                "despachador": despachador_personal_id,
-                                "pedido_ref": pedido_id_real,
-                                "usuario": username,
-                                "observaciones": observaciones,
-                            })
-                            saldo_actual = float(info_entradas.loc[entrada_id_linea, "saldo"])
-                            db.update_row("cuarto_frio_entradas", "entrada_id", entrada_id_linea, {
-                                "saldo": saldo_actual - cantidad_linea,
-                            })
-                            salidas_generadas.append(salida_id)
-                            if pedido_id_real and pedido_id_real not in pedidos_marcados:
-                                db.update_row("pedidos", "pedido_id", pedido_id_real, {"producido": True})
-                                pedidos_marcados.append(pedido_id_real)
-                        mensaje_pedidos = f" — pedido(s) {', '.join(pedidos_marcados)} marcado(s) como producido." if pedidos_marcados else ""
-                        st.success(
-                            f"Despacho registrado: {len(salidas_generadas)} línea(s) — "
-                            f"{', '.join(salidas_generadas)}{mensaje_pedidos}"
+                        entrada_id_sel = mapa_entrada.get(entrada_sel, "")
+                        saldo_disp = float(disponibles.set_index("entrada_id").loc[entrada_id_sel, "saldo"])
+                        ya_comprometido = sum(
+                            l["cantidad"] for l in st.session_state[clave_lineas]
+                            if l["entrada_id"] == entrada_id_sel
                         )
+                        saldo_real = saldo_disp - ya_comprometido
+                        if cantidad_sel > saldo_real:
+                            st.error(f"Solo quedan {saldo_real:.0f} unidades disponibles de ese lote.")
+                        else:
+                            pedido_id_real = ""
+                            if pedido_sel != "— Sin pedido —" and pedido_sel in mapa_pedido_cliente:
+                                pedido_id_real = mapa_pedido_cliente[pedido_sel][0]
+                            st.session_state[clave_lineas].append({
+                                "cliente": cliente_sel,
+                                "cliente_id": mapa_cliente_id.get(cliente_sel, cliente_sel),
+                                "entrada_id": entrada_id_sel,
+                                "presentacion": entrada_sel.split("|")[1].strip(),
+                                "cantidad": cantidad_sel,
+                                "pedido_ref": pedido_id_real,
+                            })
+                            st.rerun()
+
+                # ── Tabla acumulada ──
+                lineas_acum = st.session_state[clave_lineas]
+                if lineas_acum:
+                    st.markdown("##### 📋 Carga armada hasta ahora")
+                    df_acum = pd.DataFrame(lineas_acum)[["cliente", "presentacion", "cantidad", "pedido_ref"]]
+                    df_acum.columns = ["Cliente", "Presentación", "Unidades", "Pedido"]
+                    st.dataframe(df_acum, use_container_width=True, hide_index=True)
+                    st.info(f"📦 Total: **{sum(l['cantidad'] for l in lineas_acum)} unidades** en {len(lineas_acum)} línea(s)")
+
+                    ce, cf = st.columns(2)
+                    if ce.button("🗑️ Borrar última línea"):
+                        st.session_state[clave_lineas].pop()
                         st.rerun()
+                    if cf.button("🗑️ Vaciar toda la carga"):
+                        st.session_state[clave_lineas] = []
+                        st.rerun()
+
+                    st.write("")
+                    if st.button("💾 Registrar despacho completo", type="primary", use_container_width=True):
+                        if not despachador_personal_id:
+                            st.error("Selecciona el trabajador responsable antes de guardar.")
+                        else:
+                            salidas_generadas = []
+                            pedidos_marcados = []
+                            for linea in lineas_acum:
+                                salida_id = db.siguiente_id("cuarto_frio_salidas", "SAL", fecha)
+                                db.append_row("cuarto_frio_salidas", {
+                                    "salida_id": salida_id,
+                                    "fecha": fecha.isoformat(),
+                                    "entrada_id": linea["entrada_id"],
+                                    "cliente_id": linea["cliente_id"],
+                                    "cantidad": linea["cantidad"],
+                                    "vehiculo_id": vehiculo_id,
+                                    "despachador": despachador_personal_id,
+                                    "pedido_ref": linea["pedido_ref"],
+                                    "usuario": username,
+                                    "observaciones": observaciones,
+                                })
+                                saldo_actual = float(entradas.set_index("entrada_id").loc[linea["entrada_id"], "saldo"])
+                                db.update_row("cuarto_frio_entradas", "entrada_id", linea["entrada_id"], {
+                                    "saldo": saldo_actual - linea["cantidad"],
+                                })
+                                salidas_generadas.append(salida_id)
+                                if linea["pedido_ref"] and linea["pedido_ref"] not in pedidos_marcados:
+                                    db.update_row("pedidos", "pedido_id", linea["pedido_ref"], {"producido": True})
+                                    pedidos_marcados.append(linea["pedido_ref"])
+
+                            st.session_state[clave_lineas] = []
+                            msg = f"✅ Despacho registrado: {len(salidas_generadas)} línea(s)"
+                            if pedidos_marcados:
+                                msg += f" — pedido(s) {', '.join(pedidos_marcados)} marcado(s) como producido(s)"
+                            st.success(msg)
+                            st.rerun()
 
     with tab_inventario:
         entradas = db.get_df("cuarto_frio_entradas")
