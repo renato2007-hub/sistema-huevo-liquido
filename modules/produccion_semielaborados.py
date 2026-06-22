@@ -647,7 +647,32 @@ def render(db, username, rol):
                         st.success(f"Pérdida {merma_id} registrada — saldo del lote actualizado a {nuevo_saldo:.1f} kg.")
                         st.rerun()
 
-    with tab_rendimiento:
+        st.divider()
+        st.markdown("##### 📋 Historial de pérdidas registradas")
+        df_mermas = db.get_df("mermas_semielaborado")
+        if df_mermas.empty:
+            st.info("No hay pérdidas registradas todavía.")
+        else:
+            df_mermas_vista = df_mermas.copy()
+            # Agregar tipo de producto desde la tabla de producción
+            prod_tipos = db.get_df("produccion_semielaborados")
+            if not prod_tipos.empty:
+                df_mermas_vista = df_mermas_vista.merge(
+                    prod_tipos[["lote_semielaborado_id", "tipo_producto"]],
+                    on="lote_semielaborado_id", how="left",
+                )
+            columnas_mermas = [c for c in [
+                "fecha", "lote_semielaborado_id", "tipo_producto",
+                "kg_desechado", "causa", "observaciones",
+            ] if c in df_mermas_vista.columns]
+            if ve_costos(rol):
+                columnas_mermas.append("costo_estimado")
+            st.dataframe(
+                df_mermas_vista[columnas_mermas].sort_values("fecha", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+            kg_total_desechado = pd.to_numeric(df_mermas_vista["kg_desechado"], errors="coerce").fillna(0).sum()
+            st.caption(f"Total desechado histórico: **{kg_total_desechado:,.1f} kg** en {len(df_mermas_vista)} registro(s)")
         df = db.get_df("produccion_semielaborados")
         if df.empty:
             st.info("No hay datos todavía.")
