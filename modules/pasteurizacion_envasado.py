@@ -324,12 +324,15 @@ def render(db, username, rol):
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
             columnas_disp = [
-                "lote_producto_id", "fecha", "presentacion_id", "pasteurizado", "tapa_id",
+                "lote_producto_id", "fecha", "presentacion_id", "estado",  "tapa_id",
                 "etiqueta_id", "cantidad_cartones", "liner_id", "unidades_saldo",
             ]
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario")
-            disponible_df = df[df["unidades_saldo"] > 0]
+            disponible_df = df[df["unidades_saldo"] > 0].copy()
+            disponible_df["estado"] = disponible_df["pasteurizado"].astype(str).str.upper().isin(
+                ["TRUE", "1", "SI", "SÍ"]
+            ).map({True: "✅ Pasteurizado", False: "🔴 Sin pasteurizar"})
             st.dataframe(disponible_df[columnas_disp], use_container_width=True)
 
             st.markdown("##### Kg totales disponibles por producto")
