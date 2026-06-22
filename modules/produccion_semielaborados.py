@@ -142,33 +142,85 @@ def render(db, username, rol):
             st.warning("No hay huevo disponible en bodega de materia prima para producir.")
             return
 
-        categorias_en_bodega = recepciones_con_saldo["categoria_id"].unique().tolist()
         if not categorias.empty:
             mapa_cat_nombre = dict(zip(categorias["categoria_id"], categorias["nombre"]))
         else:
             mapa_cat_nombre = {}
 
-        categoria_id = st.selectbox(
-            "Categoría / tamaño de huevo a usar",
-            categorias_en_bodega,
-            format_func=lambda x: mapa_cat_nombre.get(x, x),
+        # Resumen de disponibilidad en bodega (informativo, sin selector de categoría)
+        recepciones_con_saldo["cubetas_saldo_num"] = pd.to_numeric(recepciones_con_saldo["cubetas_saldo"], errors="coerce").fillna(0)
+        total_cubetas_bodega = int(recepciones_con_saldo["cubetas_saldo_num"].sum())
+        detalle_lotes = " · ".join(
+            f"{r['recepcion_id']} ({mapa_cat_nombre.get(r['categoria_id'], r['categoria_id'])}, {int(r['cubetas_saldo_num'])} cub.)"
+            for _, r in recepciones_con_saldo.sort_values("fecha_vencimiento").iterrows()
         )
-        cubetas_necesarias = st.number_input("Cubetas a procesar", min_value=1, step=1)
+        st.info(f"📦 **{total_cubetas_bodega} cubetas disponibles** en bodega: {detalle_lotes}")
 
-        sugerencia = sugerir_lotes_fefo(recepciones, categoria_id, cubetas_necesarias)
-        st.markdown("**Lotes sugeridos (FEFO) — puedes editar las cantidades**")
-        if not sugerencia:
-            st.error("No hay inventario disponible de esa categoría en bodega de materia prima.")
-            df_lotes = pd.DataFrame(columns=["recepcion_id", "cantidad_a_tomar", "costo_cubeta"])
+        cubetas_necesarias = st.number_input("Cubetas a procesar (total)", min_value=1, step=1)
+
+        # Tabla con selector de lote por fila — el usuario elige qué lotes mezclar
+        opciones_lote = [
+            f"{r['recepcion_id']} — {mapa_cat_nombre.get(r['categoria_id'], r['categoria_id'])} — saldo: {int(r['cubetas_saldo_num'])} cub."
+            for _, r in recepciones_con_saldo.sort_values("fecha_vencimiento").iterrows()
+        ]
+        mapa_opcion_a_recepcion = {
+            f"{r['recepcion_id']} — {mapa_cat_nombre.get(r['categoria_id'], r['categoria_id'])} — saldo: {int(r['cubetas_saldo_num'])} cub.": r["recepcion_id"]
+            for _, r in recepciones_con_saldo.iterrows()
+        }
+        mapa_recepcion_a_costo = dict(zip(recepciones_con_saldo["recepcion_id"], pd.to_numeric(recepciones_con_saldo["costo_cubeta"], errors="coerce").fillna(0)))
+        mapa_recepcion_a_categoria = dict(zip(recepciones_con_saldo["recepcion_id"], recepciones_con_saldo["categoria_id"]))
+
+        # Pre-poblar con sugerencia FEFO (por vencimiento) pero el usuario puede cambiar todo
+        recepciones_sorted = recepciones_con_saldo.sort_values("fecha_vencimiento")
+        filas_sugeridas = []
+        restante = cubetas_necesarias
+        for _, lote in recepciones_sorted.iterrows():
+            if restante <= 0:
+                break
+            saldo = float(lote["cubetas_saldo_num"])
+            tomar = min(saldo, restante)
+            opcion = f"{lote['recepcion_id']} — {mapa_cat_nombre.get(lote['categoria_id'], lote['categoria_id'])} — saldo: {int(saldo)} cub."
+            filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": tomar})
+            restante -= tomar
+
+        st.markdown("**Lotes a usar — elige el lote y la cantidad de cubetas de cada uno**")
+        st.caption("Puedes mezclar lotes de distintas categorías. Agrega o quita filas según necesites.")
+        df_lotes_input = st.data_editor(
+            pd.DataFrame(filas_sugeridas) if filas_sugeridas else pd.DataFrame({"lote": pd.Series(dtype="object"), "cubetas_a_tomar": pd.Series(dtype="float")}),
+            num_rows="dynamic", use_container_width=True,
+            column_config={
+                "lote": st.column_config.SelectboxColumn("Lote de MP", options=opciones_lote, width="large"),
+                "cubetas_a_tomar": st.column_config.NumberColumn("Cubetas a tomar", min_value=0, step=1),
+            },
+            key=f"editor_lotes_libre_{int(cubetas_necesarias)}",
+        )
+
+        # Construir la tabla interna (recepcion_id + cantidad + costo) a partir de lo que eligió el usuario
+        filas_validas = []
+        for _, fila in df_lotes_input.iterrows():
+            opcion_sel = fila.get("lote", "")
+            cant = float(fila.get("cubetas_a_tomar") or 0)
+            if not opcion_sel or cant <= 0:
+                continue
+            rec_id = mapa_opcion_a_recepcion.get(opcion_sel, "")
+            if not rec_id:
+                continue
+            filas_validas.append({
+                "recepcion_id": rec_id,
+                "cantidad_a_tomar": cant,
+                "costo_cubeta": mapa_recepcion_a_costo.get(rec_id, 0),
+            })
+        df_lotes_editado = pd.DataFrame(filas_validas) if filas_validas else pd.DataFrame(columns=["recepcion_id", "cantidad_a_tomar", "costo_cubeta"])
+
+        # categoria_id: usar la del primer lote seleccionado (para rendimientos teóricos)
+        if filas_validas:
+            categoria_id = mapa_recepcion_a_categoria.get(filas_validas[0]["recepcion_id"], "")
+        elif not recepciones_sorted.empty:
+            categoria_id = recepciones_sorted.iloc[0]["categoria_id"]
         else:
-            df_lotes = pd.DataFrame(sugerencia)[["recepcion_id", "cantidad_a_tomar", "costo_cubeta"]]
+            categoria_id = ""
 
-        df_lotes_editado = st.data_editor(
-            df_lotes, num_rows="dynamic", use_container_width=True,
-            key=f"editor_lotes_{categoria_id}_{int(cubetas_necesarias)}",
-        )
-
-        total_tomado = float(pd.to_numeric(df_lotes_editado["cantidad_a_tomar"], errors="coerce").fillna(0).sum())
+        total_tomado = float(pd.to_numeric(df_lotes_editado["cantidad_a_tomar"], errors="coerce").fillna(0).sum()) if not df_lotes_editado.empty else 0.0
         st.info(f"📦 Vas a consumir **{total_tomado:.0f} cubetas** de bodega de materia prima — revisa que sea correcto antes de guardar.")
         if total_tomado < cubetas_necesarias:
             st.warning(
