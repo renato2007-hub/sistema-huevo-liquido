@@ -228,15 +228,6 @@ def render(db, username, rol):
                 f"pero se necesitan {cubetas_necesarias}. Ajusta antes de guardar."
             )
 
-        st.markdown("**Insumos de limpieza usados**")
-        opciones_insumo_nombres = list(insumos["nombre"]) if not insumos.empty else []
-        mapa_nombre_a_insumo_id = dict(zip(insumos["nombre"], insumos["insumo_id"])) if not insumos.empty else {}
-        df_insumos_input = st.data_editor(
-            pd.DataFrame({"insumo_id": pd.Series(dtype="object"), "cantidad": pd.Series(dtype="float")}),
-            num_rows="dynamic", use_container_width=True, key="editor_insumos",
-            column_config={"insumo_id": st.column_config.SelectboxColumn("Insumo", options=opciones_insumo_nombres)},
-        )
-
         st.markdown("**Personal que trabajó la jornada**")
         st.caption("Elige quiénes trabajaron y la hora de entrada/salida de cada uno — el sistema calcula las horas totales y cuántas son nocturnas (19:00-05:00).")
         opciones_personal_nombres = list(personal["nombre"]) if not personal.empty else []
@@ -253,7 +244,7 @@ def render(db, username, rol):
             salida_p = c3.time_input("Hora salida", value=None, key=f"prod_salida_{nombre_persona}")
             filas_personal_horas.append({"nombre": nombre_persona, "hora_entrada": entrada_p, "hora_salida": salida_p})
 
-        agua_litros = st.number_input("Agua usada (litros)", min_value=0.0, step=1.0)
+        agua_litros = 0.0
 
         if not categorias.empty and categoria_id in categorias["categoria_id"].values:
             categoria_row = categorias.set_index("categoria_id").loc[categoria_id]
@@ -335,16 +326,6 @@ def render(db, username, rol):
 
             costo_insumos_total = 0.0
             detalle_insumos = []
-            for _, fila in df_insumos_input.iterrows():
-                if pd.isna(fila.get("insumo_id")) or not fila.get("insumo_id"):
-                    continue
-                insumo_id_real = mapa_nombre_a_insumo_id.get(fila["insumo_id"], fila["insumo_id"])
-                costo_unit = float(insumos.set_index("insumo_id").loc[insumo_id_real, "costo_unitario"])
-                cant = float(fila["cantidad"]) if pd.notna(fila.get("cantidad")) else 0.0
-                costo_insumos_total += costo_unit * cant
-                detalle_insumos.append({
-                    "insumo_id": insumo_id_real, "cantidad": cant, "costo_calculado": costo_unit * cant,
-                })
 
             costo_mano_obra_total = 0.0
             detalle_personal = []
