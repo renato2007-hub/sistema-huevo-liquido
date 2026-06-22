@@ -356,13 +356,22 @@ def render(db, username, rol):
             if resumen_kg.empty:
                 st.info("No hay datos suficientes para calcular el desglose en kg.")
             else:
+                st.markdown("##### Kg disponibles en cuarto frío")
                 cols = st.columns(len(resumen_kg))
                 for col, (_, fila) in zip(cols, resumen_kg.iterrows()):
                     col.metric(_etiqueta(fila["tipo_producto"], fila["pasteurizado"]), f"{fila['kg']:,.1f} kg")
 
-            if ve_costos(rol):
-                st.write("")
-                st.metric("Valor total en cuarto frío", f"{inventario['valor'].sum():,.2f}")
+            st.write("")
+            st.markdown("##### Unidades por presentación y producto")
+            resumen_unid = inv_kg.groupby(["tipo_producto", "presentacion_nombre"])["saldo"].sum().reset_index()
+            resumen_unid = resumen_unid[resumen_unid["saldo"] > 0].sort_values(["tipo_producto", "presentacion_nombre"])
+            if not resumen_unid.empty:
+                cols_u = st.columns(len(resumen_unid))
+                for col, (_, fila) in zip(cols_u, resumen_unid.iterrows()):
+                    col.metric(
+                        f"{fila['tipo_producto']}\n{fila['presentacion_nombre']}",
+                        f"{int(fila['saldo'])} unid."
+                    )
 
     with tab_vehiculos:
         salidas = db.get_df("cuarto_frio_salidas")
