@@ -109,7 +109,10 @@ def render(db, username, rol):
                     columnas_inv[5:5] = ["costo_cubeta", "valor_saldo"]
                 st.dataframe(inventario[columnas_inv], use_container_width=True)
                 if ve_costos(rol):
-                    st.metric("Valor total en bodega de materia prima", f"{inventario['valor_saldo'].sum():,.2f}")
+                    total_cubetas = int(inventario["cubetas_saldo"].sum())
+                    c1, c2 = st.columns(2)
+                    c1.metric("Total cubetas en bodega", f"{total_cubetas:,}")
+                    c2.metric("Total huevos en bodega", f"{total_cubetas * 30:,}")
 
     with tab_historial:
         df = db.get_df("recepciones_mp")

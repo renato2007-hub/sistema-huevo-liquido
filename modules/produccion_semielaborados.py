@@ -134,10 +134,24 @@ def render(db, username, rol):
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
 
+        recepciones_con_saldo = recepciones[
+            pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0) > 0
+        ] if not recepciones.empty else pd.DataFrame()
+
+        if recepciones_con_saldo.empty:
+            st.warning("No hay huevo disponible en bodega de materia prima para producir.")
+            return
+
+        categorias_en_bodega = recepciones_con_saldo["categoria_id"].unique().tolist()
+        if not categorias.empty:
+            mapa_cat_nombre = dict(zip(categorias["categoria_id"], categorias["nombre"]))
+        else:
+            mapa_cat_nombre = {}
+
         categoria_id = st.selectbox(
             "Categoría / tamaño de huevo a usar",
-            categorias["categoria_id"],
-            format_func=lambda x: categorias.set_index("categoria_id").loc[x, "nombre"],
+            categorias_en_bodega,
+            format_func=lambda x: mapa_cat_nombre.get(x, x),
         )
         cubetas_necesarias = st.number_input("Cubetas a procesar", min_value=1, step=1)
 
@@ -189,8 +203,13 @@ def render(db, username, rol):
 
         agua_litros = st.number_input("Agua usada (litros)", min_value=0.0, step=1.0)
 
-        categoria_row = categorias.set_index("categoria_id").loc[categoria_id]
-        teorico = rendimiento_teorico(total_tomado, categoria_row)
+        if not categorias.empty and categoria_id in categorias["categoria_id"].values:
+            categoria_row = categorias.set_index("categoria_id").loc[categoria_id]
+            teorico = rendimiento_teorico(total_tomado, categoria_row)
+        else:
+            teorico = {"kg_teorico_bruto": total_tomado * 1.724, "kg_liquido_teorico": total_tomado * 1.43,
+                       "clara_teorica_kg": 0, "yema_teorica_kg": 0, "cascara_teorica_kg": 0}
+            st.caption("ℹ️ Esta categoría no tiene rendimientos configurados — los valores teóricos son estimados.")
         st.markdown("**Valores teóricos calculados** (según cubetas y categoría seleccionadas)")
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Bruto teórico (kg)", f"{teorico['kg_teorico_bruto']:.2f}", help="Peso del huevo entero, con cáscara")
