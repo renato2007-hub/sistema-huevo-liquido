@@ -214,6 +214,20 @@ def render(db, username, rol):
                     )
                     st.info(f"📦 Carga total: **{int(lineas['cantidad_a_despachar'].sum())} unidades** — {texto_resumen}")
 
+                personal = db.get_df("personal")
+                despachador_personal_id = ""
+                if not personal.empty:
+                    opciones_desp = [""] + list(personal["personal_id"])
+                    despachador_sel_id = st.selectbox(
+                        "Trabajador responsable de la carga",
+                        opciones_desp,
+                        format_func=lambda x: "— Selecciona quien cargó el camión —" if x == "" else personal.set_index("personal_id").loc[x, "nombre"],
+                        key="cf_despachador_personal",
+                    )
+                    despachador_personal_id = despachador_sel_id
+                else:
+                    st.caption("Configura personal en Catálogos para asignar el responsable de la carga.")
+
                 observaciones = st.text_area("Observaciones", "", key="cf_out_obs")
 
                 if st.button("Registrar despacho"):
@@ -221,6 +235,8 @@ def render(db, username, rol):
                         st.error("Ingresa una cantidad mayor a cero en al menos una línea.")
                     elif not excedidas.empty or not sin_cliente.empty:
                         st.error("Corrige las líneas marcadas en rojo antes de guardar.")
+                    elif not despachador_personal_id:
+                        st.error("Selecciona el trabajador responsable de la carga antes de guardar.")
                     else:
                         info_entradas = disponibles.set_index("entrada_id")
                         salidas_generadas = []
@@ -245,6 +261,7 @@ def render(db, username, rol):
                                 "cliente_id": linea["cliente_id"],
                                 "cantidad": cantidad_linea,
                                 "vehiculo_id": vehiculo_id,
+                                "despachador": despachador_personal_id,
                                 "pedido_ref": pedido_id_real,
                                 "usuario": username,
                                 "observaciones": observaciones,
@@ -440,12 +457,14 @@ def render(db, username, rol):
         sub_registrar, sub_historial = st.tabs(["➕ Registrar verificación", "📊 Historial y conteo de errores"])
 
         def _nombre_usuario(username_login):
+            if not username_login or str(username_login).strip() == "":
+                return "Sin registrar"
             if usuarios_cat.empty or "username" not in usuarios_cat.columns:
-                return username_login
-            fila = usuarios_cat[usuarios_cat["username"] == username_login]
+                return str(username_login)
+            fila = usuarios_cat[usuarios_cat["username"].astype(str).str.lower() == str(username_login).lower()]
             if fila.empty or not str(fila.iloc[0].get("nombre", "")).strip():
-                return username_login
-            return fila.iloc[0]["nombre"]
+                return str(username_login)
+            return str(fila.iloc[0]["nombre"])
 
         with sub_registrar:
             salidas_v = db.get_df("cuarto_frio_salidas")
@@ -470,18 +489,29 @@ def render(db, username, rol):
                 if despachos_dia.empty:
                     st.warning("No hay despachos registrados para esa fecha y vehículo — no hay nada que verificar todavía.")
                 else:
-                    usuarios_involucrados = sorted(despachos_dia["usuario"].dropna().unique().tolist())
+                    personal = db.get_df("personal")
+                    mapa_personal_nombre = dict(zip(personal["personal_id"], personal["nombre"])) if not personal.empty else {}
+
+                    despachadores_unicos = sorted(
+                        d for d in despachos_dia["despachador"].dropna().unique() if d
+                    )
+                    if not despachadores_unicos:
+                        despachadores_unicos = sorted(despachos_dia["usuario"].dropna().unique().tolist())
+
                     st.markdown(f"**Despachos registrados ese día para este vehículo:** {len(despachos_dia)}")
                     st.dataframe(
-                        despachos_dia[[c for c in ["salida_id", "cliente_id", "cantidad", "usuario"] if c in despachos_dia.columns]],
+                        despachos_dia[[c for c in ["salida_id", "cliente_id", "cantidad", "despachador", "usuario"] if c in despachos_dia.columns]],
                         use_container_width=True, hide_index=True,
                     )
 
-                    if len(usuarios_involucrados) > 1:
+                    def _nombre_desp(pid):
+                        return mapa_personal_nombre.get(pid, pid)
+
+                    if len(despachadores_unicos) > 1:
                         st.caption("Más de una persona registró despachos para este vehículo ese día — elige a quién corresponde la verificación.")
                     despachador_sel = st.selectbox(
-                        "Despachador responsable", usuarios_involucrados,
-                        format_func=_nombre_usuario, key="verif_despachador",
+                        "Despachador responsable", despachadores_unicos,
+                        format_func=_nombre_desp, key="verif_despachador",
                     )
 
                     correcto = st.radio("¿La carga estuvo correcta?", ["✅ Sí, todo correcto", "❌ Hubo un error"], key="verif_correcto")
@@ -518,7 +548,9 @@ def render(db, username, rol):
             else:
                 verif = verif.copy()
                 verif["correcto_bool"] = verif["correcto"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
-                verif["despachador_nombre"] = verif["despachador"].apply(_nombre_usuario)
+                personal_hist = db.get_df("personal")
+                mapa_personal_hist = dict(zip(personal_hist["personal_id"], personal_hist["nombre"])) if not personal_hist.empty else {}
+                verif["despachador_nombre"] = verif["despachador"].apply(lambda x: mapa_personal_hist.get(str(x), str(x)) if x else "Sin registrar")
 
                 c1, c2 = st.columns(2)
                 desde_v = c1.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="verif_hist_desde")

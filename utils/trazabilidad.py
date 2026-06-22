@@ -252,10 +252,10 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                                 fv = vehiculos[vehiculos["vehiculo_id"] == fsal.get("vehiculo_id")]
                                 if not fv.empty:
                                     vehiculo_placa = fv.iloc[0]["placa"]
-                            despachador_nombre = fsal.get("usuario", "")
-                            if not usuarios_cat.empty and "username" in usuarios_cat.columns:
-                                fu = usuarios_cat[usuarios_cat["username"] == fsal.get("usuario")]
-                                if not fu.empty and str(fu.iloc[0].get("nombre", "")).strip():
+                            despachador_nombre = fsal.get("despachador", "")
+                            if not personal_cat.empty and despachador_nombre:
+                                fu = personal_cat[personal_cat["personal_id"] == despachador_nombre]
+                                if not fu.empty:
                                     despachador_nombre = fu.iloc[0]["nombre"]
                             despachos.append({
                                 "fecha": str(_val(fsal, "fecha")),

@@ -65,10 +65,24 @@ def render(db, username, rol):
                                 "pedido_id", "cliente_id", "tipo_producto", "cantidad_kg",
                                 "fecha_produccion", "fecha_entrega",
                             ] if c in pendientes_prod.columns]
+                            todos_pendientes_vista = pd.concat([atrasados_prod, proximos_prod])
                             st.dataframe(
-                                pd.concat([atrasados_prod, proximos_prod])[cols_detalle],
+                                todos_pendientes_vista[cols_detalle],
                                 use_container_width=True, hide_index=True,
                             )
+                            st.markdown("**✅ ¿Ya produjiste para alguno de estos pedidos?** Márcalo aquí mismo:")
+                            pedidos_a_marcar = st.multiselect(
+                                "Pedidos ya producidos", todos_pendientes_vista["pedido_id"],
+                                key="marcar_producido_alerta",
+                            )
+                            if st.button("Marcar seleccionados como producidos"):
+                                if not pedidos_a_marcar:
+                                    st.error("Selecciona al menos un pedido.")
+                                else:
+                                    for pid in pedidos_a_marcar:
+                                        db.update_row("pedidos", "pedido_id", pid, {"producido": True})
+                                    st.success(f"{len(pedidos_a_marcar)} pedido(s) marcado(s) como producido(s).")
+                                    st.rerun()
                     st.write("")
 
         if categorias.empty:
