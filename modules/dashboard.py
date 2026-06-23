@@ -132,7 +132,7 @@ def _grafico_linea_tiempo(df, col_fecha, col_valor, color=VERDE, titulo=""):
     consumo_dia = df.groupby(col_fecha)[col_valor].sum().reset_index()
     fig = go.Figure(go.Scatter(x=consumo_dia[col_fecha], y=consumo_dia[col_valor],
                                mode="lines+markers", line_color=color, fill="tozeroy",
-                               fillcolor=color.replace(")", ",0.1)").replace("rgb","rgba") if "rgb" in color else color+"22"))
+                               fillcolor="rgba(0,0,0,0.05)"))
     fig.update_layout(title_text=titulo, margin=dict(t=30, b=20, l=10, r=10), height=220,
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig, use_container_width=True)
