@@ -203,8 +203,14 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                     el.append(Paragraph(f"Ingreso a cuarto frío: {nodo_entrada['entrada_id']} ({nodo_entrada['fecha']})", ESTILOS["Normal"]))
                     if nodo_entrada["despachos"]:
                         el.append(_tabla_encabezado(
-                            [[d["fecha"], d["cliente"], d["vehiculo"], d["cantidad"], d.get("despachador", "—"), d.get("pedido_ref") or "—"] for d in nodo_entrada["despachos"]],
-                            ["Fecha despacho", "Cliente", "Vehículo", "Cantidad", "Despachado por", "Pedido"],
+                            [[d["fecha"], d["cliente"], d["vehiculo"], d["cantidad"],
+                              d.get("despachador", "—"),
+                              d.get("pedido_ref") or "—",
+                              d.get("pedido_info", {}).get("fecha_pedido", "—") if d.get("pedido_info") else "—",
+                              d.get("pedido_info", {}).get("medio_recepcion", "—") if d.get("pedido_info") else "—",
+                              ] for d in nodo_entrada["despachos"]],
+                            ["Fecha despacho", "Cliente", "Vehículo", "Unidades",
+                             "Despachado por", "N° Pedido", "Fecha pedido", "Medio"],
                         ))
                     else:
                         el.append(Paragraph("Sin despachar todavía — sigue en inventario de cuarto frío.", ESTILOS["Normal"]))

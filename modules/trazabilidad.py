@@ -14,7 +14,7 @@ NOMBRES_TABLAS = [
     "limpieza_desinfeccion", "areas_limpieza", "pasteurizacion_envasado",
     "presentaciones", "cuarto_frio_entradas", "cuarto_frio_salidas",
     "clientes", "vehiculos", "galpones", "proveedores", "categorias_huevo",
-    "turnos", "produccion_personal", "personal", "usuarios",
+    "turnos", "produccion_personal", "personal", "usuarios", "pedidos",
 ]
 
 

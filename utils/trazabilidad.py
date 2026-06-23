@@ -40,6 +40,25 @@ def _nombre_origen(recepcion_fila, galpones, proveedores):
     return f"{origen_tipo}: {fila.iloc[0]['nombre']}"
 
 
+def _buscar_pedido(pedidos_df, pedido_id):
+    """Devuelve los datos relevantes del pedido original, o None si no existe."""
+    if pedidos_df.empty or not pedido_id:
+        return None
+    fila = pedidos_df[pedidos_df["pedido_id"] == pedido_id]
+    if fila.empty:
+        return None
+    f = fila.iloc[0]
+    return {
+        "pedido_id": pedido_id,
+        "cliente_ref": str(f.get("pedido_cliente_ref", "") or ""),
+        "fecha_pedido": str(f.get("fecha_pedido", "") or ""),
+        "fecha_entrega": str(f.get("fecha_entrega", "") or ""),
+        "tipo_producto": str(f.get("tipo_producto", "") or ""),
+        "cantidad_kg": float(pd.to_numeric(f.get("cantidad_kg", 0), errors="coerce") or 0),
+        "medio_recepcion": str(f.get("medio_recepcion", "") or ""),
+    }
+
+
 def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> list:
     """
     tablas: dict con los DataFrames ya cargados (claves: recepciones_mp,
@@ -69,6 +88,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
     produccion_personal = tablas["produccion_personal"]
     personal_cat = tablas["personal"]
     usuarios_cat = tablas["usuarios"]
+    pedidos_df = tablas.get("pedidos", pd.DataFrame())
 
     def _nombre_turno(turno_id):
         if turnos.empty or not turno_id:
@@ -135,7 +155,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
             lotes_semi.update(
                 consumo_mp[consumo_mp["recepcion_id"] == recepcion_id]["lote_semielaborado_id"].unique()
             )
-        # agregar lotes hermanos (clara/yema) que no tienen consumo propio
+        # agregar lotes hermanos (co-productos clara/yema) que no tienen consumo propio
         for lid in list(lotes_semi):
             if produccion.empty:
                 continue
@@ -144,6 +164,42 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 hermano = _extraer_lote_hermano(fp.iloc[0].get("observaciones", ""))
                 if hermano:
                     lotes_semi.add(hermano)
+
+        # Si la consulta es por un lote específico, mostrar solo ese lote y su
+        # co-producto directo — no todos los lotes de la misma recepción.
+        if tipo_lote == "semielaborado":
+            lote_especifico = lote_id
+            hermano_directo = None
+            if not produccion.empty:
+                fp_esp = produccion[produccion["lote_semielaborado_id"] == lote_especifico]
+                if not fp_esp.empty:
+                    hermano_directo = _extraer_lote_hermano(fp_esp.iloc[0].get("observaciones", ""))
+            # también buscar si el lote es el co-producto (el hermano apunta a él)
+            hermano_inverso = None
+            if not produccion.empty:
+                for _, row in produccion.iterrows():
+                    h = _extraer_lote_hermano(row.get("observaciones", ""))
+                    if h == lote_especifico:
+                        hermano_inverso = row["lote_semielaborado_id"]
+                        break
+            lotes_semi = {l for l in lotes_semi if l in (
+                {lote_especifico} | ({hermano_directo} if hermano_directo else set()) |
+                ({hermano_inverso} if hermano_inverso else set())
+            )}
+        elif tipo_lote == "producto":
+            # mostrar solo el lote semielaborado padre del producto consultado
+            if not pasteurizacion.empty:
+                fila_past = pasteurizacion[pasteurizacion["lote_producto_id"] == lote_id]
+                if not fila_past.empty:
+                    lote_semi_padre = fila_past.iloc[0]["lote_semielaborado_id"]
+                    hermano_directo = None
+                    if not produccion.empty:
+                        fp_esp = produccion[produccion["lote_semielaborado_id"] == lote_semi_padre]
+                        if not fp_esp.empty:
+                            hermano_directo = _extraer_lote_hermano(fp_esp.iloc[0].get("observaciones", ""))
+                    lotes_semi = {l for l in lotes_semi if l in (
+                        {lote_semi_padre} | ({hermano_directo} if hermano_directo else set())
+                    )}
 
         for lid in sorted(lotes_semi):
             fp = produccion[produccion["lote_semielaborado_id"] == lid] if not produccion.empty else pd.DataFrame()
@@ -264,6 +320,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                                 "cantidad": float(pd.to_numeric(_val(fsal, "cantidad", 0), errors="coerce") or 0),
                                 "despachador": despachador_nombre,
                                 "pedido_ref": _val(fsal, "pedido_ref", ""),
+                                "pedido_info": _buscar_pedido(pedidos_df, _val(fsal, "pedido_ref", "")),
                             })
                     nodo_past["entradas_cf"].append({
                         "entrada_id": fent["entrada_id"],
