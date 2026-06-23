@@ -1,166 +1,150 @@
-"""
-Dashboard: panel de control con seleccion de periodo (fecha o rango) que
-resume la operacion completa. Estructura: un resumen ejecutivo siempre
-visible arriba (lo mas importante de un vistazo), y el detalle agrupado en
-pestanas por tema para no amontonar todo en una sola pantalla.
-
-Estilo visual inspirado en herramientas de BI (tarjetas KPI con tendencia
-vs. periodo anterior, graficos interactivos Plotly) -- pero el calculo de
-cada numero es exactamente el mismo de siempre, esto solo cambia COMO se ve.
-
-No guarda nada -- solo lee y resume las mismas tablas que alimentan los
-demas modulos.
-"""
 import datetime
-import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from utils.horas_trabajo import clasificar_horas_por_dia, feriados_como_set, compensaciones_como_set
-from utils.pdf_horas_personal import generar_pdf_horas_personal
-from modules.bodega_envases_insumos import _saldo_actual
+import streamlit as st
 
-# Paleta de marca -- mismos colores que las categorias del menu lateral, para
-# que los graficos del Dashboard se vean parte de la misma identidad visual.
-VERDE = "#0B6E4F"
-NARANJA = "#D9740C"
-TEAL = "#0E8A8A"
-MORADO = "#6D3FA8"
-DORADO = "#E8A33D"
-GRIS = "#9AA5A0"
-PALETA = [VERDE, NARANJA, TEAL, MORADO, DORADO, "#C1561D"]
-
-_LAYOUT_BASE = dict(
-    font=dict(family="sans-serif", size=12, color="#333"),
-    plot_bgcolor="rgba(0,0,0,0)",
-    paper_bgcolor="rgba(0,0,0,0)",
-    margin=dict(l=10, r=10, t=30, b=10),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+from utils.horas_trabajo import (
+    calcular_horas_sesion,
+    clasificar_horas_por_dia,
+    feriados_como_set,
+    compensaciones_como_set,
 )
+from utils.pdf_horas_personal import generar_pdf_horas_personal
+from utils.permisos import ve_costos
+
+VERDE  = "#2e7d32"
+NARANJA = "#D9740C"
+DORADO = "#f9a825"
+TEAL   = "#00695c"
+AZUL   = "#1565c0"
+MORADO = "#6a1b9a"
 
 
-def _filtrar_por_fecha(df, desde, hasta, columna="fecha"):
-    if df.empty or columna not in df.columns:
-        return df
-    fechas = pd.to_datetime(df[columna], errors="coerce")
-    return df[(fechas.dt.date >= desde) & (fechas.dt.date <= hasta)]
-
-
+# ── helpers ───────────────────────────────────────────────────────────────────
 def _num(df, col):
     if df.empty or col not in df.columns:
         return pd.Series(dtype=float)
     return pd.to_numeric(df[col], errors="coerce").fillna(0)
 
 
+def _filtrar_por_fecha(df, desde, hasta):
+    if df.empty or "fecha" not in df.columns:
+        return df
+    fechas = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+    return df[(fechas >= desde) & (fechas <= hasta)].copy()
+
+
 def _periodo_anterior(desde, hasta):
-    """Mismo numero de dias, justo antes del periodo seleccionado -- para
-    poder mostrar la tendencia (%) en las tarjetas KPI."""
-    dias = (hasta - desde).days + 1
-    hasta_ant = desde - datetime.timedelta(days=1)
-    desde_ant = hasta_ant - datetime.timedelta(days=dias - 1)
-    return desde_ant, hasta_ant
+    delta = (hasta - desde).days + 1
+    return desde - datetime.timedelta(days=delta), hasta - datetime.timedelta(days=delta)
 
 
 def _delta_pct(actual, anterior):
-    if anterior in (0, None) or pd.isna(anterior):
-        return None
-    return (actual - anterior) / anterior * 100
-
-
-def _kpi_card(col, icon, etiqueta, valor, delta_pct=None, ayuda=None):
-    """Tarjeta KPI estilo BI: icono, valor grande, y flecha de tendencia
-    (verde arriba / roja abajo) comparado contra el periodo anterior."""
-    flecha_html = ""
-    if delta_pct is not None:
-        color = "#1a8754" if delta_pct >= 0 else "#c0392b"
-        signo = "▲" if delta_pct >= 0 else "▼"
-        flecha_html = (
-            f'<span style="color:{color}; font-size:13px; font-weight:600; margin-left:6px;">'
-            f'{signo} {abs(delta_pct):.0f}%</span>'
-        )
-    with col:
-        st.markdown(
-            f"""
-            <div style="background:white; border:1px solid #e8e8e8; border-radius:10px;
-                        padding:14px 16px; height:100%;" title="{ayuda or ''}">
-                <div style="font-size:12px; color:#777; font-weight:600;">{icon} {etiqueta}</div>
-                <div style="font-size:24px; font-weight:800; color:#222; margin-top:4px;">
-                    {valor}{flecha_html}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-def _tarjeta_metrica(col, etiqueta, valor, ayuda=None, delta=None):
-    """Se mantiene para compatibilidad -- tarjeta simple sin tendencia."""
-    with col.container(border=True):
-        st.metric(etiqueta, valor, delta=delta, help=ayuda)
-
-
-def _grafico_barras(serie, titulo=None, color=VERDE, horizontal=False):
-    if serie.empty:
-        return
-    fig = go.Figure()
-    if horizontal:
-        fig.add_bar(y=serie.index.astype(str), x=serie.values, orientation="h", marker_color=color)
-    else:
-        fig.add_bar(x=serie.index.astype(str), y=serie.values, marker_color=color)
-    fig.update_layout(height=300, title=titulo, **_LAYOUT_BASE)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-
-def _grafico_barras_apiladas(df, columnas, titulo=None):
-    if df.empty:
-        return
-    fig = go.Figure()
-    for i, col in enumerate(columnas):
-        fig.add_bar(name=col.replace("horas_", "").capitalize(), x=df.index.astype(str), y=df[col], marker_color=PALETA[i % len(PALETA)])
-    fig.update_layout(barmode="stack", height=320, title=titulo, **_LAYOUT_BASE)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-
-def _grafico_dona(labels, valores, titulo=None):
-    valores = list(valores)
-    if not valores or sum(valores) <= 0:
-        return
-    fig = go.Figure(data=[go.Pie(
-        labels=labels, values=valores, hole=0.55,
-        marker=dict(colors=PALETA), textinfo="percent",
-    )])
-    fig.update_layout(height=300, title=titulo, **_LAYOUT_BASE)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    if anterior and anterior != 0:
+        return f"{((actual - anterior) / abs(anterior)) * 100:+.1f}%"
+    return None
 
 
 def _calcular_kpis_resumen(produccion, limpieza, desde, hasta):
-    """Mismos calculos que siempre se hicieron para el resumen ejecutivo,
-    factorizados en una funcion para poder llamarlos tambien con el periodo
-    anterior (y asi calcular la tendencia %)."""
-    prod_f = _filtrar_por_fecha(produccion, desde, hasta)
-    limpieza_f = _filtrar_por_fecha(limpieza, desde, hasta)
-    prod_costos = prod_f.copy()
-    if not prod_costos.empty:
-        for col in ["costo_total", "kg_real", "agua_litros"]:
-            prod_costos[col] = pd.to_numeric(prod_costos[col], errors="coerce").fillna(0)
-    costo_total = prod_costos["costo_total"].sum() if not prod_costos.empty else 0.0
-    kg_total = prod_costos["kg_real"].sum() if not prod_costos.empty else 0.0
-    costo_por_kg = costo_total / kg_total if kg_total > 0 else 0
-    agua_prod = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
-    agua_limp = _num(limpieza_f, "agua_litros").sum()
-    return {
-        "kg_total": kg_total, "costo_total": costo_total,
-        "costo_por_kg": costo_por_kg, "agua_total": agua_prod + agua_limp,
-    }
+    prod = _filtrar_por_fecha(produccion, desde, hasta)
+    limp = _filtrar_por_fecha(limpieza, desde, hasta)
+    kg   = _num(prod, "kg_real").sum()
+    ct   = _num(prod, "costo_total").sum()
+    agua = _num(prod, "agua_litros").sum() + _num(limp, "agua_litros").sum()
+    return {"kg_total": kg, "costo_total": ct, "costo_por_kg": ct/kg if kg else 0, "agua_total": agua}
 
 
+def _saldo_actual(movimientos, tipo, item_id):
+    if movimientos.empty:
+        return 0
+    m = movimientos[movimientos.get("item_tipo", pd.Series(dtype=str)) == tipo] if "item_tipo" in movimientos else movimientos
+    m = m[m.get("item_id", pd.Series(dtype=str)) == item_id] if "item_id" in m else m
+    if m.empty:
+        return 0
+    entradas = _num(m[m.get("tipo_movimiento","") == "entrada"], "cantidad").sum()
+    salidas  = _num(m[m.get("tipo_movimiento","") == "salida"],  "cantidad").sum()
+    mermas   = _num(m[m.get("tipo_movimiento","") == "merma"],   "cantidad").sum()
+    return entradas - salidas - mermas
+
+
+def _kpi_card(container, icono, etiqueta, valor, delta=None, ayuda=None, sufijo=None):
+    with container:
+        st.metric(etiqueta, f"{icono} {valor}", delta=delta, help=ayuda)
+        if sufijo:
+            st.caption(sufijo)
+
+
+def _grafico_dona(labels, values, titulo):
+    labels = list(labels); values = list(values)
+    if not values or sum(values) == 0:
+        st.info("Sin datos para el gráfico.")
+        return
+    colores = [VERDE, NARANJA, DORADO, TEAL, AZUL, MORADO, "#c0392b", "#7f8c8d"]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, hole=0.5,
+        marker_colors=colores[:len(labels)],
+        textinfo="label+percent", hovertemplate="%{label}: %{value:,.1f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title_text=titulo, showlegend=False,
+        margin=dict(t=40, b=10, l=10, r=10), height=260,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _grafico_barras(serie, color=VERDE, horizontal=False):
+    if serie.empty or serie.sum() == 0:
+        st.info("Sin datos para el gráfico.")
+        return
+    if horizontal:
+        fig = go.Figure(go.Bar(y=serie.index.tolist(), x=serie.values.tolist(),
+                               orientation="h", marker_color=color))
+    else:
+        fig = go.Figure(go.Bar(x=serie.index.tolist(), y=serie.values.tolist(),
+                               marker_color=color))
+    fig.update_layout(margin=dict(t=20, b=20, l=10, r=10), height=220,
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _grafico_barras_apiladas(df, columnas):
+    colores = [VERDE, NARANJA, DORADO, TEAL]
+    fig = go.Figure()
+    for col, color in zip(columnas, colores):
+        if col in df.columns:
+            fig.add_trace(go.Bar(name=col.replace("horas_","").title(),
+                                 x=df.index.tolist(), y=df[col].tolist(),
+                                 marker_color=color))
+    fig.update_layout(barmode="stack", margin=dict(t=20, b=40, l=10, r=10), height=280,
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _grafico_linea_tiempo(df, col_fecha, col_valor, color=VERDE, titulo=""):
+    if df.empty:
+        st.info("Sin datos para el gráfico.")
+        return
+    df = df.copy()
+    df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce")
+    df[col_valor] = pd.to_numeric(df[col_valor], errors="coerce").fillna(0)
+    df = df.dropna(subset=[col_fecha]).sort_values(col_fecha)
+    consumo_dia = df.groupby(col_fecha)[col_valor].sum().reset_index()
+    fig = go.Figure(go.Scatter(x=consumo_dia[col_fecha], y=consumo_dia[col_valor],
+                               mode="lines+markers", line_color=color, fill="tozeroy",
+                               fillcolor=color.replace(")", ",0.1)").replace("rgb","rgba") if "rgb" in color else color+"22"))
+    fig.update_layout(title_text=titulo, margin=dict(t=30, b=20, l=10, r=10), height=220,
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ── render ─────────────────────────────────────────────────────────────────────
 def render(db, username, rol):
     st.title("📊 Dashboard")
 
     with st.container(border=True):
         col_periodo, col_fechas = st.columns([1, 2])
-        periodo = col_periodo.selectbox(
-            "Período", ["Hoy", "Últimos 7 días", "Este mes", "Personalizado"],
-        )
+        periodo = col_periodo.selectbox("Período", ["Hoy", "Últimos 7 días", "Este mes", "Personalizado"])
         hoy = datetime.date.today()
         if periodo == "Hoy":
             desde, hasta = hoy, hoy
@@ -179,503 +163,486 @@ def render(db, username, rol):
         st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
         return
 
-    # ---- cargar todas las tablas necesarias una sola vez ----
-    produccion = db.get_df("produccion_semielaborados")
-    consumo_mp = db.get_df("consumo_mp_produccion")
-    personal_detalle = db.get_df("produccion_personal")
-    pasteurizacion = db.get_df("pasteurizacion_envasado")
-    movimientos = db.get_df("movimientos_envases_insumos")
-    limpieza = db.get_df("limpieza_desinfeccion")
-    mermas_mp = db.get_df("mermas_mp")
-    presentaciones = db.get_df("presentaciones")
-    insumos = db.get_df("insumos")
-    personal_cat = db.get_df("personal")
-    recepciones_mp = db.get_df("recepciones_mp")
-    categorias = db.get_df("categorias_huevo")
+    # ── cargar tablas ──────────────────────────────────────────────────────────
+    produccion      = db.get_df("produccion_semielaborados")
+    consumo_mp      = db.get_df("consumo_mp_produccion")
+    personal_detalle= db.get_df("produccion_personal")
+    pasteurizacion  = db.get_df("pasteurizacion_envasado")
+    movimientos     = db.get_df("movimientos_envases_insumos")
+    limpieza        = db.get_df("limpieza_desinfeccion")
+    mermas_mp       = db.get_df("mermas_mp")
+    presentaciones  = db.get_df("presentaciones")
+    insumos         = db.get_df("insumos")
+    personal_cat    = db.get_df("personal")
+    recepciones_mp  = db.get_df("recepciones_mp")
+    categorias      = db.get_df("categorias_huevo")
 
-    prod_f = _filtrar_por_fecha(produccion, desde, hasta)
-    consumo_f = _filtrar_por_fecha(consumo_mp, desde, hasta)
-    past_f = _filtrar_por_fecha(pasteurizacion, desde, hasta)
-    mov_f = _filtrar_por_fecha(movimientos, desde, hasta)
-    limpieza_f = _filtrar_por_fecha(limpieza, desde, hasta)
-    mermas_mp_f = _filtrar_por_fecha(mermas_mp, desde, hasta)
+    prod_f       = _filtrar_por_fecha(produccion, desde, hasta)
+    consumo_f    = _filtrar_por_fecha(consumo_mp, desde, hasta)
+    past_f       = _filtrar_por_fecha(pasteurizacion, desde, hasta)
+    mov_f        = _filtrar_por_fecha(movimientos, desde, hasta)
+    limpieza_f   = _filtrar_por_fecha(limpieza, desde, hasta)
+    mermas_mp_f  = _filtrar_por_fecha(mermas_mp, desde, hasta)
 
-    # calculos base reutilizados en varias tarjetas
-    cubetas_total = _num(consumo_f, "cubetas_usadas").sum()
-    costo_huevo_total = _num(consumo_f, "costo_total_aplicado").sum()
+    cubetas_total      = _num(consumo_f, "cubetas_usadas").sum()
+    costo_huevo_total  = _num(consumo_f, "costo_total_aplicado").sum()
 
     prod_costos = prod_f.copy()
     if not prod_costos.empty:
-        for col in ["costo_total", "kg_real", "costo_huevo", "costo_insumos", "costo_mano_obra", "agua_litros", "cascara_real_kg"]:
+        for col in ["costo_total","kg_real","costo_huevo","costo_insumos","costo_mano_obra","agua_litros","cascara_real_kg"]:
             prod_costos[col] = pd.to_numeric(prod_costos[col], errors="coerce").fillna(0)
     costo_total_periodo = prod_costos["costo_total"].sum() if not prod_costos.empty else 0.0
-    kg_total_periodo = prod_costos["kg_real"].sum() if not prod_costos.empty else 0.0
-    costo_por_kg_general = costo_total_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
-    agua_produccion = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
-    agua_limpieza = _num(limpieza_f, "agua_litros").sum()
+    kg_total_periodo    = prod_costos["kg_real"].sum() if not prod_costos.empty else 0.0
+    costo_por_kg_general= costo_total_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
+    agua_produccion     = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
+    agua_limpieza       = _num(limpieza_f, "agua_litros").sum()
 
-    # ======================== RESUMEN EJECUTIVO (con tendencia vs. periodo anterior) ========================
+    # horas hombre del período
+    hh_df = pd.DataFrame()
+    if not personal_detalle.empty and not produccion.empty:
+        hh_df = personal_detalle.merge(produccion[["lote_semielaborado_id","fecha"]], on="lote_semielaborado_id", how="left")
+    superv = db.get_df("supervision_diaria")
+    if not superv.empty:
+        hh_df = pd.concat([hh_df, superv[["personal_id","fecha","horas","horas_nocturnas","costo_calculado"]]], ignore_index=True)
+    hh_f = _filtrar_por_fecha(hh_df, desde, hasta)
+    horas_totales_periodo = _num(hh_f, "horas").sum()
+    hh_por_kg = horas_totales_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
+
+    # ======================== RESUMEN EJECUTIVO ========================
     desde_ant, hasta_ant = _periodo_anterior(desde, hasta)
     kpis_ant = _calcular_kpis_resumen(produccion, limpieza, desde_ant, hasta_ant)
 
     st.markdown("### 🎯 Resumen del período")
     st.caption(f"Comparado contra el período anterior equivalente: {desde_ant.strftime('%d/%m')} → {hasta_ant.strftime('%d/%m')}")
+
+    # KPIs por tipo de producto
+    if not prod_costos.empty and "tipo_producto" in prod_costos.columns:
+        por_tipo = prod_costos.groupby("tipo_producto").agg(
+            kg=("kg_real","sum"), costo=("costo_total","sum")
+        ).reset_index()
+        cols_tipo = st.columns(len(por_tipo)) if not por_tipo.empty else []
+        for col, (_, row) in zip(cols_tipo, por_tipo.iterrows()):
+            costo_kg = row["costo"]/row["kg"] if row["kg"] > 0 else 0
+            _kpi_card(col, "🥚", f"Kg {row['tipo_producto']}", f"{row['kg']:,.1f} kg",
+                      sufijo=f"Costo prom. ${costo_kg:,.3f}/kg" if ve_costos(rol) else None)
+
+    st.write("")
     r1, r2, r3, r4 = st.columns(4)
-    _kpi_card(r1, "🥚", "Kg producidos", f"{kg_total_periodo:,.1f}", _delta_pct(kg_total_periodo, kpis_ant["kg_total"]), "Suma de kg reales de todos los lotes (huevo entero + clara + yema)")
-    _kpi_card(r2, "💲", "Costo promedio /kg", f"{costo_por_kg_general:,.3f}", _delta_pct(costo_por_kg_general, kpis_ant["costo_por_kg"]), "Costo total de producción ÷ kg reales producidos")
-    _kpi_card(r3, "💰", "Costo total producción", f"{costo_total_periodo:,.2f}", _delta_pct(costo_total_periodo, kpis_ant["costo_total"]))
-    _kpi_card(r4, "💧", "Agua total (L)", f"{agua_produccion + agua_limpieza:,.0f}", _delta_pct(agua_produccion + agua_limpieza, kpis_ant["agua_total"]), "Producción + limpieza y desinfección")
+    _kpi_card(r1, "⏱️", "Horas-hombre / kg", f"{hh_por_kg:,.3f}", help="Horas totales trabajadas ÷ kg producidos")
+    _kpi_card(r2, "💧", "Agua total (L)", f"{agua_produccion + agua_limpieza:,.0f}", _delta_pct(agua_produccion+agua_limpieza, kpis_ant["agua_total"]))
+    if ve_costos(rol):
+        _kpi_card(r3, "💰", "Costo total producción", f"${costo_total_periodo:,.2f}", _delta_pct(costo_total_periodo, kpis_ant["costo_total"]))
+        _kpi_card(r4, "💲", "Costo promedio /kg", f"${costo_por_kg_general:,.3f}", _delta_pct(costo_por_kg_general, kpis_ant["costo_por_kg"]))
 
     st.write("")
 
     tabs = st.tabs([
-        "📦 Inventarios disponibles", "🏭 Producción y costos", "👷 Personal",
-        "🧴 Insumos y envases", "♻️ Residuos y mermas", "💧 Agua",
+        "🥚 Materia prima", "🏭 Producción y costos", "👷 Personal",
+        "📦 Insumos y envases", "♻️ Residuos y mermas", "💧 Agua",
     ])
 
-    # ======================== TAB: INVENTARIOS DISPONIBLES (estado actual) ========================
+    # ======================== TAB: MATERIA PRIMA ========================
     with tabs[0]:
-        st.caption(
-            "⚠️ Esta pestaña muestra el inventario **disponible ahora mismo** — "
-            "no cambia según el período seleccionado arriba, porque es una foto "
-            "del estado actual, no un acumulado del rango de fechas."
-        )
+        st.caption("⚠️ Esta pestaña muestra el inventario disponible ahora mismo, no cambia según el período seleccionado.")
 
         with st.container(border=True):
-            st.markdown("##### 🥚 Huevo en bodega de materia prima")
+            st.markdown("##### 🥚 Inventario actual de huevo en bodega MP")
             if recepciones_mp.empty:
                 st.info("No hay recepciones registradas.")
             else:
                 inv_huevo = recepciones_mp.copy()
                 inv_huevo["cubetas_saldo"] = pd.to_numeric(inv_huevo["cubetas_saldo"], errors="coerce").fillna(0)
-                inv_huevo["costo_cubeta"] = pd.to_numeric(inv_huevo["costo_cubeta"], errors="coerce").fillna(0)
+                inv_huevo["costo_cubeta"]  = pd.to_numeric(inv_huevo["costo_cubeta"], errors="coerce").fillna(0)
                 inv_huevo = inv_huevo[inv_huevo["cubetas_saldo"] > 0].copy()
                 if inv_huevo.empty:
-                    st.info("No hay saldo disponible en bodega de materia prima.")
+                    st.info("No hay saldo disponible en bodega MP.")
                 else:
-                    inv_huevo["valor"] = inv_huevo["cubetas_saldo"] * inv_huevo["costo_cubeta"]
                     if not categorias.empty:
                         inv_huevo = inv_huevo.merge(
-                            categorias[["categoria_id", "nombre"]].rename(columns={"nombre": "categoria_nombre"}),
+                            categorias[["categoria_id","nombre"]].rename(columns={"nombre":"categoria_nombre"}),
                             on="categoria_id", how="left",
                         )
                         inv_huevo["categoria_nombre"] = inv_huevo["categoria_nombre"].fillna(inv_huevo["categoria_id"])
                     else:
                         inv_huevo["categoria_nombre"] = inv_huevo["categoria_id"]
 
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2 = st.columns(2)
                     _kpi_card(c1, "📦", "Cubetas disponibles", f"{inv_huevo['cubetas_saldo'].sum():,.0f}")
-                    _kpi_card(c2, "🥚", "Huevos disponibles", f"{inv_huevo['cubetas_saldo'].sum() * 30:,.0f}")
-                    _kpi_card(c3, "💲", "Valor en bodega", f"{inv_huevo['valor'].sum():,.2f}")
+                    _kpi_card(c2, "🥚", "Huevos disponibles", f"{inv_huevo['cubetas_saldo'].sum()*30:,.0f}")
                     st.write("")
 
-                    resumen_categoria = inv_huevo.groupby("categoria_nombre").agg(
-                        cubetas=("cubetas_saldo", "sum"), valor=("valor", "sum"),
-                    ).reset_index()
+                    resumen_cat = inv_huevo.groupby("categoria_nombre").agg(cubetas=("cubetas_saldo","sum")).reset_index()
                     col_tabla, col_graf = st.columns([3, 2])
-                    col_tabla.dataframe(resumen_categoria, use_container_width=True, hide_index=True)
+                    col_tabla.dataframe(resumen_cat, use_container_width=True, hide_index=True)
                     with col_graf:
-                        _grafico_dona(resumen_categoria["categoria_nombre"], resumen_categoria["cubetas"], "Cubetas por categoría")
+                        _grafico_dona(resumen_cat["categoria_nombre"], resumen_cat["cubetas"], "Cubetas por categoría")
                     with st.expander("Ver detalle por lote"):
                         st.dataframe(
-                            inv_huevo[["recepcion_id", "categoria_nombre", "cubetas_saldo", "costo_cubeta", "valor", "fecha_vencimiento"]],
+                            inv_huevo[["recepcion_id","categoria_nombre","cubetas_saldo","costo_cubeta","fecha_vencimiento"]],
                             use_container_width=True, hide_index=True,
                         )
 
         st.write("")
 
-        col_env, col_quim = st.columns(2)
-        with col_env:
-            with st.container(border=True):
-                st.markdown("##### 📦 Envases disponibles")
-                if presentaciones.empty:
-                    st.info("No hay presentaciones configuradas.")
-                else:
-                    filas_env = []
-                    for _, row in presentaciones.iterrows():
-                        filas_env.append({
-                            "Presentación": row["nombre"],
-                            "Saldo": _saldo_actual(movimientos, "envase", row["presentacion_id"]),
-                        })
-                    df_env = pd.DataFrame(filas_env)
-                    negativos_env = df_env[df_env["Saldo"] < 0]
-                    if not negativos_env.empty:
-                        st.warning(f"⚠️ {len(negativos_env)} presentación(es) con saldo negativo.")
-                    st.dataframe(df_env, use_container_width=True, hide_index=True)
-                    _grafico_barras(df_env.set_index("Presentación")["Saldo"], color=NARANJA)
-
-        with col_quim:
-            with st.container(border=True):
-                st.markdown("##### 🧴 Insumos químicos disponibles")
-                if insumos.empty:
-                    st.info("No hay insumos configurados.")
-                else:
-                    filas_quim = []
-                    for _, row in insumos.iterrows():
-                        filas_quim.append({
-                            "Insumo": row["nombre"],
-                            "Unidad": row.get("unidad", ""),
-                            "Saldo": _saldo_actual(movimientos, "insumo", row["insumo_id"]),
-                        })
-                    df_quim = pd.DataFrame(filas_quim)
-                    negativos_quim = df_quim[df_quim["Saldo"] < 0]
-                    if not negativos_quim.empty:
-                        st.warning(f"⚠️ {len(negativos_quim)} insumo(s) con saldo negativo.")
-                    st.dataframe(df_quim, use_container_width=True, hide_index=True)
-                    _grafico_barras(df_quim.set_index("Insumo")["Saldo"], color=TEAL)
+        with st.container(border=True):
+            st.markdown("##### 📈 Consumo de cubetas en el período seleccionado")
+            if consumo_f.empty:
+                st.info("Sin consumo de MP en el período.")
+            else:
+                consumo_f2 = consumo_f.copy()
+                consumo_f2["cubetas_usadas"] = pd.to_numeric(consumo_f2["cubetas_usadas"], errors="coerce").fillna(0)
+                consumo_f2 = consumo_f2.merge(
+                    produccion[["lote_semielaborado_id","fecha"]], on="lote_semielaborado_id", how="left"
+                ) if not produccion.empty else consumo_f2
+                _grafico_linea_tiempo(consumo_f2, "fecha", "cubetas_usadas", VERDE, "Cubetas consumidas por día")
+                total_cubetas_f = consumo_f2["cubetas_usadas"].sum()
+                st.caption(f"Total período: **{total_cubetas_f:,.0f} cubetas** — {total_cubetas_f*30:,.0f} huevos")
 
     # ======================== TAB: PRODUCCION Y COSTOS ========================
     with tabs[1]:
         with st.container(border=True):
-            st.markdown("##### 🥚 Huevo procesado (Bodega MP → Producción)")
+            st.markdown("##### 🥚 Huevo procesado en el período")
             c1, c2, c3 = st.columns(3)
             _kpi_card(c1, "📦", "Cubetas usadas", f"{cubetas_total:,.0f}")
-            _kpi_card(c2, "🥚", "Huevos procesados", f"{cubetas_total * 30:,.0f}")
-            _kpi_card(c3, "💲", "Costo de huevo consumido", f"{costo_huevo_total:,.2f}")
+            _kpi_card(c2, "🥚", "Huevos procesados", f"{cubetas_total*30:,.0f}")
+            if ve_costos(rol):
+                _kpi_card(c3, "💲", "Costo de huevo consumido", f"${costo_huevo_total:,.2f}")
 
         st.write("")
 
         with st.container(border=True):
-            st.markdown("##### ⚖️ Balance de masa promedio del período")
-            st.caption("(líquido + cáscara real) ÷ peso bruto teórico del huevo procesado. 100% = sin pérdidas sin explicar; nunca debería superar 100%.")
-            if prod_costos.empty or "balance_masa_pct" not in prod_costos.columns:
-                st.info("No hay datos de balance de masa en este período.")
-            else:
-                balance_vals = pd.to_numeric(prod_costos["balance_masa_pct"], errors="coerce").dropna()
-                if balance_vals.empty:
-                    st.info("No hay datos de balance de masa en este período.")
-                else:
-                    fuera_de_rango = balance_vals[(balance_vals > 100.5) | (balance_vals < 85)]
-                    c1, c2 = st.columns(2)
-                    _kpi_card(c1, "⚖️", "Balance promedio", f"{balance_vals.mean():.1f}%")
-                    _kpi_card(c2, "🔍", "Lotes fuera de rango (85-100%)", f"{len(fuera_de_rango)} de {len(balance_vals)}")
-                    if not fuera_de_rango.empty:
-                        st.warning("Hay lotes con balance de masa fuera de rango — revísalos en Producción → 'Teórico vs. real'.")
-
-        st.write("")
-
-        with st.container(border=True):
-            st.markdown("##### 💰 Costo por kg, según tipo de producto")
+            st.markdown("##### 💰 Producción por tipo de producto")
             if prod_costos.empty:
                 st.info("No hay producción de semielaborados en este período.")
             else:
                 por_tipo = prod_costos.groupby("tipo_producto").agg(
-                    costo_total=("costo_total", "sum"), kg_real=("kg_real", "sum"),
+                    kg_real=("kg_real","sum"), costo_total=("costo_total","sum"),
                 ).reset_index()
                 por_tipo["costo_por_kg"] = por_tipo.apply(
-                    lambda r: r["costo_total"] / r["kg_real"] if r["kg_real"] > 0 else 0, axis=1,
+                    lambda r: r["costo_total"]/r["kg_real"] if r["kg_real"] > 0 else 0, axis=1
                 )
                 col_tabla, col_graf = st.columns([3, 2])
                 col_tabla.dataframe(
-                    por_tipo.rename(columns={
-                        "tipo_producto": "Producto", "costo_total": "Costo total",
-                        "kg_real": "Kg producidos", "costo_por_kg": "Costo/kg",
-                    }),
+                    por_tipo.rename(columns={"tipo_producto":"Producto","kg_real":"Kg producidos",
+                                             "costo_total":"Costo total","costo_por_kg":"Costo/kg"}),
                     use_container_width=True, hide_index=True,
                 )
                 with col_graf:
-                    _grafico_dona(por_tipo["tipo_producto"], por_tipo["kg_real"], "Kg por tipo de producto")
-
-                st.caption("De qué se compone el costo total del período:")
-                costo_huevo_sum = prod_costos["costo_huevo"].sum()
-                costo_insumos_sum = prod_costos["costo_insumos"].sum()
-                costo_mo_sum = prod_costos["costo_mano_obra"].sum()
-                pct = lambda v: (v / costo_total_periodo * 100) if costo_total_periodo > 0 else 0
-
-                col_comp_tabla, col_comp_graf = st.columns([3, 2])
-                with col_comp_tabla:
-                    c1, c2, c3 = st.columns(3)
-                    _kpi_card(c1, "🥚", "Huevo", f"{costo_huevo_sum:,.2f}", None, f"{pct(costo_huevo_sum):.0f}% del costo total")
-                    _kpi_card(c2, "🧴", "Insumos", f"{costo_insumos_sum:,.2f}", None, f"{pct(costo_insumos_sum):.0f}% del costo total")
-                    _kpi_card(c3, "👷", "Mano de obra directa", f"{costo_mo_sum:,.2f}", None, f"{pct(costo_mo_sum):.0f}% del costo total")
-                with col_comp_graf:
-                    _grafico_dona(
-                        ["Huevo", "Insumos", "Mano de obra"],
-                        [costo_huevo_sum, costo_insumos_sum, costo_mo_sum],
-                        "Composición del costo",
-                    )
-
-                st.write("")
-                superv_periodo = _filtrar_por_fecha(db.get_df("supervision_diaria"), desde, hasta)
-                costo_superv = _num(superv_periodo, "costo_calculado").sum()
-                _kpi_card(
-                    st.container(), "👔", "Costo de supervisión/calidad (overhead, NO incluido arriba)",
-                    f"{costo_superv:,.2f}",
-                    ayuda="Costo del Jefe de planta / Jefe de calidad del período — se muestra aparte a propósito, no se reparte en el costo/kg de los lotes.",
-                )
+                    _grafico_dona(por_tipo["tipo_producto"], por_tipo["kg_real"], "Kg por tipo")
 
         st.write("")
 
+        if ve_costos(rol):
+            with st.container(border=True):
+                st.markdown("##### 🔢 Composición del costo de producción")
+                if prod_costos.empty:
+                    st.info("Sin datos de costos en este período.")
+                else:
+                    costo_huevo_sum   = prod_costos["costo_huevo"].sum()
+                    costo_insumos_sum = prod_costos["costo_insumos"].sum()
+                    costo_mo_sum      = prod_costos["costo_mano_obra"].sum()
+                    pct = lambda v: (v/costo_total_periodo*100) if costo_total_periodo > 0 else 0
+                    c1, c2, c3 = st.columns(3)
+                    _kpi_card(c1, "🥚", "Huevo", f"${costo_huevo_sum:,.2f}", ayuda=f"{pct(costo_huevo_sum):.0f}% del costo total")
+                    _kpi_card(c2, "🧴", "Insumos", f"${costo_insumos_sum:,.2f}", ayuda=f"{pct(costo_insumos_sum):.0f}% del costo total")
+                    _kpi_card(c3, "👷", "Mano de obra", f"${costo_mo_sum:,.2f}", ayuda=f"{pct(costo_mo_sum):.0f}% del costo total")
+                    _grafico_dona(["Huevo","Insumos","Mano de obra"],
+                                  [costo_huevo_sum, costo_insumos_sum, costo_mo_sum], "Composición del costo")
+
+                    superv_periodo = _filtrar_por_fecha(db.get_df("supervision_diaria"), desde, hasta)
+                    costo_superv = _num(superv_periodo, "costo_calculado").sum()
+                    st.info(f"Costo de supervisión/calidad (overhead, no incluido en costo/kg de lotes): **${costo_superv:,.2f}**")
+
+        st.write("")
+        with st.container(border=True):
+            st.markdown("##### ⚖️ Balance de masa promedio")
+            st.caption("(líquido + cáscara real) ÷ peso bruto teórico. 100% = sin pérdidas sin explicar.")
+            if not prod_costos.empty and "balance_masa_pct" in prod_costos.columns:
+                balance_vals = pd.to_numeric(prod_costos["balance_masa_pct"], errors="coerce").dropna()
+                if not balance_vals.empty:
+                    fuera = balance_vals[(balance_vals > 100.5) | (balance_vals < 85)]
+                    c1, c2 = st.columns(2)
+                    _kpi_card(c1, "⚖️", "Balance promedio", f"{balance_vals.mean():.1f}%")
+                    _kpi_card(c2, "🔍", "Lotes fuera de rango (85-100%)", f"{len(fuera)} de {len(balance_vals)}")
+                    if not fuera.empty:
+                        st.warning("Hay lotes con balance fuera de rango — revísalos en Producción → 'Teórico vs. real'.")
+
+        st.write("")
         col_past, col_pend = st.columns(2)
         with col_past:
             with st.container(border=True):
-                st.markdown("##### 🧪 Pasteurizado por tipo (kg)")
+                st.markdown("##### 🧪 Kg pasteurizados por tipo")
                 if past_f.empty or produccion.empty:
-                    st.info("No hay pasteurizaciones en este período.")
+                    st.info("Sin pasteurizaciones en el período.")
                 else:
-                    past_tipo = past_f.merge(
-                        produccion[["lote_semielaborado_id", "tipo_producto"]],
-                        on="lote_semielaborado_id", how="left",
-                    )
+                    past_tipo = past_f.merge(produccion[["lote_semielaborado_id","tipo_producto"]], on="lote_semielaborado_id", how="left")
                     past_tipo["kg_usado"] = pd.to_numeric(past_tipo["kg_usado"], errors="coerce").fillna(0)
-                    kg_pasteurizado_tipo = past_tipo.groupby("tipo_producto")["kg_usado"].sum()
-                    _grafico_barras(kg_pasteurizado_tipo, color=VERDE)
+                    _grafico_barras(past_tipo.groupby("tipo_producto")["kg_usado"].sum(), color=VERDE)
 
         with col_pend:
             with st.container(border=True):
-                st.markdown("##### 🛢️ Pendiente de pasteurizar (kg)")
+                st.markdown("##### 🛢️ Pendiente de pasteurizar (kg en tanque)")
                 if prod_costos.empty:
-                    st.info("No hay producción en este período.")
+                    st.info("Sin producción en el período.")
                 else:
                     prod_saldo = prod_f.copy()
                     prod_saldo["kg_saldo"] = pd.to_numeric(prod_saldo["kg_saldo"], errors="coerce").fillna(0)
-                    kg_saldo_tipo = prod_saldo.groupby("tipo_producto")["kg_saldo"].sum()
-                    _grafico_barras(kg_saldo_tipo, color=DORADO)
+                    _grafico_barras(prod_saldo.groupby("tipo_producto")["kg_saldo"].sum(), color=DORADO)
 
     # ======================== TAB: PERSONAL ========================
     with tabs[2]:
         with st.container(border=True):
             st.markdown("##### 👷 Horas de trabajo por persona")
-            st.caption(
-                "Normales = hasta 8h en día normal · Extras = lo que excede 8h en día "
-                "normal · Dobles = horas en feriado sin compensación · Compensadas = "
-                "horas en feriado con descanso acordado en su lugar · Nocturnas = "
-                "horas entre 19:00 y 05:00 (eje aparte, se cruza con las demás)."
-            )
+            st.caption("Normales ≤8h día normal · Extras >8h · Dobles = feriado sin compensar · Compensadas = feriado con descanso · Nocturnas = 19:00-05:00")
 
-            if not personal_detalle.empty and not produccion.empty:
-                ph = personal_detalle.merge(
-                    produccion[["lote_semielaborado_id", "fecha"]], on="lote_semielaborado_id", how="left",
-                )
-            else:
-                ph = pd.DataFrame(columns=["personal_id", "fecha", "horas", "horas_nocturnas", "costo_calculado"])
+            hh_f["horas"] = pd.to_numeric(hh_f.get("horas"), errors="coerce").fillna(0)
+            hh_f["horas_nocturnas"] = pd.to_numeric(hh_f.get("horas_nocturnas"), errors="coerce").fillna(0)
+            hh_f["costo_calculado"] = pd.to_numeric(hh_f.get("costo_calculado"), errors="coerce").fillna(0)
 
-            superv = db.get_df("supervision_diaria")
-            if not superv.empty:
-                superv_cols = superv[["personal_id", "fecha", "horas", "horas_nocturnas", "costo_calculado"]].copy()
-                ph = pd.concat([ph, superv_cols], ignore_index=True)
+            costo_por_persona     = hh_f.groupby("personal_id")["costo_calculado"].sum() if not hh_f.empty else pd.Series(dtype=float)
+            nocturnas_por_persona = hh_f.groupby("personal_id")["horas_nocturnas"].sum() if not hh_f.empty else pd.Series(dtype=float)
 
-            ph = _filtrar_por_fecha(ph, desde, hasta)
-            ph["horas"] = pd.to_numeric(ph.get("horas"), errors="coerce").fillna(0)
-            ph["horas_nocturnas"] = pd.to_numeric(ph.get("horas_nocturnas"), errors="coerce").fillna(0)
-            ph["costo_calculado"] = pd.to_numeric(ph.get("costo_calculado"), errors="coerce").fillna(0)
-
-            # costo y horas nocturnas por persona (ejes aparte de la clasificacion)
-            costo_por_persona = ph.groupby("personal_id")["costo_calculado"].sum() if not ph.empty else pd.Series(dtype=float)
-            nocturnas_por_persona = ph.groupby("personal_id")["horas_nocturnas"].sum() if not ph.empty else pd.Series(dtype=float)
-
-            # sumar horas del MISMO dia antes de clasificar (si una persona trabajo en
-            # varios lotes el mismo dia, hay que sumarlas antes del limite de 8 horas)
-            if not ph.empty:
-                por_persona_dia = ph.groupby(["personal_id", "fecha"])["horas"].sum().reset_index()
-                feriados_set = feriados_como_set(db.get_df("feriados"))
+            if not hh_f.empty:
+                por_persona_dia = hh_f.groupby(["personal_id","fecha"])["horas"].sum().reset_index()
+                feriados_set    = feriados_como_set(db.get_df("feriados"))
                 compensados_set = compensaciones_como_set(db.get_df("compensaciones_feriado"))
                 por_persona_dia = clasificar_horas_por_dia(por_persona_dia, feriados_set, compensados_set)
-                resumen_por_id = por_persona_dia.groupby("personal_id").agg(
-                    horas_normales=("horas_normales", "sum"),
-                    horas_extras=("horas_extras", "sum"),
-                    horas_dobles=("horas_dobles", "sum"),
-                    horas_compensadas=("horas_compensadas", "sum"),
-                    horas_totales=("horas", "sum"),
+                resumen_por_id  = por_persona_dia.groupby("personal_id").agg(
+                    horas_normales=("horas_normales","sum"), horas_extras=("horas_extras","sum"),
+                    horas_dobles=("horas_dobles","sum"), horas_compensadas=("horas_compensadas","sum"),
+                    horas_totales=("horas","sum"),
                 )
             else:
-                resumen_por_id = pd.DataFrame(columns=[
-                    "horas_normales", "horas_extras", "horas_dobles", "horas_compensadas", "horas_totales",
-                ])
+                resumen_por_id = pd.DataFrame(columns=["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"])
 
-            # reporte COMPLETO: parte de TODO el personal activo del catalogo, no
-            # solo quienes tienen registros -- asi se ve quien NO trabajo el periodo
             if personal_cat.empty:
-                st.info("Configura personal en Catálogos → Personal para ver este reporte.")
+                st.info("Configura personal en Catálogos → Personal.")
             else:
-                activos = personal_cat[personal_cat.get("activo", "TRUE").astype(str).str.upper() != "FALSE"].copy()
+                activos = personal_cat[personal_cat.get("activo","TRUE").astype(str).str.upper() != "FALSE"].copy()
                 reporte = activos.set_index("personal_id").join(resumen_por_id, how="left")
-                for col in ["horas_normales", "horas_extras", "horas_dobles", "horas_compensadas", "horas_totales"]:
+                for col in ["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"]:
                     reporte[col] = reporte[col].fillna(0)
                 reporte["costo"] = reporte.index.map(costo_por_persona).fillna(0)
                 reporte["horas_nocturnas"] = reporte.index.map(nocturnas_por_persona).fillna(0)
+                reporte["hh_por_kg"] = reporte["horas_totales"].apply(lambda h: h/kg_total_periodo if kg_total_periodo > 0 else 0)
                 reporte["trabajo"] = reporte["horas_totales"] > 0
                 reporte = reporte.reset_index().sort_values("horas_totales", ascending=False)
 
-                c1, c2, c3, c4, c5, c6 = st.columns(6)
-                _kpi_card(c1, "🕐", "H. normales", f"{reporte['horas_normales'].sum():,.1f}")
-                _kpi_card(c2, "⏱️", "H. extras", f"{reporte['horas_extras'].sum():,.1f}")
-                _kpi_card(c3, "✖️2", "H. dobles", f"{reporte['horas_dobles'].sum():,.1f}")
-                _kpi_card(c4, "🔁", "H. compensadas", f"{reporte['horas_compensadas'].sum():,.1f}")
-                _kpi_card(c5, "🌙", "H. nocturnas", f"{reporte['horas_nocturnas'].sum():,.1f}")
-                _kpi_card(c6, "💲", "Costo M.O.", f"{reporte['costo'].sum():,.2f}")
+                c1,c2,c3,c4,c5,c6 = st.columns(6)
+                _kpi_card(c1,"🕐","H. normales",f"{reporte['horas_normales'].sum():,.1f}")
+                _kpi_card(c2,"⏱️","H. extras",f"{reporte['horas_extras'].sum():,.1f}")
+                _kpi_card(c3,"✖️2","H. dobles",f"{reporte['horas_dobles'].sum():,.1f}")
+                _kpi_card(c4,"🔁","H. compensadas",f"{reporte['horas_compensadas'].sum():,.1f}")
+                _kpi_card(c5,"🌙","H. nocturnas",f"{reporte['horas_nocturnas'].sum():,.1f}")
+                if ve_costos(rol):
+                    _kpi_card(c6,"💲","Costo M.O.",f"${reporte['costo'].sum():,.2f}")
+
+                r1b, r2b = st.columns(2)
+                _kpi_card(r1b,"⏱️","Horas-hombre / kg",f"{hh_por_kg:,.3f}", ayuda="Horas totales ÷ kg producidos en el período")
+                _kpi_card(r2b,"👷","Total horas trabajadas",f"{horas_totales_periodo:,.1f} h")
 
                 sin_trabajar = reporte[~reporte["trabajo"]]
                 if not sin_trabajar.empty:
-                    st.warning(
-                        f"⚠️ {len(sin_trabajar)} persona(s) sin registros en este período: "
-                        f"{', '.join(sin_trabajar['nombre'])}"
-                    )
+                    st.warning(f"⚠️ {len(sin_trabajar)} persona(s) sin registros: {', '.join(sin_trabajar['nombre'])}")
 
                 st.write("")
-                st.caption("'Nocturnas' es un eje aparte (cuándo se trabajó) — esas horas también están incluidas en normales/extras/dobles según corresponda.")
-                st.caption("El costo de esta tabla incluye mano de obra directa de producción + supervisión/calidad combinados — para el costo por kg de cada lote (que NO incluye supervisión), ve a la pestaña 'Producción y costos'.")
-                columnas_mostrar = [c for c in [
-                    "nombre", "cargo", "tipo_personal", "trabajo", "horas_normales", "horas_extras",
-                    "horas_dobles", "horas_compensadas", "horas_nocturnas", "horas_totales", "costo",
-                ] if c in reporte.columns]
+                columnas_mostrar = [c for c in ["nombre","cargo","horas_normales","horas_extras",
+                                                 "horas_dobles","horas_compensadas","horas_nocturnas","horas_totales","costo"]
+                                    if c in reporte.columns]
                 st.dataframe(reporte[columnas_mostrar], use_container_width=True, hide_index=True)
 
                 st.markdown("**Desglose de horas por persona**")
-                _grafico_barras_apiladas(
-                    reporte.set_index("nombre"),
-                    ["horas_normales", "horas_extras", "horas_dobles", "horas_compensadas"],
-                )
-
+                _grafico_barras_apiladas(reporte.set_index("nombre"),
+                                         ["horas_normales","horas_extras","horas_dobles","horas_compensadas"])
                 st.write("")
                 pdf_bytes = generar_pdf_horas_personal(reporte.to_dict("records"), desde, hasta)
-                st.download_button(
-                    "📄 Descargar reporte PDF de horas de personal",
-                    data=pdf_bytes,
-                    file_name=f"horas_personal_{desde.isoformat()}_a_{hasta.isoformat()}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
+                st.download_button("📄 Descargar reporte PDF de horas",
+                                   data=pdf_bytes,
+                                   file_name=f"horas_personal_{desde.isoformat()}_a_{hasta.isoformat()}.pdf",
+                                   mime="application/pdf", use_container_width=True)
 
     # ======================== TAB: INSUMOS Y ENVASES ========================
     with tabs[3]:
-        col_ins, col_env = st.columns(2)
-        with col_ins:
+        # ── Inventario actual ──
+        st.markdown("##### 📊 Inventario actual (no cambia con el período)")
+        col_env_inv, col_ins_inv = st.columns(2)
+        with col_env_inv:
             with st.container(border=True):
-                st.markdown("##### 🧴 Insumos químicos consumidos")
-                st.caption("Producción + limpieza y desinfección")
-                salidas_insumos = pd.DataFrame()
-                if not mov_f.empty:
-                    salidas_insumos = mov_f[
-                        (mov_f["item_tipo"] == "insumo") & (mov_f["tipo_movimiento"] == "salida")
-                    ].copy()
-                if salidas_insumos.empty:
-                    st.info("No hay consumo de insumos en este período.")
+                st.markdown("**📦 Envases disponibles**")
+                if presentaciones.empty:
+                    st.info("Sin presentaciones configuradas.")
                 else:
-                    salidas_insumos["cantidad"] = pd.to_numeric(salidas_insumos["cantidad"], errors="coerce").fillna(0)
-                    salidas_insumos["costo_total"] = pd.to_numeric(salidas_insumos["costo_total"], errors="coerce").fillna(0)
+                    filas_env = [{"Presentación": r["nombre"], "Saldo": _saldo_actual(movimientos,"envase",r["presentacion_id"])}
+                                 for _, r in presentaciones.iterrows()]
+                    df_env = pd.DataFrame(filas_env)
+                    st.dataframe(df_env, use_container_width=True, hide_index=True)
+                    _grafico_barras(df_env.set_index("Presentación")["Saldo"], color=NARANJA)
+
+        with col_ins_inv:
+            with st.container(border=True):
+                st.markdown("**🧴 Insumos disponibles**")
+                if insumos.empty:
+                    st.info("Sin insumos configurados.")
+                else:
+                    filas_ins = [{"Insumo": r["nombre"], "Unidad": r.get("unidad",""),
+                                  "Saldo": _saldo_actual(movimientos,"insumo",r["insumo_id"])}
+                                 for _, r in insumos.iterrows()]
+                    df_ins = pd.DataFrame(filas_ins)
+                    st.dataframe(df_ins, use_container_width=True, hide_index=True)
+                    _grafico_barras(df_ins.set_index("Insumo")["Saldo"], color=TEAL)
+
+        st.divider()
+
+        # ── Consumo en el período ──
+        st.markdown("##### 📈 Consumo en el período seleccionado")
+        col_ins_c, col_env_c = st.columns(2)
+
+        with col_ins_c:
+            with st.container(border=True):
+                st.markdown("**🧴 Insumos consumidos**")
+                salidas_insumos = pd.DataFrame()
+                if not mov_f.empty and "item_tipo" in mov_f.columns:
+                    salidas_insumos = mov_f[(mov_f["item_tipo"]=="insumo") & (mov_f["tipo_movimiento"]=="salida")].copy()
+                if salidas_insumos.empty:
+                    st.info("Sin consumo de insumos en el período.")
+                else:
+                    salidas_insumos["cantidad"]   = pd.to_numeric(salidas_insumos["cantidad"], errors="coerce").fillna(0)
+                    salidas_insumos["costo_total"]= pd.to_numeric(salidas_insumos.get("costo_total",0), errors="coerce").fillna(0)
                     if not insumos.empty:
                         salidas_insumos = salidas_insumos.merge(
-                            insumos[["insumo_id", "nombre", "unidad"]].rename(columns={"insumo_id": "item_id"}),
+                            insumos[["insumo_id","nombre","unidad"]].rename(columns={"insumo_id":"item_id"}),
                             on="item_id", how="left",
                         )
                         salidas_insumos["nombre"] = salidas_insumos["nombre"].fillna(salidas_insumos["item_id"])
-                        salidas_insumos["unidad"] = salidas_insumos["unidad"].fillna("")
                     else:
-                        salidas_insumos["nombre"] = salidas_insumos["item_id"]
-                        salidas_insumos["unidad"] = ""
-                    resumen_insumos = salidas_insumos.groupby(["nombre", "unidad"]).agg(
-                        cantidad=("cantidad", "sum"), costo=("costo_total", "sum"),
+                        salidas_insumos["nombre"] = salidas_insumos.get("item_id","")
+                    resumen_ins = salidas_insumos.groupby("nombre").agg(
+                        cantidad=("cantidad","sum"), costo=("costo_total","sum")
                     ).reset_index().sort_values("cantidad", ascending=False)
-                    _kpi_card(st.container(), "💲", "Costo total insumos", f"{resumen_insumos['costo'].sum():,.2f}")
-                    st.write("")
-                    st.dataframe(resumen_insumos, use_container_width=True, hide_index=True)
+                    if ve_costos(rol):
+                        st.caption(f"Costo total: **${resumen_ins['costo'].sum():,.2f}**")
+                    st.dataframe(resumen_ins, use_container_width=True, hide_index=True)
+                    _grafico_barras(resumen_ins.set_index("nombre")["cantidad"], color=TEAL)
 
-        with col_env:
+        with col_env_c:
             with st.container(border=True):
-                st.markdown("##### 📦 Envases consumidos")
-                salidas_envases = pd.DataFrame()
-                if not mov_f.empty:
-                    salidas_envases = mov_f[
-                        (mov_f["item_tipo"] == "envase") & (mov_f["tipo_movimiento"] == "salida")
-                    ].copy()
-                if salidas_envases.empty:
-                    st.info("No hay consumo de envases en este período.")
+                st.markdown("**📦 Envases consumidos**")
+                salidas_env = pd.DataFrame()
+                if not mov_f.empty and "item_tipo" in mov_f.columns:
+                    salidas_env = mov_f[(mov_f["item_tipo"]=="envase") & (mov_f["tipo_movimiento"]=="salida")].copy()
+                if salidas_env.empty:
+                    st.info("Sin consumo de envases en el período.")
                 else:
-                    salidas_envases["cantidad"] = pd.to_numeric(salidas_envases["cantidad"], errors="coerce").fillna(0)
+                    salidas_env["cantidad"] = pd.to_numeric(salidas_env["cantidad"], errors="coerce").fillna(0)
                     if not presentaciones.empty:
-                        salidas_envases = salidas_envases.merge(
-                            presentaciones[["presentacion_id", "nombre"]].rename(columns={"presentacion_id": "item_id"}),
+                        salidas_env = salidas_env.merge(
+                            presentaciones[["presentacion_id","nombre"]].rename(columns={"presentacion_id":"item_id"}),
                             on="item_id", how="left",
                         )
-                        salidas_envases["nombre"] = salidas_envases["nombre"].fillna(salidas_envases["item_id"])
+                        salidas_env["nombre"] = salidas_env["nombre"].fillna(salidas_env.get("item_id",""))
                     else:
-                        salidas_envases["nombre"] = salidas_envases["item_id"]
-                    resumen_envases = salidas_envases.groupby("nombre")["cantidad"].sum().reset_index()
-                    resumen_envases.columns = ["Presentación", "Unidades"]
-                    _kpi_card(st.container(), "📦", "Total unidades", f"{int(resumen_envases['Unidades'].sum()):,}")
-                    st.write("")
-                    st.dataframe(resumen_envases, use_container_width=True, hide_index=True)
-                    _grafico_barras(resumen_envases.set_index("Presentación")["Unidades"], color=NARANJA)
+                        salidas_env["nombre"] = salidas_env.get("item_id","")
+                    resumen_env = salidas_env.groupby("nombre")["cantidad"].sum().reset_index()
+                    resumen_env.columns = ["Presentación","Unidades"]
+                    st.caption(f"Total: **{int(resumen_env['Unidades'].sum()):,} unidades**")
+                    st.dataframe(resumen_env, use_container_width=True, hide_index=True)
+                    _grafico_barras(resumen_env.set_index("Presentación")["Unidades"], color=NARANJA)
+                    _grafico_linea_tiempo(
+                        salidas_env.rename(columns={"nombre":"item"}), "fecha", "cantidad",
+                        color=NARANJA, titulo="Consumo de envases por día"
+                    )
 
     # ======================== TAB: RESIDUOS Y MERMAS ========================
     with tabs[4]:
-        cascara_total = prod_costos["cascara_real_kg"].sum() if not prod_costos.empty else 0.0
+        cascara_total        = prod_costos["cascara_real_kg"].sum() if not prod_costos.empty else 0.0
         huevos_danados_total = _num(mermas_mp_f, "huevos_danados").sum()
-        costo_mermas_mp = _num(mermas_mp_f, "costo_estimado").sum()
-
-        mermas_semi = db.get_df("mermas_semielaborado")
-        mermas_semi_f = _filtrar_por_fecha(mermas_semi, desde, hasta)
-        kg_semi_desechado = _num(mermas_semi_f, "kg_desechado").sum()
+        costo_mermas_mp      = _num(mermas_mp_f, "costo_estimado").sum()
+        mermas_semi          = db.get_df("mermas_semielaborado")
+        mermas_semi_f        = _filtrar_por_fecha(mermas_semi, desde, hasta)
+        kg_semi_desechado    = _num(mermas_semi_f, "kg_desechado").sum()
         costo_semi_desechado = _num(mermas_semi_f, "costo_estimado").sum()
 
-        m1, m2, m3, m4 = st.columns(4)
-        _kpi_card(m1, "🥚", "Cáscara generada", f"{cascara_total:,.1f} kg")
-        _kpi_card(m2, "💔", "Huevos dañados en bodega", f"{huevos_danados_total:,.0f}")
-        _kpi_card(m3, "🧪", "Clara/yema desechada", f"{kg_semi_desechado:,.1f} kg")
-        _kpi_card(m4, "💲", "Costo huevo + semielaborado perdido", f"{(costo_mermas_mp + costo_semi_desechado):,.2f}")
+        m1,m2,m3,m4 = st.columns(4)
+        _kpi_card(m1,"🥚","Cáscara generada",f"{cascara_total:,.1f} kg")
+        _kpi_card(m2,"💔","Huevos dañados en bodega",f"{huevos_danados_total:,.0f}")
+        _kpi_card(m3,"🧪","Clara/yema desechada",f"{kg_semi_desechado:,.1f} kg")
+        if ve_costos(rol):
+            _kpi_card(m4,"💲","Costo perdido (huevo + semi)",f"${(costo_mermas_mp+costo_semi_desechado):,.2f}")
+
+        if kg_total_periodo > 0:
+            pct_cascara = cascara_total / kg_total_periodo * 100
+            st.caption(f"La cáscara representa el **{pct_cascara:.1f}%** del peso total producido.")
 
         st.write("")
-        with st.container(border=True):
-            st.markdown("##### 🧪 Clara/yema desechada (sin cliente, dañada o vencida)")
-            if mermas_semi_f.empty:
-                st.info("No hay clara/yema desechada en este período.")
-            else:
-                mermas_semi_view = mermas_semi_f.copy()
-                if not produccion.empty:
-                    mermas_semi_view = mermas_semi_view.merge(
-                        produccion[["lote_semielaborado_id", "tipo_producto"]],
-                        on="lote_semielaborado_id", how="left",
-                    )
-                col_tabla, col_graf = st.columns([3, 2])
-                columnas_merma_semi = [c for c in [
-                    "fecha", "lote_semielaborado_id", "tipo_producto", "kg_desechado", "causa", "observaciones",
-                ] if c in mermas_semi_view.columns]
-                col_tabla.dataframe(mermas_semi_view[columnas_merma_semi], use_container_width=True, hide_index=True)
-                with col_graf:
-                    if "tipo_producto" in mermas_semi_view.columns:
-                        por_tipo_merma = mermas_semi_view.groupby("tipo_producto")["kg_desechado"].sum()
-                        _grafico_dona(por_tipo_merma.index, por_tipo_merma.values, "Kg desechados por tipo")
+        col_r1, col_r2 = st.columns(2)
 
-        st.write("")
-        with st.container(border=True):
-            st.markdown("##### 📦 Envases dañados por presentación")
-            mermas_envases = pd.DataFrame()
-            if not mov_f.empty:
-                mermas_envases = mov_f[
-                    (mov_f["item_tipo"] == "envase") & (mov_f["tipo_movimiento"] == "merma")
-                ].copy()
-            if mermas_envases.empty:
-                st.info("No hay envases registrados como dañados en este período.")
-            else:
-                mermas_envases["cantidad"] = pd.to_numeric(mermas_envases["cantidad"], errors="coerce").fillna(0)
-                if not presentaciones.empty:
-                    mermas_envases = mermas_envases.merge(
-                        presentaciones[["presentacion_id", "nombre"]].rename(columns={"presentacion_id": "item_id"}),
-                        on="item_id", how="left",
-                    )
-                    mermas_envases["nombre"] = mermas_envases["nombre"].fillna(mermas_envases["item_id"])
+        with col_r1:
+            with st.container(border=True):
+                st.markdown("##### 🧪 Clara/yema desechada por tipo")
+                if mermas_semi_f.empty:
+                    st.info("Sin desechos de semielaborados en el período.")
                 else:
-                    mermas_envases["nombre"] = mermas_envases["item_id"]
-                resumen_mermas_env = mermas_envases.groupby("nombre")["cantidad"].sum().reset_index()
-                resumen_mermas_env.columns = ["Presentación", "Unidades dañadas"]
-                col_tabla, col_graf = st.columns([3, 2])
-                col_tabla.dataframe(resumen_mermas_env, use_container_width=True, hide_index=True)
-                with col_graf:
-                    _grafico_barras(resumen_mermas_env.set_index("Presentación")["Unidades dañadas"], color="#c0392b", horizontal=True)
+                    mermas_semi_v = mermas_semi_f.copy()
+                    if not produccion.empty:
+                        mermas_semi_v = mermas_semi_v.merge(produccion[["lote_semielaborado_id","tipo_producto"]], on="lote_semielaborado_id", how="left")
+                    st.dataframe(mermas_semi_v[[c for c in ["fecha","lote_semielaborado_id","tipo_producto","kg_desechado","causa"] if c in mermas_semi_v.columns]],
+                                 use_container_width=True, hide_index=True)
+                    if "tipo_producto" in mermas_semi_v.columns:
+                        _grafico_dona(mermas_semi_v.groupby("tipo_producto")["kg_desechado"].sum().index,
+                                      mermas_semi_v.groupby("tipo_producto")["kg_desechado"].sum().values,
+                                      "Kg desechados por tipo")
+
+        with col_r2:
+            with st.container(border=True):
+                st.markdown("##### 📦 Envases dañados")
+                mermas_env = pd.DataFrame()
+                if not mov_f.empty and "item_tipo" in mov_f.columns:
+                    mermas_env = mov_f[(mov_f["item_tipo"]=="envase") & (mov_f["tipo_movimiento"]=="merma")].copy()
+                if mermas_env.empty:
+                    st.info("Sin envases dañados en el período.")
+                else:
+                    mermas_env["cantidad"] = pd.to_numeric(mermas_env["cantidad"], errors="coerce").fillna(0)
+                    if not presentaciones.empty:
+                        mermas_env = mermas_env.merge(presentaciones[["presentacion_id","nombre"]].rename(columns={"presentacion_id":"item_id"}), on="item_id", how="left")
+                        mermas_env["nombre"] = mermas_env["nombre"].fillna(mermas_env.get("item_id",""))
+                    resumen_me = mermas_env.groupby("nombre")["cantidad"].sum().reset_index()
+                    resumen_me.columns = ["Presentación","Unidades dañadas"]
+                    st.dataframe(resumen_me, use_container_width=True, hide_index=True)
+                    _grafico_barras(resumen_me.set_index("Presentación")["Unidades dañadas"], color="#c0392b", horizontal=True)
 
     # ======================== TAB: AGUA ========================
     with tabs[5]:
         with st.container(border=True):
-            st.markdown("##### 💧 Agua usada")
-            c1, c2, c3 = st.columns(3)
-            _kpi_card(c1, "🏭", "En producción", f"{agua_produccion:,.0f} L")
-            _kpi_card(c2, "🧽", "En limpieza/desinfección", f"{agua_limpieza:,.0f} L")
-            _kpi_card(c3, "💧", "Total", f"{agua_produccion + agua_limpieza:,.0f} L")
-            st.write("")
+            st.markdown("##### 💧 Agua usada en el período")
+            c1,c2,c3 = st.columns(3)
+            _kpi_card(c1,"🏭","En producción",f"{agua_produccion:,.0f} L")
+            _kpi_card(c2,"🧽","En limpieza/desinfección",f"{agua_limpieza:,.0f} L")
+            _kpi_card(c3,"💧","Total",f"{agua_produccion+agua_limpieza:,.0f} L",
+                      _delta_pct(agua_produccion+agua_limpieza, kpis_ant["agua_total"]))
+
+            if kg_total_periodo > 0 and (agua_produccion+agua_limpieza) > 0:
+                litros_por_kg = (agua_produccion+agua_limpieza) / kg_total_periodo
+                st.caption(f"Eficiencia hídrica: **{litros_por_kg:,.2f} L/kg** producido")
+
             if agua_produccion + agua_limpieza > 0:
-                _grafico_dona(
-                    ["Producción", "Limpieza/desinfección"],
-                    [agua_produccion, agua_limpieza],
-                    "Distribución de agua usada",
-                )
+                _grafico_dona(["Producción","Limpieza/desinfección"],
+                              [agua_produccion, agua_limpieza], "Distribución del agua")
+
+        st.write("")
+        with st.container(border=True):
+            st.markdown("##### 📈 Consumo de agua por día")
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                agua_prod_diaria = prod_f.copy() if not prod_f.empty else pd.DataFrame()
+                if not agua_prod_diaria.empty and "agua_litros" in agua_prod_diaria.columns:
+                    agua_prod_diaria["agua_litros"] = pd.to_numeric(agua_prod_diaria["agua_litros"], errors="coerce").fillna(0)
+                    _grafico_linea_tiempo(agua_prod_diaria, "fecha", "agua_litros", AZUL, "Agua en producción (L/día)")
+                else:
+                    st.info("Sin datos de agua en producción.")
+            with col_a2:
+                if not limpieza_f.empty and "agua_litros" in limpieza_f.columns:
+                    limp_agua = limpieza_f.copy()
+                    limp_agua["agua_litros"] = pd.to_numeric(limp_agua["agua_litros"], errors="coerce").fillna(0)
+                    _grafico_linea_tiempo(limp_agua, "fecha", "agua_litros", TEAL, "Agua en limpieza (L/día)")
+                else:
+                    st.info("Sin datos de agua en limpieza.")
