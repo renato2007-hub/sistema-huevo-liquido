@@ -353,13 +353,9 @@ def render(db, username, rol):
             else:
                 resumen_kg["kg_nominal"] = 0
             resumen_kg["kg_nominal"] = pd.to_numeric(resumen_kg["kg_nominal"], errors="coerce").fillna(0)
-            if not semielaborados.empty:
-                resumen_kg = resumen_kg.merge(
-                    semielaborados[["lote_semielaborado_id", "tipo_producto"]],
-                    on="lote_semielaborado_id", how="left",
-                )
-            else:
-                resumen_kg["tipo_producto"] = ""
+            # tipo_producto ya viene en disponible_df del merge anterior — no re-mergear
+            if "tipo_producto" not in resumen_kg.columns:
+                resumen_kg["tipo_producto"] = "Sin clasificar"
             resumen_kg["tipo_producto"] = resumen_kg["tipo_producto"].fillna("Sin clasificar")
             resumen_kg["kg"] = resumen_kg["unidades_saldo"] * resumen_kg["kg_nominal"]
             resumen_kg["pasteurizado_bool"] = resumen_kg["pasteurizado"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
