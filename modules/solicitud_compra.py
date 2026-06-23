@@ -56,16 +56,14 @@ def render(db, username, rol):
             st.markdown("##### 📋 Datos de la orden de compra")
             c1, c2 = st.columns(2)
             numero_oc = c1.text_input("N° de OC", "")
-            proveedor_recomendado = c2.text_input("Proveedor recomendado", "")
-            c3, c4 = st.columns(2)
-            fecha_solicitud = c3.date_input("Fecha de solicitud", value=datetime.date.today())
-            fecha_maxima = c4.date_input(
+            fecha_solicitud = c2.date_input("Fecha de solicitud", value=datetime.date.today())
+            fecha_maxima = st.date_input(
                 "Fecha máxima esperada de recepción",
                 value=datetime.date.today() + datetime.timedelta(days=7),
             )
 
         st.markdown("##### 📝 Ítems a solicitar")
-        st.caption("Llena solo las categorías que necesites — deja vacías las que no apliquen.")
+        st.caption("Llena solo las categorías que necesites. Cada ítem puede tener su propio proveedor.")
 
         items_recolectados = []
 
@@ -75,7 +73,7 @@ def render(db, username, rol):
             else:
                 opciones_mat = list(materiales["nombre"])
                 df_mat = st.data_editor(
-                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float")}),
+                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float"), "Proveedor": pd.Series(dtype="object")}),
                     num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_materiales",
                     column_config={"Ítem": st.column_config.SelectboxColumn("Ítem", options=opciones_mat)},
                 )
@@ -85,6 +83,7 @@ def render(db, username, rol):
                         items_recolectados.append({
                             "categoria": CATEGORIAS[0], "nombre_item": fila["Ítem"],
                             "cantidad": fila["Cantidad"], "unidad": unidad,
+                            "proveedor": str(fila.get("Proveedor") or ""),
                         })
 
         with st.expander(CATEGORIAS[1], expanded=False):
@@ -93,7 +92,7 @@ def render(db, username, rol):
             else:
                 opciones_ins = list(insumos["nombre"])
                 df_ins = st.data_editor(
-                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float")}),
+                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float"), "Proveedor": pd.Series(dtype="object")}),
                     num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_quimicos",
                     column_config={"Ítem": st.column_config.SelectboxColumn("Ítem", options=opciones_ins)},
                 )
@@ -103,6 +102,7 @@ def render(db, username, rol):
                         items_recolectados.append({
                             "categoria": CATEGORIAS[1], "nombre_item": fila["Ítem"],
                             "cantidad": fila["Cantidad"], "unidad": unidad,
+                            "proveedor": str(fila.get("Proveedor") or ""),
                         })
 
         with st.expander(CATEGORIAS[2], expanded=False):
@@ -111,7 +111,7 @@ def render(db, username, rol):
             else:
                 opciones_pres = list(presentaciones["nombre"])
                 df_env = st.data_editor(
-                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float")}),
+                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float"), "Proveedor": pd.Series(dtype="object")}),
                     num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_envases",
                     column_config={"Ítem": st.column_config.SelectboxColumn("Ítem", options=opciones_pres)},
                 )
@@ -120,6 +120,7 @@ def render(db, username, rol):
                         items_recolectados.append({
                             "categoria": CATEGORIAS[2], "nombre_item": fila["Ítem"],
                             "cantidad": fila["Cantidad"], "unidad": "unidad",
+                            "proveedor": str(fila.get("Proveedor") or ""),
                         })
 
         with st.expander(CATEGORIAS[3], expanded=False):
@@ -129,7 +130,7 @@ def render(db, username, rol):
             else:
                 opciones_otros_nombres = [o[0] for o in opciones_otros_lista]
                 df_otros = st.data_editor(
-                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float")}),
+                    pd.DataFrame({"Ítem": pd.Series(dtype="object"), "Cantidad": pd.Series(dtype="float"), "Proveedor": pd.Series(dtype="object")}),
                     num_rows="dynamic", use_container_width=True, hide_index=True, key="editor_otros",
                     column_config={"Ítem": st.column_config.SelectboxColumn("Ítem", options=opciones_otros_nombres)},
                 )
@@ -138,6 +139,7 @@ def render(db, username, rol):
                         items_recolectados.append({
                             "categoria": CATEGORIAS[3], "nombre_item": fila["Ítem"],
                             "cantidad": fila["Cantidad"], "unidad": "unidad",
+                            "proveedor": str(fila.get("Proveedor") or ""),
                         })
 
         observaciones = st.text_area("Observaciones generales de la orden", "", key="solicitud_obs")
@@ -152,7 +154,7 @@ def render(db, username, rol):
                     "numero_oc": numero_oc,
                     "fecha_solicitud": fecha_solicitud.isoformat(),
                     "fecha_maxima_recepcion": fecha_maxima.isoformat(),
-                    "proveedor_recomendado": proveedor_recomendado,
+                    "proveedor_recomendado": "",
                     "recibido": False,
                     "usuario": username,
                     "observaciones": observaciones,
@@ -162,7 +164,8 @@ def render(db, username, rol):
                     db.append_row("solicitud_compra_items", {
                         "detalle_id": detalle_id,
                         "solicitud_id": solicitud_id,
-                        **it,
+                        **{k: v for k, v in it.items() if k != "proveedor"},
+                        "proveedor": it.get("proveedor", ""),
                     })
                 st.success(f"✅ Solicitud {solicitud_id} guardada con {len(items_recolectados)} ítem(s).")
                 st.rerun()
@@ -197,7 +200,7 @@ def render(db, username, rol):
         )
 
     columnas_mostrar = [
-        "solicitud_id", "numero_oc", "proveedor_recomendado",
+        "solicitud_id", "numero_oc",
         "fecha_solicitud", "fecha_maxima_recepcion", "observaciones",
     ]
 
@@ -227,7 +230,7 @@ def render(db, username, rol):
                     "Solicitud", pendientes["solicitud_id"],
                     format_func=lambda x: (
                         f"{x} — OC {pendientes.set_index('solicitud_id').loc[x, 'numero_oc'] or 's/n'} "
-                        f"({pendientes.set_index('solicitud_id').loc[x, 'proveedor_recomendado'] or 'sin proveedor'})"
+                        f"({pendientes.set_index('solicitud_id').loc[x, 'fecha_maxima_recepcion']})"
                     ),
                 )
                 c1, c2 = st.columns(2)

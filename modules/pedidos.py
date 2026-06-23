@@ -74,9 +74,8 @@ def render(db, username, rol):
 
         with st.container(border=True):
             st.markdown("##### 📅 Fechas comprometidas")
-            c1, c2 = st.columns(2)
-            fecha_produccion = c1.date_input("Fecha de producción planeada", value=datetime.date.today())
-            fecha_entrega = c2.date_input("Fecha en que se debe entregar", value=datetime.date.today())
+            fecha_entrega = st.date_input("Fecha en que se debe entregar", value=datetime.date.today())
+            st.caption("La fecha de producción planeada la asigna el jefe de planta desde 'Todos los pedidos'.")
 
         observaciones = st.text_area("Observaciones", "", key="pedido_obs")
 
@@ -96,7 +95,7 @@ def render(db, username, rol):
                     "unidades_solicitadas": unidades_solicitadas,
                     "cantidad_kg": cantidad_kg,
                     "fecha_pedido": fecha_pedido.isoformat(),
-                    "fecha_produccion": fecha_produccion.isoformat(),
+                    "fecha_produccion": "",
                     "fecha_entrega": fecha_entrega.isoformat(),
                     "producido": False,
                     "usuario": username,
@@ -209,6 +208,29 @@ def render(db, username, rol):
                 df_mostrar.rename(columns={"estado": "Estado"})[["Estado"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
                 use_container_width=True, hide_index=True,
             )
+
+            st.divider()
+            st.markdown("##### 📅 Asignar fecha de producción (Jefe de planta)")
+            st.caption("Selecciona un pedido sin fecha de producción asignada y defínela para planificar el turno.")
+            sin_fecha_prod = df[df["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None", "NaT"])]
+            if sin_fecha_prod.empty:
+                st.success("✅ Todos los pedidos tienen fecha de producción asignada.")
+            else:
+                pedido_fp = st.selectbox(
+                    "Pedido sin fecha de producción",
+                    sin_fecha_prod["pedido_id"],
+                    format_func=lambda x: (
+                        f"{x} — {sin_fecha_prod.set_index('pedido_id').loc[x, 'cliente_id']} "
+                        f"({sin_fecha_prod.set_index('pedido_id').loc[x, 'cantidad_kg']:.0f} kg, "
+                        f"entrega: {sin_fecha_prod.set_index('pedido_id').loc[x, 'fecha_entrega']})"
+                    ),
+                    key="asignar_fp_sel",
+                )
+                nueva_fp = st.date_input("Fecha de producción planeada", value=datetime.date.today(), key="asignar_fp_fecha")
+                if st.button("💾 Asignar fecha de producción"):
+                    db.update_row("pedidos", "pedido_id", pedido_fp, {"fecha_produccion": nueva_fp.isoformat()})
+                    st.success(f"✅ Pedido {pedido_fp} — fecha de producción asignada: {nueva_fp}.")
+                    st.rerun()
 
     # ======================== EDITAR / ELIMINAR (solo admin y gerencia) ========================
     if puede_editar_pedidos(rol):

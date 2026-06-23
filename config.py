@@ -27,7 +27,7 @@ SHEET_SCHEMAS = {
         "proveedor_recomendado", "recibido", "usuario", "observaciones",
     ],
     "solicitud_compra_items": [
-        "detalle_id", "solicitud_id", "categoria", "nombre_item", "cantidad", "unidad",
+        "detalle_id", "solicitud_id", "categoria", "nombre_item", "cantidad", "unidad", "proveedor",
     ],
 
     "verificacion_cargas": [

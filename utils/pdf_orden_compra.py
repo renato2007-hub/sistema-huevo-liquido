@@ -70,12 +70,13 @@ def generar_pdf_orden_compra(solicitud: dict, items: list) -> bytes:
     if not items:
         el.append(Paragraph("Sin ítems registrados en esta solicitud.", ESTILOS["Normal"]))
     else:
-        encabezados = ["Categoría", "Ítem", "Cantidad", "Unidad"]
+        encabezados = ["Categoría", "Ítem", "Cantidad", "Unidad", "Proveedor"]
         datos = [[_p(h, negrita=True) for h in encabezados]]
         for it in items:
             datos.append([
                 _p(_sin_emoji(it.get("categoria", ""))), _p(it.get("nombre_item", "")),
                 _p(it.get("cantidad", "")), _p(it.get("unidad", "")),
+                _p(it.get("proveedor", "—") or "—"),
             ])
         tabla = Table(datos, repeatRows=1)
         tabla.setStyle(TableStyle([
