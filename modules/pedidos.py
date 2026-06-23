@@ -287,7 +287,12 @@ def render(db, username, rol):
                     )
 
                     c10, c11 = st.columns(2)
-                    fecha_produccion_e = c10.date_input("Fecha de producción planeada", value=pd.to_datetime(fila["fecha_produccion"]).date())
+                    fp_raw = fila.get("fecha_produccion", "")
+                    try:
+                        fp_valor = pd.to_datetime(fp_raw).date() if str(fp_raw).strip() not in ("", "nan", "None", "NaT") else datetime.date.today()
+                    except Exception:
+                        fp_valor = datetime.date.today()
+                    fecha_produccion_e = c10.date_input("Fecha de producción planeada", value=fp_valor)
                     fecha_entrega_e = c11.date_input("Fecha de entrega", value=pd.to_datetime(fila["fecha_entrega"]).date())
 
                     producido_e = st.checkbox("Producido", value=bool(fila["producido_bool"]))
