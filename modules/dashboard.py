@@ -215,20 +215,51 @@ def render(db, username, rol):
     st.markdown("### 🎯 Resumen del período")
     st.caption(f"Comparado contra el período anterior equivalente: {desde_ant.strftime('%d/%m')} → {hasta_ant.strftime('%d/%m')}")
 
-    # KPIs por tipo de producto
+    # KPIs por tipo de producto + estado pasteurización desde pasteurizacion_envasado
     if not prod_costos.empty and "tipo_producto" in prod_costos.columns:
-        por_tipo = prod_costos.groupby("tipo_producto").agg(
-            kg=("kg_real","sum"), costo=("costo_total","sum")
-        ).reset_index()
-        cols_tipo = st.columns(len(por_tipo)) if not por_tipo.empty else []
-        for col, (_, row) in zip(cols_tipo, por_tipo.iterrows()):
-            costo_kg = row["costo"]/row["kg"] if row["kg"] > 0 else 0
-            _kpi_card(col, "🥚", f"Kg {row['tipo_producto']}", f"{row['kg']:,.1f} kg",
-                      sufijo=f"Costo prom. ${costo_kg:,.3f}/kg" if ve_costos(rol) else None)
+        # Kg en tanque (semielaborado sin pasteurizar) por tipo
+        kg_tanque_tipo = prod_costos.groupby("tipo_producto")["kg_real"].sum()
+        costo_tipo = prod_costos.groupby("tipo_producto")["costo_total"].sum()
+
+        # Kg ya pasteurizados y envasados, por tipo (join con pasteurizacion)
+        kg_past_tipo = {}
+        if not past_f.empty and not produccion.empty:
+            past_join = past_f.merge(
+                produccion[["lote_semielaborado_id","tipo_producto"]], on="lote_semielaborado_id", how="left"
+            )
+            past_join["kg_usado"] = pd.to_numeric(past_join["kg_usado"], errors="coerce").fillna(0)
+            past_join["pasteurizado_bool"] = past_join["pasteurizado"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
+            for tipo in past_join["tipo_producto"].dropna().unique():
+                sub = past_join[past_join["tipo_producto"]==tipo]
+                kg_past_tipo[f"{tipo} pasteurizado{'a' if tipo in ('Clara','Yema') else ''}"] = sub[sub["pasteurizado_bool"]]["kg_usado"].sum()
+                kg_sin = sub[~sub["pasteurizado_bool"]]["kg_usado"].sum()
+                if kg_sin > 0:
+                    kg_past_tipo[f"{tipo} sin pasteurizar"] = kg_sin
+
+        # Combinar en un dict etiqueta -> kg
+        etiquetas_kg = {}
+        for tipo, kg in kg_tanque_tipo.items():
+            if kg > 0:
+                etiquetas_kg[tipo] = {"kg": kg, "costo": costo_tipo.get(tipo, 0)}
+
+        all_labels = list(etiquetas_kg.keys()) + [k for k in kg_past_tipo if k not in etiquetas_kg]
+        if all_labels:
+            cols_tipo = st.columns(min(len(all_labels), 4))
+            idx = 0
+            for etiq, vals in etiquetas_kg.items():
+                costo_kg = vals["costo"]/vals["kg"] if vals["kg"] > 0 else 0
+                _kpi_card(cols_tipo[idx % len(cols_tipo)], "🥚", f"Kg {etiq}", f"{vals['kg']:,.1f} kg",
+                          sufijo=f"Costo prom. ${costo_kg:,.3f}/kg" if ve_costos(rol) else None)
+                idx += 1
+            for etiq, kg in kg_past_tipo.items():
+                if kg > 0:
+                    icono = "✅" if "pasteurizado" in etiq and "sin" not in etiq else "🔴"
+                    _kpi_card(cols_tipo[idx % len(cols_tipo)], icono, f"Kg {etiq}", f"{kg:,.1f} kg")
+                    idx += 1
 
     st.write("")
     r1, r2, r3, r4 = st.columns(4)
-    _kpi_card(r1, "⏱️", "Horas-hombre / kg", f"{hh_por_kg:,.3f}", help="Horas totales trabajadas ÷ kg producidos")
+    _kpi_card(r1, "⏱️", "Horas-hombre / kg", f"{hh_por_kg:,.3f}", ayuda="Horas totales trabajadas ÷ kg producidos")
     _kpi_card(r2, "💧", "Agua total (L)", f"{agua_produccion + agua_limpieza:,.0f}", _delta_pct(agua_produccion+agua_limpieza, kpis_ant["agua_total"]))
     if ve_costos(rol):
         _kpi_card(r3, "💰", "Costo total producción", f"${costo_total_periodo:,.2f}", _delta_pct(costo_total_periodo, kpis_ant["costo_total"]))
