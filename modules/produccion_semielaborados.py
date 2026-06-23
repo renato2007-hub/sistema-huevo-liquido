@@ -13,9 +13,9 @@ from utils.permisos import ve_costos, es_admin
 
 def render(db, username, rol):
     st.title("Producción de semielaborados")
-    tab_nueva, tab_inventario, tab_perdida, tab_rendimiento, tab_corregir = st.tabs(
-        ["Nueva producción", "Inventario de tanques", "⚠️ Registrar pérdida",
-         "Teórico vs. real", "✏️ Corregir / eliminar"]
+    tab_nueva, tab_inventario, tab_historial, tab_perdida, tab_rendimiento, tab_corregir = st.tabs(
+        ["Nueva producción", "Inventario de tanques", "📋 Historial",
+         "⚠️ Registrar pérdida", "Teórico vs. real", "✏️ Corregir / eliminar"]
     )
 
     categorias = db.get_df("categorias_huevo")
@@ -587,6 +587,48 @@ def render(db, username, rol):
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario_kg")
             st.dataframe(disponibles[columnas_disp], use_container_width=True)
+
+    with tab_historial:
+        df_hist = db.get_df("produccion_semielaborados")
+        if df_hist.empty:
+            st.info("Todavía no hay lotes registrados.")
+        else:
+            df_hist["kg_saldo"] = pd.to_numeric(df_hist["kg_saldo"], errors="coerce").fillna(0)
+            df_hist["kg_real"] = pd.to_numeric(df_hist["kg_real"], errors="coerce").fillna(0)
+
+            # Filtros
+            c1, c2, c3 = st.columns(3)
+            tipos = ["Todos"] + sorted(df_hist["tipo_producto"].dropna().unique().tolist())
+            filtro_tipo = c1.selectbox("Tipo de producto", tipos, key="hist_semi_tipo")
+            desde = c2.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="hist_semi_desde")
+            hasta = c3.date_input("Hasta", value=datetime.date.today(), key="hist_semi_hasta")
+
+            df_mostrar = df_hist.copy()
+            if filtro_tipo != "Todos":
+                df_mostrar = df_mostrar[df_mostrar["tipo_producto"] == filtro_tipo]
+            df_mostrar = df_mostrar[
+                (df_mostrar["fecha"].astype(str) >= desde.isoformat()) &
+                (df_mostrar["fecha"].astype(str) <= hasta.isoformat())
+            ]
+
+            df_mostrar["estado"] = df_mostrar["kg_saldo"].apply(
+                lambda s: "✅ Despachado/usado" if s == 0 else f"🟡 {s:.1f} kg en tanque"
+            )
+
+            columnas_hist = ["lote_semielaborado_id", "fecha", "tipo_producto", "kg_real", "estado"]
+            if ve_costos(rol):
+                columnas_hist += ["costo_unitario_kg", "costo_total"]
+
+            st.dataframe(
+                df_mostrar[[c for c in columnas_hist if c in df_mostrar.columns]].sort_values("fecha", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                f"Total: {len(df_mostrar)} lote(s) | "
+                f"En tanque: {(df_mostrar['kg_saldo'] > 0).sum()} | "
+                f"Despachados/usados: {(df_mostrar['kg_saldo'] == 0).sum()} | "
+                f"Kg producidos: {df_mostrar['kg_real'].sum():,.1f} kg"
+            )
 
     with tab_perdida:
         st.caption(
