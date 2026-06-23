@@ -304,7 +304,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
 def render(db, username, rol):
     st.title("Pasteurización y envasado")
-    tab_nueva, tab_disponibles, tab_historial = st.tabs(["Nuevo lote envasado", "Producto terminado disponible", "📋 Historial"])
+    tab_nueva, tab_disponibles, tab_granel, tab_historial = st.tabs(["Nuevo lote envasado", "Producto terminado disponible", "📦 Pasar a granel", "📋 Historial"])
 
     semielaborados = db.get_df("produccion_semielaborados")
     presentaciones = db.get_df("presentaciones")
@@ -375,6 +375,64 @@ def render(db, username, rol):
                 cols_kg = st.columns(len(por_tipo_kg))
                 for col, (nombre, kg) in zip(cols_kg, por_tipo_kg.items()):
                     col.metric(nombre, f"{kg:,.1f} kg")
+
+    with tab_granel:
+        st.caption(
+            "Traslada kg que no se van a envasar ahora a un recipiente de acero inoxidable "
+            "en cuarto frío — quedan como stock a granel para el siguiente turno (máx. 2 días)."
+        )
+        semi = db.get_df("produccion_semielaborados")
+        if semi.empty:
+            st.info("No hay lotes de semielaborado todavía.")
+        else:
+            semi["kg_saldo"] = pd.to_numeric(semi["kg_saldo"], errors="coerce").fillna(0)
+            semi_disp = semi[semi["kg_saldo"] > 0]
+            if semi_disp.empty:
+                st.info("No hay kg disponibles en tanques para trasladar.")
+            else:
+                lote_sel = st.selectbox(
+                    "Lote semielaborado a trasladar",
+                    semi_disp["lote_semielaborado_id"],
+                    format_func=lambda x: (
+                        f"{x} — {semi_disp.set_index('lote_semielaborado_id').loc[x, 'tipo_producto']} "
+                        f"({semi_disp.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.1f} kg disponibles)"
+                    ),
+                    key="granel_lote_sel",
+                )
+                fila_lote = semi_disp.set_index("lote_semielaborado_id").loc[lote_sel]
+                saldo_disp = float(fila_lote["kg_saldo"])
+                tipo_producto_gr = str(fila_lote["tipo_producto"])
+
+                kg_a_trasladar = st.number_input(
+                    f"Kg a trasladar al recipiente (máx {saldo_disp:.1f} kg)",
+                    min_value=0.1, max_value=saldo_disp, value=saldo_disp, step=0.1,
+                    key="granel_kg",
+                )
+                fecha_gr = st.date_input("Fecha de traslado", value=datetime.date.today(), key="granel_fecha")
+                obs_gr = st.text_input("Observaciones (opcional)", "", key="granel_obs")
+
+                st.info(
+                    f"Se guardarán **{kg_a_trasladar:.1f} kg** de **{tipo_producto_gr}** "
+                    f"en recipiente de acero inoxidable. Tendrán máximo **2 días** para envasar o desechar."
+                )
+
+                if st.button("📦 Trasladar a recipiente", type="primary", use_container_width=True):
+                    stock_id = db.siguiente_id("stock_a_granel", "GR", fecha_gr)
+                    db.append_row("stock_a_granel", {
+                        "stock_id": stock_id,
+                        "fecha_entrada": fecha_gr.isoformat(),
+                        "lote_origen": lote_sel,
+                        "tipo_producto": tipo_producto_gr,
+                        "kg_inicial": kg_a_trasladar,
+                        "kg_saldo": kg_a_trasladar,
+                        "usuario": username,
+                        "observaciones": obs_gr,
+                    })
+                    db.update_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel, {
+                        "kg_saldo": saldo_disp - kg_a_trasladar,
+                    })
+                    st.success(f"✅ {stock_id}: {kg_a_trasladar:.1f} kg de {tipo_producto_gr} trasladados a recipiente.")
+                    st.rerun()
 
     with tab_historial:
         df_hist = db.get_df("pasteurizacion_envasado")

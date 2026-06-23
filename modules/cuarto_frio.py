@@ -12,8 +12,9 @@ from utils.permisos import ve_costos
 
 def render(db, username, rol):
     st.title("Cuarto frío")
-    tab_ingreso, tab_despacho, tab_inventario, tab_vehiculos, tab_verificacion = st.tabs(
-        ["Ingreso desde envasado", "Despacho a cliente", "Inventario actual", "🚚 Cargas por vehículo", "✅ Verificación de cargas"]
+    tab_ingreso, tab_despacho, tab_inventario, tab_granel_cf, tab_vehiculos, tab_verificacion = st.tabs(
+        ["Ingreso desde envasado", "Despacho a cliente", "Inventario actual",
+         "🫙 Stock a granel", "🚚 Cargas por vehículo", "✅ Verificación de cargas"]
     )
 
     pasteurizado = db.get_df("pasteurizacion_envasado")
@@ -377,6 +378,131 @@ def render(db, username, rol):
                         f"{fila['tipo_producto']}\n{fila['presentacion_nombre']}",
                         f"{int(fila['saldo'])} unid."
                     )
+
+    with tab_granel_cf:
+        stock_df = db.get_df("stock_a_granel")
+        hoy_cf = datetime.date.today()
+        limite_venc = (hoy_cf + datetime.timedelta(days=1)).isoformat()
+        hoy_str_cf = hoy_cf.isoformat()
+
+        if stock_df.empty:
+            st.info("No hay stock a granel en cuarto frío.")
+        else:
+            stock_df["kg_saldo"] = pd.to_numeric(stock_df["kg_saldo"], errors="coerce").fillna(0)
+            stock_df["kg_inicial"] = pd.to_numeric(stock_df["kg_inicial"], errors="coerce").fillna(0)
+            stock_activo = stock_df[stock_df["kg_saldo"] > 0].copy()
+
+            if stock_activo.empty:
+                st.success("No hay stock a granel activo — todo fue procesado o desechado.")
+            else:
+                stock_activo["dias"] = stock_activo["fecha_entrada"].apply(
+                    lambda f: (hoy_cf - datetime.date.fromisoformat(str(f)[:10])).days
+                )
+                stock_activo["alerta"] = stock_activo["dias"].apply(
+                    lambda d: "🔴 VENCIDO" if d >= 2 else ("🟡 Vence hoy" if d == 1 else "🟢 OK")
+                )
+                vencidos = stock_activo[stock_activo["dias"] >= 2]
+                proximos = stock_activo[stock_activo["dias"] == 1]
+                if not vencidos.empty:
+                    st.error(f"⚠️ {len(vencidos)} recipiente(s) con más de 2 días — hay que envasar o desechar de inmediato.")
+                if not proximos.empty:
+                    st.warning(f"🟡 {len(proximos)} recipiente(s) vencen hoy — último día para usarlos.")
+
+                st.dataframe(
+                    stock_activo[["stock_id", "fecha_entrada", "lote_origen", "tipo_producto",
+                                  "kg_inicial", "kg_saldo", "dias", "alerta"]].rename(columns={
+                        "stock_id": "Recipiente", "fecha_entrada": "Fecha entrada",
+                        "lote_origen": "Lote origen", "tipo_producto": "Tipo",
+                        "kg_inicial": "Kg inicial", "kg_saldo": "Kg disponibles",
+                        "dias": "Días en CF", "alerta": "Estado",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+
+        st.divider()
+        st.markdown("##### Acción sobre un recipiente")
+        stock_df2 = db.get_df("stock_a_granel")
+        if not stock_df2.empty:
+            stock_df2["kg_saldo"] = pd.to_numeric(stock_df2["kg_saldo"], errors="coerce").fillna(0)
+            stock_activo2 = stock_df2[stock_df2["kg_saldo"] > 0]
+        else:
+            stock_activo2 = pd.DataFrame()
+
+        if stock_activo2.empty:
+            st.info("No hay recipientes activos para operar.")
+        else:
+            stock_sel = st.selectbox(
+                "Selecciona el recipiente",
+                stock_activo2["stock_id"],
+                format_func=lambda x: (
+                    f"{x} — {stock_activo2.set_index('stock_id').loc[x, 'tipo_producto']} "
+                    f"({stock_activo2.set_index('stock_id').loc[x, 'kg_saldo']:.1f} kg)"
+                ),
+                key="granel_accion_sel",
+            )
+            fila_stock = stock_activo2.set_index("stock_id").loc[stock_sel]
+            kg_disp_stock = float(fila_stock["kg_saldo"])
+            tipo_stock = str(fila_stock["tipo_producto"])
+            lote_origen_stock = str(fila_stock["lote_origen"])
+
+            accion = st.radio(
+                "¿Qué quieres hacer con este recipiente?",
+                ["🔄 Pasar a producción (próximo turno)", "🗑️ Desechar"],
+                key="granel_accion",
+            )
+
+            kg_accion = st.number_input(
+                f"Kg a procesar (máx {kg_disp_stock:.1f} kg)",
+                min_value=0.1, max_value=kg_disp_stock, value=kg_disp_stock, step=0.1,
+                key="granel_kg_accion",
+            )
+
+            if accion == "🔄 Pasar a producción (próximo turno)":
+                st.caption(
+                    "Se creará un nuevo lote semielaborado con esos kg — "
+                    "aparecerá en el inventario de tanques para el siguiente turno."
+                )
+                fecha_retorno = st.date_input("Fecha de retorno a producción", value=hoy_cf, key="granel_fecha_retorno")
+                if st.button("🔄 Confirmar retorno a producción", type="primary"):
+                    nuevo_lote_id = db.siguiente_id("produccion_semielaborados", lote_origen_stock[:2], fecha_retorno)
+                    db.append_row("produccion_semielaborados", {
+                        "lote_semielaborado_id": nuevo_lote_id,
+                        "fecha": fecha_retorno.isoformat(),
+                        "orden_produccion": "",
+                        "tipo_producto": tipo_stock,
+                        "categoria_id": "",
+                        "cubetas_totales": 0,
+                        "kg_teorico_bruto": 0,
+                        "kg_liquido_teorico": 0,
+                        "kg_real": kg_accion,
+                        "clara_teorica_kg": 0, "clara_real_kg": 0,
+                        "yema_teorica_kg": 0, "yema_real_kg": 0,
+                        "cascara_teorica_kg": 0, "cascara_real_kg": 0,
+                        "agua_litros": 0,
+                        "costo_huevo": 0, "costo_insumos": 0, "costo_mano_obra": 0,
+                        "costo_total": 0, "costo_unitario_kg": 0,
+                        "kg_saldo": kg_accion,
+                        "balance_masa_pct": 0, "turno": "",
+                        "usuario": username,
+                        "observaciones": f"Retorno desde recipiente {stock_sel}",
+                    })
+                    nuevo_saldo_stock = kg_disp_stock - kg_accion
+                    db.update_row("stock_a_granel", "stock_id", stock_sel, {"kg_saldo": nuevo_saldo_stock})
+                    st.success(f"✅ {kg_accion:.1f} kg devueltos a producción como lote {nuevo_lote_id}.")
+                    st.rerun()
+
+            else:  # Desechar
+                causa_desc = st.text_area("Motivo del desecho", key="granel_motivo_deseche")
+                if st.button("🗑️ Confirmar desecho", type="primary"):
+                    if not causa_desc.strip():
+                        st.error("Escribe el motivo del desecho antes de confirmar.")
+                    else:
+                        db.update_row("stock_a_granel", "stock_id", stock_sel, {
+                            "kg_saldo": kg_disp_stock - kg_accion,
+                            "observaciones": f"Desechado: {causa_desc}",
+                        })
+                        st.success(f"🗑️ {kg_accion:.1f} kg de {tipo_stock} desechados del recipiente {stock_sel}.")
+                        st.rerun()
 
     with tab_vehiculos:
         salidas = db.get_df("cuarto_frio_salidas")

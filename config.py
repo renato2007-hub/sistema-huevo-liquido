@@ -35,6 +35,11 @@ SHEET_SCHEMAS = {
         "descripcion_error", "usuario", "observaciones",
     ],
 
+    "stock_a_granel": [
+        "stock_id", "fecha_entrada", "lote_origen", "tipo_producto",
+        "kg_inicial", "kg_saldo", "usuario", "observaciones",
+    ],
+
     "pedidos": [
         "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
         "tipo_producto", "presentacion_id", "unidades_solicitadas", "cantidad_kg",
