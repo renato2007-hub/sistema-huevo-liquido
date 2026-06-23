@@ -215,47 +215,40 @@ def render(db, username, rol):
     st.markdown("### 🎯 Resumen del período")
     st.caption(f"Comparado contra el período anterior equivalente: {desde_ant.strftime('%d/%m')} → {hasta_ant.strftime('%d/%m')}")
 
-    # KPIs por tipo de producto + estado pasteurización desde pasteurizacion_envasado
-    if not prod_costos.empty and "tipo_producto" in prod_costos.columns:
-        # Kg en tanque (semielaborado sin pasteurizar) por tipo
-        kg_tanque_tipo = prod_costos.groupby("tipo_producto")["kg_real"].sum()
-        costo_tipo = prod_costos.groupby("tipo_producto")["costo_total"].sum()
+    # KPIs del resumen: solo productos terminados (pasteurizacion_envasado)
+    # El costo incluye envases, etiquetas, tapas, etc. — no semielaborados en el tanque
+    if not past_f.empty and not produccion.empty:
+        past_resumen = past_f.merge(
+            produccion[["lote_semielaborado_id", "tipo_producto"]],
+            on="lote_semielaborado_id", how="left",
+        )
+        past_resumen["kg_usado"]       = pd.to_numeric(past_resumen["kg_usado"], errors="coerce").fillna(0)
+        past_resumen["costo_unitario"] = pd.to_numeric(past_resumen.get("costo_unitario", 0), errors="coerce").fillna(0)
+        past_resumen["costo_total_lote"] = past_resumen["kg_usado"] * past_resumen["costo_unitario"]
+        past_resumen["pasteurizado_bool"] = past_resumen["pasteurizado"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
 
-        # Kg ya pasteurizados y envasados, por tipo (join con pasteurizacion)
-        kg_past_tipo = {}
-        if not past_f.empty and not produccion.empty:
-            past_join = past_f.merge(
-                produccion[["lote_semielaborado_id","tipo_producto"]], on="lote_semielaborado_id", how="left"
-            )
-            past_join["kg_usado"] = pd.to_numeric(past_join["kg_usado"], errors="coerce").fillna(0)
-            past_join["pasteurizado_bool"] = past_join["pasteurizado"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
-            for tipo in past_join["tipo_producto"].dropna().unique():
-                sub = past_join[past_join["tipo_producto"]==tipo]
-                kg_past_tipo[f"{tipo} pasteurizado{'a' if tipo in ('Clara','Yema') else ''}"] = sub[sub["pasteurizado_bool"]]["kg_usado"].sum()
-                kg_sin = sub[~sub["pasteurizado_bool"]]["kg_usado"].sum()
-                if kg_sin > 0:
-                    kg_past_tipo[f"{tipo} sin pasteurizar"] = kg_sin
+        def _etiq_producto(tipo, past_bool):
+            if past_bool:
+                sufijo = "a" if tipo in ("Clara","Yema") else "o"
+                return f"{tipo} pasteurizad{sufijo}"
+            return f"{tipo} sin pasteurizar"
 
-        # Combinar en un dict etiqueta -> kg
-        etiquetas_kg = {}
-        for tipo, kg in kg_tanque_tipo.items():
-            if kg > 0:
-                etiquetas_kg[tipo] = {"kg": kg, "costo": costo_tipo.get(tipo, 0)}
+        past_resumen["etiqueta"] = past_resumen.apply(
+            lambda r: _etiq_producto(r.get("tipo_producto",""), r["pasteurizado_bool"]), axis=1
+        )
+        resumen_prod = past_resumen.groupby("etiqueta").agg(
+            kg=("kg_usado","sum"), costo_total=("costo_total_lote","sum")
+        ).reset_index()
+        resumen_prod = resumen_prod[resumen_prod["kg"] > 0]
 
-        all_labels = list(etiquetas_kg.keys()) + [k for k in kg_past_tipo if k not in etiquetas_kg]
-        if all_labels:
-            cols_tipo = st.columns(min(len(all_labels), 4))
-            idx = 0
-            for etiq, vals in etiquetas_kg.items():
-                costo_kg = vals["costo"]/vals["kg"] if vals["kg"] > 0 else 0
-                _kpi_card(cols_tipo[idx % len(cols_tipo)], "🥚", f"Kg {etiq}", f"{vals['kg']:,.1f} kg",
+        if not resumen_prod.empty:
+            cols_prod = st.columns(min(len(resumen_prod), 4))
+            for col, (_, row) in zip(cols_prod, resumen_prod.iterrows()):
+                icono = "✅" if "sin" not in row["etiqueta"] else "🔴"
+                costo_kg = row["costo_total"] / row["kg"] if row["kg"] > 0 else 0
+                _kpi_card(col, icono, row["etiqueta"],
+                          f"{row['kg']:,.1f} kg",
                           sufijo=f"Costo prom. ${costo_kg:,.3f}/kg" if ve_costos(rol) else None)
-                idx += 1
-            for etiq, kg in kg_past_tipo.items():
-                if kg > 0:
-                    icono = "✅" if "pasteurizado" in etiq and "sin" not in etiq else "🔴"
-                    _kpi_card(cols_tipo[idx % len(cols_tipo)], icono, f"Kg {etiq}", f"{kg:,.1f} kg")
-                    idx += 1
 
     st.write("")
     r1, r2, r3, r4 = st.columns(4)
