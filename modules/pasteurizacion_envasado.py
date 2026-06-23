@@ -304,7 +304,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
 def render(db, username, rol):
     st.title("Pasteurización y envasado")
-    tab_nueva, tab_disponibles = st.tabs(["Nuevo lote envasado", "Producto terminado disponible"])
+    tab_nueva, tab_disponibles, tab_historial = st.tabs(["Nuevo lote envasado", "Producto terminado disponible", "📋 Historial"])
 
     semielaborados = db.get_df("produccion_semielaborados")
     presentaciones = db.get_df("presentaciones")
@@ -323,17 +323,26 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de producto terminado.")
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
-            columnas_disp = [
-                "lote_producto_id", "fecha", "presentacion_id", "estado",  "tapa_id",
-                "etiqueta_id", "cantidad_cartones", "liner_id", "unidades_saldo",
-            ]
-            if ve_costos(rol):
-                columnas_disp.append("costo_unitario")
             disponible_df = df[df["unidades_saldo"] > 0].copy()
             disponible_df["estado"] = disponible_df["pasteurizado"].astype(str).str.upper().isin(
                 ["TRUE", "1", "SI", "SÍ"]
             ).map({True: "✅ Pasteurizado", False: "🔴 Sin pasteurizar"})
-            st.dataframe(disponible_df[columnas_disp], use_container_width=True)
+            if not semielaborados.empty:
+                disponible_df = disponible_df.merge(
+                    semielaborados[["lote_semielaborado_id", "tipo_producto"]],
+                    on="lote_semielaborado_id", how="left",
+                )
+                disponible_df["tipo_producto"] = disponible_df["tipo_producto"].fillna("—")
+            else:
+                disponible_df["tipo_producto"] = "—"
+            disponible_df = disponible_df.rename(columns={"lote_semielaborado_id": "lote_origen"})
+            columnas_disp = [
+                "lote_producto_id", "fecha", "lote_origen", "tipo_producto",
+                "presentacion_id", "estado", "etiqueta_id", "unidades_saldo",
+            ]
+            if ve_costos(rol):
+                columnas_disp.append("costo_unitario")
+            st.dataframe(disponible_df[[c for c in columnas_disp if c in disponible_df.columns]], use_container_width=True)
 
             st.markdown("##### Kg totales disponibles por producto")
             resumen_kg = disponible_df.copy()
@@ -353,12 +362,65 @@ def render(db, username, rol):
                 resumen_kg["tipo_producto"] = ""
             resumen_kg["tipo_producto"] = resumen_kg["tipo_producto"].fillna("Sin clasificar")
             resumen_kg["kg"] = resumen_kg["unidades_saldo"] * resumen_kg["kg_nominal"]
+            resumen_kg["pasteurizado_bool"] = resumen_kg["pasteurizado"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
 
-            por_tipo_kg = resumen_kg.groupby("tipo_producto")["kg"].sum()
+            def _nombre_producto(tipo, past):
+                nombre = {"Huevo entero": "Huevo entero", "Clara": "Clara", "Yema": "Yema"}.get(tipo, tipo)
+                return f"{nombre} pasteurizado{'a' if nombre in ('Clara','Yema') else ''}" if past else f"{nombre} sin pasteurizar"
+
+            resumen_kg["nombre_producto"] = resumen_kg.apply(
+                lambda r: _nombre_producto(r["tipo_producto"], r["pasteurizado_bool"]), axis=1
+            )
+            por_tipo_kg = resumen_kg.groupby("nombre_producto")["kg"].sum()
             por_tipo_kg = por_tipo_kg[por_tipo_kg > 0]
             if por_tipo_kg.empty:
                 st.info("No hay datos suficientes para calcular el total en kg.")
             else:
                 cols_kg = st.columns(len(por_tipo_kg))
-                for col, (tipo, kg) in zip(cols_kg, por_tipo_kg.items()):
-                    col.metric(tipo, f"{kg:,.1f} kg")
+                for col, (nombre, kg) in zip(cols_kg, por_tipo_kg.items()):
+                    col.metric(nombre, f"{kg:,.1f} kg")
+
+    with tab_historial:
+        df_hist = db.get_df("pasteurizacion_envasado")
+        if df_hist.empty:
+            st.info("Todavía no hay lotes registrados.")
+        else:
+            df_hist["unidades_saldo"] = pd.to_numeric(df_hist["unidades_saldo"], errors="coerce").fillna(0)
+            df_hist["unidades_reales"] = pd.to_numeric(df_hist["unidades_reales"], errors="coerce").fillna(0)
+            df_hist["estado"] = df_hist["pasteurizado"].astype(str).str.upper().isin(
+                ["TRUE", "1", "SI", "SÍ"]
+            ).map({True: "✅ Pasteurizado", False: "🔴 Sin pasteurizar"})
+            if not semielaborados.empty:
+                df_hist = df_hist.merge(
+                    semielaborados[["lote_semielaborado_id", "tipo_producto"]],
+                    on="lote_semielaborado_id", how="left",
+                )
+                df_hist["tipo_producto"] = df_hist["tipo_producto"].fillna("—")
+            else:
+                df_hist["tipo_producto"] = "—"
+            df_hist = df_hist.rename(columns={"lote_semielaborado_id": "lote_origen"})
+            df_hist["unidades_despachadas"] = df_hist["unidades_reales"] - df_hist["unidades_saldo"]
+            df_hist["saldo_estado"] = df_hist["unidades_saldo"].apply(
+                lambda s: "✅ Despachado completo" if s == 0 else f"🟡 {int(s)} en stock"
+            )
+            c1, c2 = st.columns(2)
+            filtro_tipo = c1.selectbox("Tipo de producto", ["Todos"] + sorted(df_hist["tipo_producto"].unique().tolist()), key="hist_tipo")
+            filtro_estado = c2.selectbox("Estado", ["Todos", "En stock", "Despachado completo"], key="hist_estado")
+            df_mostrar = df_hist.copy()
+            if filtro_tipo != "Todos":
+                df_mostrar = df_mostrar[df_mostrar["tipo_producto"] == filtro_tipo]
+            if filtro_estado == "En stock":
+                df_mostrar = df_mostrar[df_mostrar["unidades_saldo"] > 0]
+            elif filtro_estado == "Despachado completo":
+                df_mostrar = df_mostrar[df_mostrar["unidades_saldo"] == 0]
+            cols_hist = ["lote_producto_id", "fecha", "lote_origen", "tipo_producto",
+                         "presentacion_id", "estado", "unidades_reales", "unidades_despachadas", "saldo_estado"]
+            st.dataframe(
+                df_mostrar[[c for c in cols_hist if c in df_mostrar.columns]].sort_values("fecha", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                f"Total: {len(df_mostrar)} lotes | "
+                f"En stock: {(df_mostrar['unidades_saldo'] > 0).sum()} | "
+                f"Despachados: {(df_mostrar['unidades_saldo'] == 0).sum()}"
+            )
