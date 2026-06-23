@@ -247,22 +247,9 @@ def render(db, username, rol):
                 f"pero se necesitan {cubetas_necesarias}. Ajusta antes de guardar."
             )
 
-        st.markdown("**Personal que trabajó la jornada**")
-        st.caption("Elige quiénes trabajaron y la hora de entrada/salida de cada uno — el sistema calcula las horas totales y cuántas son nocturnas (19:00-05:00).")
-        opciones_personal_nombres = list(personal["nombre"]) if not personal.empty else []
-        mapa_nombre_a_personal_id = dict(zip(personal["nombre"], personal["personal_id"])) if not personal.empty else {}
-
-        personas_seleccionadas = st.multiselect(
-            "Personas que trabajaron esta jornada", opciones_personal_nombres, key="personas_seleccionadas_prod",
-        )
+        st.caption("ℹ️ El registro de personal y horas se hace en **👥 Personal y turnos** — se enlaza por fecha y turno.")
         filas_personal_horas = []
-        for nombre_persona in personas_seleccionadas:
-            c1, c2, c3 = st.columns([2, 1, 1])
-            c1.markdown(f"**{nombre_persona}**")
-            entrada_p = c2.time_input("Hora entrada", value=None, key=f"prod_entrada_{nombre_persona}")
-            salida_p = c3.time_input("Hora salida", value=None, key=f"prod_salida_{nombre_persona}")
-            filas_personal_horas.append({"nombre": nombre_persona, "hora_entrada": entrada_p, "hora_salida": salida_p})
-
+        costo_mano_obra_total = 0.0
         agua_litros = 0.0
 
         if not categorias.empty and categoria_id in categorias["categoria_id"].values:
@@ -364,26 +351,7 @@ def render(db, username, rol):
 
             costo_mano_obra_total = 0.0
             detalle_personal = []
-            for fila in filas_personal_horas:
-                nombre_seleccionado = fila["nombre"]
-                personal_id_real = mapa_nombre_a_personal_id.get(nombre_seleccionado, nombre_seleccionado)
-                if fila["hora_entrada"] is None or fila["hora_salida"] is None:
-                    st.error(
-                        f"Falta hora de entrada o salida para {nombre_seleccionado}. "
-                        f"Completa ambas antes de guardar."
-                    )
-                    return
-                costo_hora = float(personal.set_index("personal_id").loc[personal_id_real, "costo_hora"])
-                horas, horas_nocturnas = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
-                costo_mano_obra_total += costo_hora * horas
-                detalle_personal.append({
-                    "personal_id": personal_id_real,
-                    "hora_entrada": fila["hora_entrada"].strftime("%H:%M"),
-                    "hora_salida": fila["hora_salida"].strftime("%H:%M"),
-                    "horas": horas,
-                    "horas_nocturnas": horas_nocturnas,
-                    "costo_calculado": costo_hora * horas,
-                })
+            detalle_personal = []
 
             costo_total = costo_huevo_total + costo_insumos_total + costo_mano_obra_total
 

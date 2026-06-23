@@ -35,6 +35,11 @@ SHEET_SCHEMAS = {
         "descripcion_error", "usuario", "observaciones",
     ],
 
+    "jornadas_personal": [
+        "jornada_id", "fecha", "turno_id", "personal_id", "hora_entrada", "hora_salida",
+        "horas", "horas_nocturnas", "costo_calculado", "usuario", "observaciones",
+    ],
+
     "stock_a_granel": [
         "stock_id", "fecha_entrada", "lote_origen", "tipo_producto",
         "kg_inicial", "kg_saldo", "usuario", "observaciones",

@@ -13,6 +13,7 @@ from modules import (
     supervision,
     solicitud_compra,
     pedidos,
+    personal_turnos,
     dashboard,
     trazabilidad,
     catalogos,
@@ -185,6 +186,8 @@ elif modulo == "Supervisión y calidad":
     supervision.render(db, username, rol)
 elif modulo == "Trazabilidad":
     trazabilidad.render(db, username, rol)
+elif modulo == "Personal y turnos":
+    personal_turnos.render(db, username, rol)
 elif modulo == "Solicitud MP e Insumos":
     solicitud_compra.render(db, username, rol)
 elif modulo == "Recepción de pedidos":
