@@ -314,9 +314,17 @@ def render(db, username, rol):
             else:
                 consumo_f2 = consumo_f.copy()
                 consumo_f2["cubetas_usadas"] = pd.to_numeric(consumo_f2["cubetas_usadas"], errors="coerce").fillna(0)
-                consumo_f2 = consumo_f2.merge(
-                    produccion[["lote_semielaborado_id","fecha"]], on="lote_semielaborado_id", how="left"
-                ) if not produccion.empty else consumo_f2
+                if "fecha" not in consumo_f2.columns and not produccion.empty:
+                    consumo_f2 = consumo_f2.merge(
+                        produccion[["lote_semielaborado_id","fecha"]], on="lote_semielaborado_id", how="left"
+                    )
+                elif "fecha" not in consumo_f2.columns:
+                    consumo_f2["fecha"] = pd.NaT
+                # si el merge creó fecha_x / fecha_y, usar la de produccion
+                if "fecha_y" in consumo_f2.columns:
+                    consumo_f2["fecha"] = consumo_f2["fecha_y"]
+                elif "fecha_x" in consumo_f2.columns:
+                    consumo_f2["fecha"] = consumo_f2["fecha_x"]
                 _grafico_linea_tiempo(consumo_f2, "fecha", "cubetas_usadas", VERDE, "Cubetas consumidas por día")
                 total_cubetas_f = consumo_f2["cubetas_usadas"].sum()
                 st.caption(f"Total período: **{total_cubetas_f:,.0f} cubetas** — {total_cubetas_f*30:,.0f} huevos")
