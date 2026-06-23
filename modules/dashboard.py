@@ -222,9 +222,8 @@ def render(db, username, rol):
             produccion[["lote_semielaborado_id", "tipo_producto"]],
             on="lote_semielaborado_id", how="left",
         )
-        past_resumen["kg_usado"]       = pd.to_numeric(past_resumen["kg_usado"], errors="coerce").fillna(0)
-        past_resumen["costo_unitario"] = pd.to_numeric(past_resumen.get("costo_unitario", 0), errors="coerce").fillna(0)
-        past_resumen["costo_total_lote"] = past_resumen["kg_usado"] * past_resumen["costo_unitario"]
+        past_resumen["kg_usado"]        = pd.to_numeric(past_resumen["kg_usado"], errors="coerce").fillna(0)
+        past_resumen["costo_total_lote"] = pd.to_numeric(past_resumen.get("costo_total", 0), errors="coerce").fillna(0)
         past_resumen["pasteurizado_bool"] = past_resumen["pasteurizado"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
 
         def _etiq_producto(tipo, past_bool):
