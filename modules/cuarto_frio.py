@@ -156,15 +156,34 @@ def render(db, username, rol):
                         opciones_pedido.append(etiqueta)
                         mapa_pedido_cliente[etiqueta] = (pr["pedido_id"], pr["cliente_id"])
 
-                # ── Opciones de lote disponible ──
-                opciones_entrada = [
-                    f"{r['entrada_id']} | {r['presentacion_nombre']} | saldo: {int(r['saldo'])} | vence: {str(r['fecha_vencimiento'])[:10]}"
-                    for _, r in disponibles.iterrows()
-                ]
-                mapa_entrada = {
-                    f"{r['entrada_id']} | {r['presentacion_nombre']} | saldo: {int(r['saldo'])} | vence: {str(r['fecha_vencimiento'])[:10]}": r["entrada_id"]
-                    for _, r in disponibles.iterrows()
-                }
+                # ── Opciones de lote disponible — descontando lo ya comprometido ──
+                lineas_acum_pre = st.session_state.get(f"lineas_despacho_{vehiculo_id}_{fecha}", [])
+                comprometido_por_lote = {}
+                for l in lineas_acum_pre:
+                    comprometido_por_lote[l["entrada_id"]] = comprometido_por_lote.get(l["entrada_id"], 0) + l["cantidad"]
+
+                # Mapa de lote_origen desde pasteurizacion
+                mapa_lote_origen = {}
+                if not pasteurizado.empty and "lote_producto_id" in pasteurizado.columns and "lote_semielaborado_id" in pasteurizado.columns:
+                    mapa_lote_origen = dict(zip(pasteurizado["lote_producto_id"], pasteurizado["lote_semielaborado_id"]))
+
+                opciones_entrada = []
+                mapa_entrada = {}
+                mapa_entrada_info = {}
+                for _, r in disponibles.iterrows():
+                    saldo_libre = int(r["saldo"]) - int(comprometido_por_lote.get(r["entrada_id"], 0))
+                    if saldo_libre <= 0:
+                        continue
+                    lote_origen = mapa_lote_origen.get(r.get("lote_producto_id", ""), r.get("lote_origen", ""))
+                    etiqueta = f"{r['presentacion_nombre']} | lote: {lote_origen or r['entrada_id']} | disponible: {saldo_libre} | vence: {str(r['fecha_vencimiento'])[:10]}"
+                    opciones_entrada.append(etiqueta)
+                    mapa_entrada[etiqueta] = r["entrada_id"]
+                    mapa_entrada_info[r["entrada_id"]] = {
+                        "presentacion": r["presentacion_nombre"],
+                        "lote_origen": lote_origen or r["entrada_id"],
+                        "saldo_libre": saldo_libre,
+                    }
+
                 mapa_cliente_id = dict(zip(clientes["nombre"], clientes["cliente_id"]))
 
                 # ── Acumulador en session_state ──
@@ -174,45 +193,51 @@ def render(db, username, rol):
 
                 # ── Formulario de una línea ──
                 st.markdown("##### ➕ Agregar línea a la carga")
-                ca, cb, cc, cd = st.columns([2, 3, 1, 2])
-                cliente_sel = ca.selectbox("Cliente", ["— Elige —"] + list(clientes["nombre"]), key="desp_cliente")
-                entrada_sel = cb.selectbox("Lote / Presentación", opciones_entrada, key="desp_entrada")
-                cantidad_sel = cc.number_input("Cant.", min_value=1, step=1, key="desp_cantidad")
-                pedido_sel = cd.selectbox("Pedido (opcional)", opciones_pedido, key="desp_pedido")
+                if not opciones_entrada:
+                    st.warning("No hay saldo disponible (o todo ya está comprometido en la carga actual).")
+                else:
+                    ca, cb, cc, cd = st.columns([2, 3, 1, 2])
+                    cliente_sel = ca.selectbox("Cliente", ["— Elige —"] + list(clientes["nombre"]), key="desp_cliente")
+                    entrada_sel = cb.selectbox("Lote / Presentación", opciones_entrada, key="desp_entrada")
+                    cantidad_sel = cc.number_input("Cant.", min_value=1, step=1, key="desp_cantidad")
+                    pedido_sel = cd.selectbox("Pedido (opcional)", opciones_pedido, key="desp_pedido")
 
-                if st.button("➕ Agregar a la carga", use_container_width=True):
-                    if cliente_sel == "— Elige —":
-                        st.error("Selecciona un cliente.")
-                    else:
-                        entrada_id_sel = mapa_entrada.get(entrada_sel, "")
-                        saldo_disp = float(disponibles.set_index("entrada_id").loc[entrada_id_sel, "saldo"])
-                        ya_comprometido = sum(
-                            l["cantidad"] for l in st.session_state[clave_lineas]
-                            if l["entrada_id"] == entrada_id_sel
-                        )
-                        saldo_real = saldo_disp - ya_comprometido
-                        if cantidad_sel > saldo_real:
-                            st.error(f"Solo quedan {saldo_real:.0f} unidades disponibles de ese lote.")
+                    if st.button("➕ Agregar a la carga", use_container_width=True):
+                        if cliente_sel == "— Elige —":
+                            st.error("Selecciona un cliente.")
                         else:
-                            pedido_id_real = ""
-                            if pedido_sel != "— Sin pedido —" and pedido_sel in mapa_pedido_cliente:
-                                pedido_id_real = mapa_pedido_cliente[pedido_sel][0]
-                            st.session_state[clave_lineas].append({
-                                "cliente": cliente_sel,
-                                "cliente_id": mapa_cliente_id.get(cliente_sel, cliente_sel),
-                                "entrada_id": entrada_id_sel,
-                                "presentacion": entrada_sel.split("|")[1].strip(),
-                                "cantidad": cantidad_sel,
-                                "pedido_ref": pedido_id_real,
-                            })
-                            st.rerun()
+                            entrada_id_sel = mapa_entrada.get(entrada_sel, "")
+                            info_ent = mapa_entrada_info.get(entrada_id_sel, {})
+                            saldo_libre = info_ent.get("saldo_libre", 0)
+                            if cantidad_sel > saldo_libre:
+                                st.error(f"Solo quedan {saldo_libre} unidades disponibles de ese lote.")
+                            else:
+                                pedido_id_real = ""
+                                if pedido_sel != "— Sin pedido —" and pedido_sel in mapa_pedido_cliente:
+                                    pedido_id_real = mapa_pedido_cliente[pedido_sel][0]
+                                st.session_state[clave_lineas].append({
+                                    "cliente": cliente_sel,
+                                    "cliente_id": mapa_cliente_id.get(cliente_sel, cliente_sel),
+                                    "entrada_id": entrada_id_sel,
+                                    "presentacion": info_ent.get("presentacion", ""),
+                                    "lote_origen": info_ent.get("lote_origen", ""),
+                                    "cantidad": cantidad_sel,
+                                    "pedido_ref": pedido_id_real,
+                                })
+                                st.rerun()
 
                 # ── Tabla acumulada ──
                 lineas_acum = st.session_state[clave_lineas]
                 if lineas_acum:
                     st.markdown("##### 📋 Carga armada hasta ahora")
-                    df_acum = pd.DataFrame(lineas_acum)[["cliente", "presentacion", "cantidad", "pedido_ref"]]
-                    df_acum.columns = ["Cliente", "Presentación", "Unidades", "Pedido"]
+                    df_acum = pd.DataFrame(lineas_acum)
+                    df_acum["Pedido"] = df_acum["pedido_ref"].replace("", "—")
+                    df_acum = df_acum.rename(columns={
+                        "cliente": "Cliente",
+                        "presentacion": "Presentación",
+                        "lote_origen": "Lote origen",
+                        "cantidad": "Unidades",
+                    })[["Cliente", "Presentación", "Lote origen", "Unidades", "Pedido"]]
                     st.dataframe(df_acum, use_container_width=True, hide_index=True)
                     st.info(f"📦 Total: **{sum(l['cantidad'] for l in lineas_acum)} unidades** en {len(lineas_acum)} línea(s)")
 
