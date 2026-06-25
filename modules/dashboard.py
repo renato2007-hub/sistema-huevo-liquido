@@ -426,9 +426,11 @@ def render(db, username, rol):
             st.markdown("##### 👷 Horas de trabajo por persona")
             st.caption("Normales ≤8h día normal · Extras >8h · Dobles = feriado sin compensar · Compensadas = feriado con descanso · Nocturnas = 19:00-05:00")
 
-            hh_f["horas"] = pd.to_numeric(hh_f.get("horas"), errors="coerce").fillna(0)
-            hh_f["horas_nocturnas"] = pd.to_numeric(hh_f.get("horas_nocturnas"), errors="coerce").fillna(0)
-            hh_f["costo_calculado"] = pd.to_numeric(hh_f.get("costo_calculado"), errors="coerce").fillna(0)
+            for _col in ["horas", "horas_nocturnas", "costo_calculado"]:
+                if _col in hh_f.columns:
+                    hh_f[_col] = pd.to_numeric(hh_f[_col], errors="coerce").fillna(0)
+                else:
+                    hh_f[_col] = 0.0
 
             costo_por_persona     = hh_f.groupby("personal_id")["costo_calculado"].sum() if not hh_f.empty else pd.Series(dtype=float)
             nocturnas_por_persona = hh_f.groupby("personal_id")["horas_nocturnas"].sum() if not hh_f.empty else pd.Series(dtype=float)
