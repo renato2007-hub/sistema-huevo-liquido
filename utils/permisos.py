@@ -33,9 +33,9 @@ _MODULOS_OPERATIVOS = {
 }
 
 MODULOS_PERMITIDOS = {
-    "admin": _MODULOS_OPERATIVOS | {"Dashboard", "Trazabilidad", "Supervisión y calidad", "Solicitud MP e Insumos", "Recepción de pedidos", "Personal y turnos", "Catálogos y configuración"},
-    "gerencia": _MODULOS_OPERATIVOS | {"Dashboard", "Trazabilidad", "Supervisión y calidad", "Solicitud MP e Insumos", "Recepción de pedidos", "Personal y turnos"},
-    "jefe_planta": _MODULOS_OPERATIVOS | {"Dashboard", "Trazabilidad", "Supervisión y calidad", "Solicitud MP e Insumos", "Recepción de pedidos", "Personal y turnos"},
+    "admin": _MODULOS_OPERATIVOS | {"Dashboard", "Trazabilidad", "Supervisión y calidad", "Solicitud MP e Insumos", "Recepción de pedidos", "Plan de producción", "Personal y turnos", "Catálogos y configuración"},
+    "gerencia": _MODULOS_OPERATIVOS | {"Dashboard", "Trazabilidad", "Supervisión y calidad", "Solicitud MP e Insumos", "Recepción de pedidos", "Plan de producción", "Personal y turnos"},
+    "jefe_planta": _MODULOS_OPERATIVOS | {"Dashboard", "Trazabilidad", "Supervisión y calidad", "Solicitud MP e Insumos", "Recepción de pedidos", "Plan de producción", "Personal y turnos"},
     "supervisor": set(_MODULOS_OPERATIVOS),
 }
 

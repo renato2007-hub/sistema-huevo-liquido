@@ -13,6 +13,7 @@ from modules import (
     supervision,
     solicitud_compra,
     pedidos,
+    plan_produccion,
     personal_turnos,
     dashboard,
     trazabilidad,
@@ -88,6 +89,7 @@ if puede_ver_modulo(rol, "Solicitud MP e Insumos") or puede_ver_modulo(rol, "Rec
     _categoria("📋&nbsp;&nbsp;PLANIFICACIÓN", "#2D6CA2")
     _boton_modulo("Solicitud MP e Insumos", "📑")
     _boton_modulo("Recepción de pedidos", "🧾")
+    _boton_modulo("Plan de producción", "📅")
 
 _categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
 _boton_modulo("Bodega de materia prima", "🥚")
@@ -189,6 +191,8 @@ elif modulo == "Trazabilidad":
     trazabilidad.render(db, username, rol)
 elif modulo == "Personal y turnos":
     personal_turnos.render(db, username, rol)
+elif modulo == "Plan de producción":
+    plan_produccion.render(db, username, rol)
 elif modulo == "Solicitud MP e Insumos":
     solicitud_compra.render(db, username, rol)
 elif modulo == "Recepción de pedidos":
