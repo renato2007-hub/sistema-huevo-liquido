@@ -261,7 +261,7 @@ def render(db, username, rol):
 
     tabs = st.tabs([
         "🥚 Materia prima", "🏭 Producción y costos", "👷 Personal",
-        "📦 Insumos y envases", "♻️ Residuos y mermas", "💧 Agua",
+        "📦 Insumos y envases", "♻️ Residuos y mermas", "💧 Agua", "💲 Costos por turno",
     ])
 
     # ======================== TAB: MATERIA PRIMA ========================
@@ -679,3 +679,455 @@ def render(db, username, rol):
                     _grafico_linea_tiempo(limp_agua, "fecha", "agua_litros", TEAL, "Agua en limpieza (L/día)")
                 else:
                     st.info("Sin datos de agua en limpieza.")
+
+    # ======================== TAB: COSTOS POR TURNO ========================
+    with tabs[6]:
+        import plotly.graph_objects as go
+
+        jornadas     = db.get_df("jornadas_personal")
+        turno_cat    = db.get_df("turnos")
+        past_full    = db.get_df("pasteurizacion_envasado")
+        limp_full    = db.get_df("limpieza_desinfeccion")
+        limp_det     = db.get_df("produccion_insumos")
+        consumo_full = db.get_df("consumo_mp_produccion")
+
+        def _num_col(df, col):
+            if df.empty or col not in df.columns:
+                return pd.Series(dtype=float)
+            return pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+        def _filtrar(df, desde, hasta):
+            if df.empty or "fecha" not in df.columns:
+                return df
+            fechas = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+            return df[(fechas >= desde) & (fechas <= hasta)].copy()
+
+        sub_turno, sub_dia, sub_tendencia = st.tabs([
+            "🔄 Por turno", "📅 Por día", "📈 Tendencia del período"
+        ])
+
+        # ── helpers comunes ──────────────────────────────────────────────
+        def _costo_mo_turno(jornadas_df, personal_cat_df, fecha, turno_id):
+            """Costo de operarios (no JEF_) del turno específico."""
+            if jornadas_df.empty:
+                return 0.0
+            f = jornadas_df[
+                (jornadas_df["fecha"].astype(str) == str(fecha)) &
+                (jornadas_df["turno_id"].astype(str) == str(turno_id))
+            ]
+            if f.empty:
+                return 0.0
+            # excluir JEF_* (overhead diario)
+            if not personal_cat_df.empty and "personal_id" in personal_cat_df.columns:
+                ids_jefes = set(personal_cat_df[personal_cat_df["personal_id"].str.startswith("JEF_")]["personal_id"])
+                f = f[~f["personal_id"].isin(ids_jefes)]
+            return _num_col(f, "costo_calculado").sum()
+
+        def _costo_mo_overhead_dia(jornadas_df, personal_cat_df, fecha):
+            """Costo de JEF_* para ese día (overhead)."""
+            if jornadas_df.empty:
+                return 0.0
+            f = jornadas_df[jornadas_df["fecha"].astype(str) == str(fecha)]
+            if f.empty or personal_cat_df.empty:
+                return 0.0
+            ids_jefes = set(personal_cat_df[personal_cat_df["personal_id"].str.startswith("JEF_")]["personal_id"])
+            f = f[f["personal_id"].isin(ids_jefes)]
+            return _num_col(f, "costo_calculado").sum()
+
+        def _personas_turno(jornadas_df, personal_cat_df, fecha, turno_id):
+            if jornadas_df.empty:
+                return []
+            f = jornadas_df[
+                (jornadas_df["fecha"].astype(str) == str(fecha)) &
+                (jornadas_df["turno_id"].astype(str) == str(turno_id))
+            ]
+            if f.empty:
+                return []
+            if not personal_cat_df.empty:
+                f = f.merge(personal_cat_df[["personal_id","nombre"]], on="personal_id", how="left")
+                f["nombre"] = f["nombre"].fillna(f["personal_id"])
+                return list(f["nombre"])
+            return list(f["personal_id"])
+
+        def _kg_turno(prod_df, fecha, turno_id):
+            if prod_df.empty:
+                return 0.0, {}
+            f = prod_df[
+                (prod_df["fecha"].astype(str) == str(fecha)) &
+                (prod_df["turno"].astype(str) == str(turno_id))
+            ]
+            if f.empty:
+                return 0.0, {}
+            f["kg_real"] = pd.to_numeric(f["kg_real"], errors="coerce").fillna(0)
+            por_tipo = f.groupby("tipo_producto")["kg_real"].sum().to_dict()
+            return f["kg_real"].sum(), por_tipo
+
+        def _costo_mp_turno(consumo_df, prod_df, fecha, turno_id):
+            if consumo_df.empty or prod_df.empty:
+                return 0.0
+            lotes_turno = prod_df[
+                (prod_df["fecha"].astype(str) == str(fecha)) &
+                (prod_df["turno"].astype(str) == str(turno_id))
+            ]["lote_semielaborado_id"].tolist()
+            if not lotes_turno:
+                return 0.0
+            c = consumo_df[consumo_df["lote_semielaborado_id"].isin(lotes_turno)]
+            return _num_col(c, "costo_total_aplicado").sum()
+
+        def _costo_envases_turno(past_df, prod_df, fecha, turno_id):
+            if past_df.empty or prod_df.empty:
+                return 0.0
+            lotes_turno = prod_df[
+                (prod_df["fecha"].astype(str) == str(fecha)) &
+                (prod_df["turno"].astype(str) == str(turno_id))
+            ]["lote_semielaborado_id"].tolist()
+            if not lotes_turno:
+                return 0.0
+            p = past_df[past_df["lote_semielaborado_id"].isin(lotes_turno)]
+            for col in ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"]:
+                if col not in p.columns:
+                    p[col] = 0
+            return sum(_num_col(p, col).sum() for col in ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"])
+
+        def _costo_insumos_dia(limp_df, fecha):
+            if limp_df.empty:
+                return 0.0
+            f = limp_df[limp_df["fecha"].astype(str) == str(fecha)]
+            return _num_col(f, "costo_insumos").sum()
+
+        def _agua_turno(prod_df, limp_df, fecha, turno_id):
+            agua_prod = 0.0
+            if not prod_df.empty:
+                f = prod_df[
+                    (prod_df["fecha"].astype(str) == str(fecha)) &
+                    (prod_df["turno"].astype(str) == str(turno_id))
+                ]
+                agua_prod = _num_col(f, "agua_litros").sum()
+            agua_limp = 0.0
+            if not limp_df.empty:
+                f2 = limp_df[limp_df["fecha"].astype(str) == str(fecha)]
+                if "turno" in limp_df.columns:
+                    f2 = f2[f2["turno"].astype(str) == str(turno_id)]
+                agua_limp = _num_col(f2, "agua_litros").sum()
+            return agua_prod + agua_limp
+
+        # ── TAB: POR TURNO ───────────────────────────────────────────────
+        with sub_turno:
+            col_ft1, col_ft2 = st.columns(2)
+            fecha_t = col_ft1.date_input("Fecha", value=hoy, key="ct_fecha")
+            opciones_turnos = ["Todos"] + (list(turno_cat["turno_id"]) if not turno_cat.empty else [])
+            turno_sel = col_ft2.selectbox(
+                "Turno", opciones_turnos,
+                format_func=lambda x: x if x == "Todos" else (
+                    turno_cat.set_index("turno_id").loc[x, "nombre"]
+                    if not turno_cat.empty and x in list(turno_cat["turno_id"]) else x
+                ),
+                key="ct_turno",
+            )
+
+            turnos_a_mostrar = list(turno_cat["turno_id"]) if (turno_sel == "Todos" and not turno_cat.empty) else [turno_sel]
+            costo_overhead = _costo_mo_overhead_dia(jornadas, personal_cat, fecha_t)
+            n_turnos = len(turnos_a_mostrar) if turnos_a_mostrar else 1
+
+            for tid in turnos_a_mostrar:
+                tnombre = tid
+                if not turno_cat.empty and tid in list(turno_cat["turno_id"]):
+                    tnombre = turno_cat.set_index("turno_id").loc[tid, "nombre"]
+
+                kg_total, kg_por_tipo = _kg_turno(prod_f, fecha_t, tid)
+                costo_mp  = _costo_mp_turno(consumo_f, prod_f, fecha_t, tid)
+                costo_env = _costo_envases_turno(past_full, prod_f, fecha_t, tid)
+                costo_mo  = _costo_mo_turno(jornadas, personal_cat, fecha_t, tid)
+                costo_ins = _costo_insumos_dia(limpieza_f, fecha_t) / n_turnos
+                overhead_turno = costo_overhead / n_turnos
+                agua      = _agua_turno(prod_f, limpieza_f, fecha_t, tid)
+                personas  = _personas_turno(jornadas, personal_cat, fecha_t, tid)
+
+                costo_total_turno = costo_mp + costo_env + costo_mo + costo_ins + overhead_turno
+                costo_kg_turno    = costo_total_turno / kg_total if kg_total > 0 else 0
+
+                with st.container(border=True):
+                    st.markdown(f"#### 🔄 {tnombre}")
+                    c1,c2,c3,c4 = st.columns(4)
+                    c1.metric("Kg producidos", f"{kg_total:,.1f} kg")
+                    c2.metric("Costo total", f"${costo_total_turno:,.2f}")
+                    c3.metric("Costo/kg", f"${costo_kg_turno:,.3f}")
+                    c4.metric("Agua usada", f"{agua:,.0f} L")
+
+                    if kg_por_tipo:
+                        st.caption("Kg por producto: " + " · ".join(f"**{t}**: {v:.1f} kg" for t,v in kg_por_tipo.items()))
+
+                    col_d, col_g = st.columns([2,1])
+                    with col_d:
+                        st.markdown("**Desglose de costo**")
+                        items_costo = [
+                            ("🥚 Materia prima (huevo)", costo_mp),
+                            ("📦 Envases + etiquetas", costo_env),
+                            ("👷 Mano de obra (operarios)", costo_mo),
+                            ("🧪 Insumos/limpieza (prorrat.)", costo_ins),
+                            ("👔 Jefes overhead (prorrat.)", overhead_turno),
+                        ]
+                        for label, val in items_costo:
+                            pct = val/costo_total_turno*100 if costo_total_turno > 0 else 0
+                            st.caption(f"{label}: **${val:,.2f}** ({pct:.1f}%)")
+
+                    with col_g:
+                        labels = [i[0].split("(")[0].strip() for i in items_costo if i[1] > 0]
+                        vals   = [i[1] for i in items_costo if i[1] > 0]
+                        if vals:
+                            fig = go.Figure(go.Pie(labels=labels, values=vals, hole=0.5,
+                                                   marker_colors=[VERDE,NARANJA,DORADO,TEAL,MORADO],
+                                                   textinfo="percent"))
+                            fig.update_layout(showlegend=False, height=200,
+                                              margin=dict(t=10,b=10,l=10,r=10),
+                                              paper_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig, use_container_width=True)
+
+                    if personas:
+                        st.caption("👷 Personal: " + ", ".join(personas))
+                    if costo_overhead > 0:
+                        st.caption(f"👔 Jefes de planta/calidad (costo diario ${ costo_overhead:,.2f} dividido entre {n_turnos} turno(s))")
+
+        # ── TAB: POR DÍA ────────────────────────────────────────────────
+        with sub_dia:
+            fecha_d = st.date_input("Fecha", value=hoy, key="cd_fecha")
+            prod_dia   = produccion[produccion["fecha"].astype(str) == str(fecha_d)].copy() if not produccion.empty else pd.DataFrame()
+            past_dia   = past_full[past_full["fecha"].astype(str) == str(fecha_d)].copy() if not past_full.empty else pd.DataFrame()
+            jorn_dia   = jornadas[jornadas["fecha"].astype(str) == str(fecha_d)].copy() if not jornadas.empty else pd.DataFrame()
+            limp_dia   = limp_full[limp_full["fecha"].astype(str) == str(fecha_d)].copy() if not limp_full.empty else pd.DataFrame()
+            cons_dia   = consumo_full.copy()
+            if not cons_dia.empty and not prod_dia.empty:
+                lotes_dia = prod_dia["lote_semielaborado_id"].tolist()
+                cons_dia  = cons_dia[cons_dia["lote_semielaborado_id"].isin(lotes_dia)]
+
+            kg_dia     = _num_col(prod_dia, "kg_real").sum()
+            costo_mp_d = _num_col(cons_dia, "costo_total_aplicado").sum()
+            costo_env_d= sum(_num_col(past_dia, c).sum() for c in ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"] if c in past_dia.columns)
+            ids_jefes  = set(personal_cat[personal_cat["personal_id"].str.startswith("JEF_")]["personal_id"]) if not personal_cat.empty else set()
+            costo_mo_op= _num_col(jorn_dia[~jorn_dia["personal_id"].isin(ids_jefes)] if not jorn_dia.empty else pd.DataFrame(), "costo_calculado").sum()
+            costo_jef  = _num_col(jorn_dia[jorn_dia["personal_id"].isin(ids_jefes)] if not jorn_dia.empty else pd.DataFrame(), "costo_calculado").sum()
+            costo_ins_d= _num_col(limp_dia, "costo_insumos").sum()
+            agua_dia   = _num_col(prod_dia, "agua_litros").sum() + _num_col(limp_dia, "agua_litros").sum()
+            personas_dia= len(jorn_dia["personal_id"].unique()) if not jorn_dia.empty else 0
+            horas_dia  = _num_col(jorn_dia, "horas").sum()
+
+            costo_total_dia = costo_mp_d + costo_env_d + costo_mo_op + costo_jef + costo_ins_d
+            costo_kg_dia    = costo_total_dia / kg_dia if kg_dia > 0 else 0
+            hh_por_kg_dia   = horas_dia / kg_dia if kg_dia > 0 else 0
+
+            st.markdown(f"### 📅 Resumen del {fecha_d.strftime('%d/%m/%Y')}")
+            r1,r2,r3,r4,r5 = st.columns(5)
+            r1.metric("Kg producidos", f"{kg_dia:,.1f} kg")
+            r2.metric("Costo total día", f"${costo_total_dia:,.2f}")
+            r3.metric("Costo/kg", f"${costo_kg_dia:,.3f}")
+            r4.metric("HH/kg", f"{hh_por_kg_dia:,.3f}")
+            r5.metric("Agua total", f"{agua_dia:,.0f} L")
+
+            st.write("")
+            col_tab, col_pie = st.columns([2,1])
+            with col_tab:
+                desglose = pd.DataFrame([
+                    {"Componente": "🥚 Materia prima", "Costo": costo_mp_d},
+                    {"Componente": "📦 Envases/etiquetas", "Costo": costo_env_d},
+                    {"Componente": "👷 MO operarios", "Costo": costo_mo_op},
+                    {"Componente": "👔 Jefes planta/calidad", "Costo": costo_jef},
+                    {"Componente": "🧪 Insumos limpieza", "Costo": costo_ins_d},
+                ])
+                desglose["% del total"] = desglose["Costo"].apply(
+                    lambda v: f"{v/costo_total_dia*100:.1f}%" if costo_total_dia > 0 else "—"
+                )
+                desglose["Costo"] = desglose["Costo"].apply(lambda v: f"${v:,.2f}")
+                st.dataframe(desglose, use_container_width=True, hide_index=True)
+                st.caption(f"Personal: {personas_dia} personas · {horas_dia:,.1f} horas totales · {agua_dia:,.0f} L agua")
+
+            with col_pie:
+                vals_pie = [costo_mp_d, costo_env_d, costo_mo_op, costo_jef, costo_ins_d]
+                labs_pie = ["MP","Envases","MO Op.","Jefes","Insumos"]
+                if sum(vals_pie) > 0:
+                    fig2 = go.Figure(go.Pie(
+                        labels=labs_pie, values=vals_pie, hole=0.5,
+                        marker_colors=[VERDE,NARANJA,DORADO,TEAL,MORADO],
+                        textinfo="percent+label",
+                    ))
+                    fig2.update_layout(showlegend=False, height=260,
+                                       margin=dict(t=10,b=10,l=10,r=10),
+                                       paper_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(fig2, use_container_width=True)
+
+            # Comparación entre turnos del día
+            if not turno_cat.empty and not prod_dia.empty:
+                st.write("")
+                st.markdown("##### 🔄 Comparación entre turnos del día")
+                filas_comp = []
+                for tid in turno_cat["turno_id"]:
+                    tnombre = turno_cat.set_index("turno_id").loc[tid, "nombre"]
+                    kg_t, _ = _kg_turno(prod_dia, fecha_d, tid)
+                    if kg_t == 0:
+                        continue
+                    cmo_t = _costo_mo_turno(jorn_dia, personal_cat, fecha_d, tid)
+                    cmp_t = _costo_mp_turno(cons_dia, prod_dia, fecha_d, tid)
+                    cenv_t= _costo_envases_turno(past_dia, prod_dia, fecha_d, tid)
+                    pers_t= len([p for p in _personas_turno(jorn_dia, personal_cat, fecha_d, tid)])
+                    horas_t = _num_col(jorn_dia[(jorn_dia["turno_id"].astype(str)==str(tid)) if "turno_id" in jorn_dia.columns else jorn_dia], "horas").sum()
+                    ctotal_t= cmo_t + cmp_t + cenv_t
+                    filas_comp.append({
+                        "Turno": tnombre, "Kg": round(kg_t,1),
+                        "Personas": pers_t, "Horas": round(horas_t,1),
+                        "HH/kg": round(horas_t/kg_t,3) if kg_t > 0 else 0,
+                        "Costo MO": round(cmo_t,2), "Costo MP": round(cmp_t,2),
+                        "Costo total": round(ctotal_t,2),
+                        "Costo/kg": round(ctotal_t/kg_t,3) if kg_t > 0 else 0,
+                    })
+                if filas_comp:
+                    st.dataframe(pd.DataFrame(filas_comp), use_container_width=True, hide_index=True)
+
+        # ── TAB: TENDENCIA DEL PERÍODO ───────────────────────────────────
+        with sub_tendencia:
+            st.caption("Evolución diaria del costo/kg y eficiencia para detectar días anómalos.")
+
+            # Construir serie diaria para el período seleccionado
+            if produccion.empty:
+                st.info("Sin datos de producción en el período.")
+            else:
+                dias_unicos = sorted(
+                    pd.to_datetime(prod_f["fecha"], errors="coerce").dt.date.dropna().unique()
+                )
+                if not dias_unicos:
+                    st.info("Sin datos en el período seleccionado.")
+                else:
+                    filas_tend = []
+                    for dia in dias_unicos:
+                        prod_d   = produccion[produccion["fecha"].astype(str) == str(dia)]
+                        jorn_d   = jornadas[jornadas["fecha"].astype(str) == str(dia)] if not jornadas.empty else pd.DataFrame()
+                        limp_d   = limp_full[limp_full["fecha"].astype(str) == str(dia)] if not limp_full.empty else pd.DataFrame()
+                        cons_d   = consumo_full[consumo_full["lote_semielaborado_id"].isin(prod_d["lote_semielaborado_id"])] if not consumo_full.empty and not prod_d.empty else pd.DataFrame()
+                        past_d   = past_full[past_full["fecha"].astype(str) == str(dia)] if not past_full.empty else pd.DataFrame()
+
+                        kg_d     = _num_col(prod_d, "kg_real").sum()
+                        cmp_d    = _num_col(cons_d, "costo_total_aplicado").sum()
+                        cenv_d   = sum(_num_col(past_d, c).sum() for c in ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"] if c in past_d.columns)
+                        cmo_d    = _num_col(jorn_d, "costo_calculado").sum()
+                        cins_d   = _num_col(limp_d, "costo_insumos").sum()
+                        agua_d   = _num_col(prod_d, "agua_litros").sum() + _num_col(limp_d, "agua_litros").sum()
+                        horas_d  = _num_col(jorn_d, "horas").sum()
+                        pers_d   = len(jorn_d["personal_id"].unique()) if not jorn_d.empty else 0
+                        ctot_d   = cmp_d + cenv_d + cmo_d + cins_d
+                        filas_tend.append({
+                            "dia": dia,
+                            "kg": kg_d,
+                            "costo_kg": ctot_d/kg_d if kg_d > 0 else 0,
+                            "hh_kg": horas_d/kg_d if kg_d > 0 else 0,
+                            "agua_kg": agua_d/kg_d if kg_d > 0 else 0,
+                            "personas": pers_d,
+                            "costo_mp": cmp_d,
+                            "costo_env": cenv_d,
+                            "costo_mo": cmo_d,
+                            "costo_ins": cins_d,
+                        })
+
+                    tend_df = pd.DataFrame(filas_tend)
+
+                    # Gráficos de tendencia
+                    col_t1, col_t2 = st.columns(2)
+                    with col_t1:
+                        with st.container(border=True):
+                            st.markdown("**💲 Costo/kg por día**")
+                            fig_ck = go.Figure(go.Scatter(
+                                x=tend_df["dia"], y=tend_df["costo_kg"],
+                                mode="lines+markers", line_color=VERDE,
+                                fill="tozeroy", fillcolor="rgba(0,0,0,0.05)",
+                                hovertemplate="Día %{x}: $%{y:.3f}/kg<extra></extra>",
+                            ))
+                            # línea promedio
+                            avg_ckg = tend_df["costo_kg"].mean()
+                            fig_ck.add_hline(y=avg_ckg, line_dash="dash",
+                                             line_color=NARANJA, annotation_text=f"Prom ${avg_ckg:.3f}")
+                            fig_ck.update_layout(height=220, margin=dict(t=10,b=20,l=10,r=10),
+                                                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig_ck, use_container_width=True)
+
+                    with col_t2:
+                        with st.container(border=True):
+                            st.markdown("**⏱️ Horas-hombre / kg por día**")
+                            fig_hh = go.Figure(go.Scatter(
+                                x=tend_df["dia"], y=tend_df["hh_kg"],
+                                mode="lines+markers", line_color=DORADO,
+                                fill="tozeroy", fillcolor="rgba(0,0,0,0.05)",
+                                hovertemplate="Día %{x}: %{y:.3f} HH/kg<extra></extra>",
+                            ))
+                            avg_hh = tend_df["hh_kg"].mean()
+                            fig_hh.add_hline(y=avg_hh, line_dash="dash",
+                                             line_color=NARANJA, annotation_text=f"Prom {avg_hh:.3f}")
+                            fig_hh.update_layout(height=220, margin=dict(t=10,b=20,l=10,r=10),
+                                                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig_hh, use_container_width=True)
+
+                    col_t3, col_t4 = st.columns(2)
+                    with col_t3:
+                        with st.container(border=True):
+                            st.markdown("**💧 Agua / kg por día**")
+                            fig_ag = go.Figure(go.Scatter(
+                                x=tend_df["dia"], y=tend_df["agua_kg"],
+                                mode="lines+markers", line_color=AZUL,
+                                fill="tozeroy", fillcolor="rgba(0,0,0,0.05)",
+                                hovertemplate="Día %{x}: %{y:.2f} L/kg<extra></extra>",
+                            ))
+                            avg_ag = tend_df["agua_kg"].mean()
+                            fig_ag.add_hline(y=avg_ag, line_dash="dash",
+                                             line_color=NARANJA, annotation_text=f"Prom {avg_ag:.2f} L")
+                            fig_ag.update_layout(height=220, margin=dict(t=10,b=20,l=10,r=10),
+                                                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig_ag, use_container_width=True)
+
+                    with col_t4:
+                        with st.container(border=True):
+                            st.markdown("**👷 Personas por día**")
+                            fig_pe = go.Figure(go.Bar(
+                                x=tend_df["dia"], y=tend_df["personas"],
+                                marker_color=MORADO,
+                                hovertemplate="Día %{x}: %{y} personas<extra></extra>",
+                            ))
+                            avg_pe = tend_df["personas"].mean()
+                            fig_pe.add_hline(y=avg_pe, line_dash="dash",
+                                             line_color=NARANJA, annotation_text=f"Prom {avg_pe:.1f}")
+                            fig_pe.update_layout(height=220, margin=dict(t=10,b=20,l=10,r=10),
+                                                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(fig_pe, use_container_width=True)
+
+                    # Composición del costo apilada por día
+                    st.write("")
+                    with st.container(border=True):
+                        st.markdown("**📊 Composición del costo por día (barras apiladas)**")
+                        fig_ap = go.Figure()
+                        fig_ap.add_trace(go.Bar(name="MP", x=tend_df["dia"], y=tend_df["costo_mp"], marker_color=VERDE))
+                        fig_ap.add_trace(go.Bar(name="Envases", x=tend_df["dia"], y=tend_df["costo_env"], marker_color=NARANJA))
+                        fig_ap.add_trace(go.Bar(name="MO", x=tend_df["dia"], y=tend_df["costo_mo"], marker_color=DORADO))
+                        fig_ap.add_trace(go.Bar(name="Insumos", x=tend_df["dia"], y=tend_df["costo_ins"], marker_color=TEAL))
+                        fig_ap.update_layout(
+                            barmode="stack", height=280,
+                            margin=dict(t=10,b=40,l=10,r=10),
+                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        )
+                        st.plotly_chart(fig_ap, use_container_width=True)
+
+                    # Tabla resumen del período
+                    st.write("")
+                    with st.expander("📋 Ver tabla resumen del período"):
+                        tend_mostrar = tend_df.copy()
+                        tend_mostrar["dia"] = tend_mostrar["dia"].astype(str)
+                        tend_mostrar = tend_mostrar.rename(columns={
+                            "dia":"Fecha","kg":"Kg","costo_kg":"$/kg",
+                            "hh_kg":"HH/kg","agua_kg":"L/kg","personas":"Personas",
+                        })
+                        st.dataframe(tend_mostrar[["Fecha","Kg","$/kg","HH/kg","L/kg","Personas"]],
+                                     use_container_width=True, hide_index=True)
+                        # Fila de promedios
+                        st.caption(
+                            f"**Promedios del período** — "
+                            f"Kg/día: {tend_df['kg'].mean():,.1f} · "
+                            f"Costo/kg: ${tend_df['costo_kg'].mean():,.3f} · "
+                            f"HH/kg: {tend_df['hh_kg'].mean():,.3f} · "
+                            f"L/kg: {tend_df['agua_kg'].mean():,.2f} · "
+                            f"Personas/día: {tend_df['personas'].mean():,.1f}"
+                        )
