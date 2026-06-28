@@ -73,28 +73,47 @@ def render(db, username, rol):
                     if errores:
                         st.error(f"Faltan horas para: {', '.join(errores)}")
                     else:
-                        guardados = []
-                        for fila in filas_horas:
-                            personal_id = mapa_nombre_a_id.get(fila["nombre"], fila["nombre"])
-                            costo_hora  = mapa_id_a_costo.get(personal_id, 0)
-                            horas, horas_noct = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
-                            jornada_id = db.siguiente_id("jornadas_personal", "JP", fecha)
-                            db.append_row("jornadas_personal", {
-                                "jornada_id":      jornada_id,
-                                "fecha":           fecha.isoformat(),
-                                "turno_id":        turno_id,
-                                "personal_id":     personal_id,
-                                "hora_entrada":    fila["hora_entrada"].strftime("%H:%M"),
-                                "hora_salida":     fila["hora_salida"].strftime("%H:%M"),
-                                "horas":           horas,
-                                "horas_nocturnas": horas_noct,
-                                "costo_calculado": costo_hora * horas,
-                                "usuario":         username,
-                                "observaciones":   observaciones,
-                            })
-                            guardados.append(fila["nombre"])
-                        st.success(f"✅ Jornada guardada para {len(guardados)} persona(s) — fecha {fecha}, turno {turno_id}.")
-                        st.rerun()
+                        # Validar duplicados: misma persona, misma fecha, mismo turno
+                        jornadas_exist = db.get_df("jornadas_personal")
+                        duplicados = []
+                        if not jornadas_exist.empty:
+                            ya_registrados = jornadas_exist[
+                                (jornadas_exist["fecha"].astype(str) == fecha.isoformat()) &
+                                (jornadas_exist["turno_id"].astype(str) == str(turno_id))
+                            ]["personal_id"].tolist()
+                            for fila in filas_horas:
+                                pid = mapa_nombre_a_id.get(fila["nombre"], fila["nombre"])
+                                if pid in ya_registrados:
+                                    duplicados.append(fila["nombre"])
+                        if duplicados:
+                            st.error(
+                                f"⚠️ Las siguientes personas ya tienen jornada registrada para "
+                                f"el {fecha} en el {turno_id}: **{', '.join(duplicados)}**. "
+                                f"Edítalas desde Historial o elimina el registro anterior."
+                            )
+                        else:
+                            guardados = []
+                            for fila in filas_horas:
+                                personal_id = mapa_nombre_a_id.get(fila["nombre"], fila["nombre"])
+                                costo_hora  = mapa_id_a_costo.get(personal_id, 0)
+                                horas, horas_noct = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
+                                jornada_id = db.siguiente_id("jornadas_personal", "JP", fecha)
+                                db.append_row("jornadas_personal", {
+                                    "jornada_id":      jornada_id,
+                                    "fecha":           fecha.isoformat(),
+                                    "turno_id":        turno_id,
+                                    "personal_id":     personal_id,
+                                    "hora_entrada":    fila["hora_entrada"].strftime("%H:%M"),
+                                    "hora_salida":     fila["hora_salida"].strftime("%H:%M"),
+                                    "horas":           horas,
+                                    "horas_nocturnas": horas_noct,
+                                    "costo_calculado": costo_hora * horas,
+                                    "usuario":         username,
+                                    "observaciones":   observaciones,
+                                })
+                                guardados.append(fila["nombre"])
+                            st.success(f"✅ Jornada guardada para {len(guardados)} persona(s) — fecha {fecha}, turno {turno_id}.")
+                            st.rerun()
 
     # ======================== HISTORIAL DE HORAS ========================
     with tab_historial:

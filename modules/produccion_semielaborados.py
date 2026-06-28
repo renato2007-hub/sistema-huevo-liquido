@@ -115,6 +115,15 @@ def render(db, username, rol):
         producciones_existentes = db.get_df("produccion_semielaborados")
         ids_existentes = set(producciones_existentes["lote_semielaborado_id"].astype(str)) if not producciones_existentes.empty else set()
 
+        # Lotes ya registrados en esta fecha+turno (para advertir duplicado en mismo turno)
+        ids_este_turno = set()
+        if not producciones_existentes.empty and "turno" in producciones_existentes.columns:
+            mismo_turno = producciones_existentes[
+                (producciones_existentes["fecha"].astype(str) == fecha.isoformat()) &
+                (producciones_existentes["turno"].astype(str) == str(turno_id))
+            ]
+            ids_este_turno = set(mismo_turno["lote_semielaborado_id"].astype(str))
+
         st.caption("Convención de planta: SR = huevo entero, R = clara, TK = yema, + fecha DDMMAA. Puedes editar el código libremente.")
         if tipo_producto == "Clara y yema":
             col_codigo1, col_codigo2 = st.columns(2)
@@ -127,14 +136,20 @@ def render(db, username, rol):
             for codigo in (codigo_clara, codigo_yema):
                 if codigo in ids_existentes:
                     st.error(f"⚠️ El código '{codigo}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
+                elif codigo in ids_este_turno:
+                    st.warning(f"⚠️ El lote '{codigo}' ya fue registrado en este turno — si es el mismo turno, revisa si es un duplicado.")
         elif tipo_producto == "Clara":
             col_c1, col_c2 = st.columns(2)
             codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha))
             codigo_coproducto = col_c2.text_input("Código de lote — Yema (co-producto)", value=sugerir_codigo_lote("Yema", fecha))
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
+            elif codigo_lote in ids_este_turno:
+                st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno.")
             if codigo_coproducto in ids_existentes:
                 st.error(f"⚠️ El código co-producto '{codigo_coproducto}' ya existe.")
+            elif codigo_coproducto in ids_este_turno:
+                st.warning(f"⚠️ El co-producto '{codigo_coproducto}' ya fue registrado en este turno.")
             st.caption("La yema que salga también quedará como lote propio en el inventario. Si no hubo yema, deja el campo de yema real en 0 y no se creará ese lote.")
         elif tipo_producto == "Yema":
             col_c1, col_c2 = st.columns(2)
@@ -142,8 +157,12 @@ def render(db, username, rol):
             codigo_coproducto = col_c2.text_input("Código de lote — Clara (co-producto)", value=sugerir_codigo_lote("Clara", fecha))
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
+            elif codigo_lote in ids_este_turno:
+                st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno.")
             if codigo_coproducto in ids_existentes:
                 st.error(f"⚠️ El código co-producto '{codigo_coproducto}' ya existe.")
+            elif codigo_coproducto in ids_este_turno:
+                st.warning(f"⚠️ El co-producto '{codigo_coproducto}' ya fue registrado en este turno.")
             st.caption("La clara que salga también quedará como lote propio en el inventario. Si no hubo clara, deja el campo en 0 y no se creará ese lote.")
         else:
             codigo_lote = st.text_input(
@@ -152,6 +171,8 @@ def render(db, username, rol):
             codigo_coproducto = ""
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
+            elif codigo_lote in ids_este_turno:
+                st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno — si quieres continuar en otro turno, cambia el turno arriba.")
 
         recepciones_con_saldo = recepciones[
             pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0) > 0
@@ -328,12 +349,18 @@ def render(db, username, rol):
                 if codigo_clara in ids_existentes or codigo_yema in ids_existentes:
                     st.error("Uno de los códigos ya existe. Corrígelo antes de guardar.")
                     return
+                if codigo_clara in ids_este_turno or codigo_yema in ids_este_turno:
+                    st.error(f"⚠️ Uno de esos lotes ya fue registrado en este turno ({turno_id}). No se puede duplicar en el mismo turno.")
+                    return
             else:
                 if not codigo_lote:
                     st.error("Ingresa el código de lote.")
                     return
                 if codigo_lote in ids_existentes:
                     st.error("Ese código ya existe. Corrígelo antes de guardar.")
+                    return
+                if codigo_lote in ids_este_turno:
+                    st.error(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno ({turno_id}). No se puede duplicar en el mismo turno — si es otra producción, usa otro código o cambia el turno.")
                     return
 
             detalle_lotes = [
