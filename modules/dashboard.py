@@ -475,51 +475,51 @@ def render(db, username, rol):
         else:
             resumen_por_id = pd.DataFrame(columns=["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"])
 
-            if personal_cat.empty:
-                st.info("Configura personal en Catálogos → Personal.")
-            else:
-                activos = personal_cat[personal_cat.get("activo","TRUE").astype(str).str.upper() != "FALSE"].copy()
-                reporte = activos.set_index("personal_id").join(resumen_por_id, how="left")
-                for col in ["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"]:
-                    reporte[col] = reporte[col].fillna(0)
-                reporte["costo"] = reporte.index.map(costo_por_persona).fillna(0)
-                reporte["horas_nocturnas"] = reporte.index.map(nocturnas_por_persona).fillna(0)
-                reporte["hh_por_kg"] = reporte["horas_totales"].apply(lambda h: h/kg_total_periodo if kg_total_periodo > 0 else 0)
-                reporte["trabajo"] = reporte["horas_totales"] > 0
-                reporte = reporte.reset_index().sort_values("horas_totales", ascending=False)
+        if personal_cat.empty:
+            st.info("Configura personal en Catálogos → Personal.")
+        else:
+            activos = personal_cat[personal_cat.get("activo","TRUE").astype(str).str.upper() != "FALSE"].copy()
+            reporte = activos.set_index("personal_id").join(resumen_por_id, how="left")
+            for col in ["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"]:
+                reporte[col] = reporte[col].fillna(0)
+            reporte["costo"] = reporte.index.map(costo_por_persona).fillna(0)
+            reporte["horas_nocturnas"] = reporte.index.map(nocturnas_por_persona).fillna(0)
+            reporte["hh_por_kg"] = reporte["horas_totales"].apply(lambda h: h/kg_total_periodo if kg_total_periodo > 0 else 0)
+            reporte["trabajo"] = reporte["horas_totales"] > 0
+            reporte = reporte.reset_index().sort_values("horas_totales", ascending=False)
 
-                c1,c2,c3,c4,c5,c6 = st.columns(6)
-                _kpi_card(c1,"🕐","H. normales",f"{reporte['horas_normales'].sum():,.1f}")
-                _kpi_card(c2,"⏱️","H. extras",f"{reporte['horas_extras'].sum():,.1f}")
-                _kpi_card(c3,"✖️2","H. dobles",f"{reporte['horas_dobles'].sum():,.1f}")
-                _kpi_card(c4,"🔁","H. compensadas",f"{reporte['horas_compensadas'].sum():,.1f}")
-                _kpi_card(c5,"🌙","H. nocturnas",f"{reporte['horas_nocturnas'].sum():,.1f}")
-                if ve_costos(rol):
-                    _kpi_card(c6,"💲","Costo M.O.",f"${reporte['costo'].sum():,.2f}")
+            c1,c2,c3,c4,c5,c6 = st.columns(6)
+            _kpi_card(c1,"🕐","H. normales",f"{reporte['horas_normales'].sum():,.1f}")
+            _kpi_card(c2,"⏱️","H. extras",f"{reporte['horas_extras'].sum():,.1f}")
+            _kpi_card(c3,"✖️2","H. dobles",f"{reporte['horas_dobles'].sum():,.1f}")
+            _kpi_card(c4,"🔁","H. compensadas",f"{reporte['horas_compensadas'].sum():,.1f}")
+            _kpi_card(c5,"🌙","H. nocturnas",f"{reporte['horas_nocturnas'].sum():,.1f}")
+            if ve_costos(rol):
+                _kpi_card(c6,"💲","Costo M.O.",f"${reporte['costo'].sum():,.2f}")
 
-                r1b, r2b = st.columns(2)
-                _kpi_card(r1b,"⏱️","Horas-hombre / kg",f"{hh_por_kg:,.3f}", ayuda="Horas totales ÷ kg producidos en el período")
-                _kpi_card(r2b,"👷","Total horas trabajadas",f"{horas_totales_periodo:,.1f} h")
+            r1b, r2b = st.columns(2)
+            _kpi_card(r1b,"⏱️","Horas-hombre / kg",f"{hh_por_kg:,.3f}", ayuda="Horas totales ÷ kg producidos en el período")
+            _kpi_card(r2b,"👷","Total horas trabajadas",f"{horas_totales_periodo:,.1f} h")
 
-                sin_trabajar = reporte[~reporte["trabajo"]]
-                if not sin_trabajar.empty:
-                    st.warning(f"⚠️ {len(sin_trabajar)} persona(s) sin registros: {', '.join(sin_trabajar['nombre'])}")
+            sin_trabajar = reporte[~reporte["trabajo"]]
+            if not sin_trabajar.empty:
+                st.warning(f"⚠️ {len(sin_trabajar)} persona(s) sin registros: {', '.join(sin_trabajar['nombre'])}")
 
-                st.write("")
-                columnas_mostrar = [c for c in ["nombre","cargo","horas_normales","horas_extras",
-                                                 "horas_dobles","horas_compensadas","horas_nocturnas","horas_totales","costo"]
-                                    if c in reporte.columns]
-                st.dataframe(reporte[columnas_mostrar], use_container_width=True, hide_index=True)
+            st.write("")
+            columnas_mostrar = [c for c in ["nombre","cargo","horas_normales","horas_extras",
+                                             "horas_dobles","horas_compensadas","horas_nocturnas","horas_totales","costo"]
+                                if c in reporte.columns]
+            st.dataframe(reporte[columnas_mostrar], use_container_width=True, hide_index=True)
 
-                st.markdown("**Desglose de horas por persona**")
-                _grafico_barras_apiladas(reporte.set_index("nombre"),
-                                         ["horas_normales","horas_extras","horas_dobles","horas_compensadas"])
-                st.write("")
-                pdf_bytes = generar_pdf_horas_personal(reporte.to_dict("records"), desde, hasta)
-                st.download_button("📄 Descargar reporte PDF de horas",
-                                   data=pdf_bytes,
-                                   file_name=f"horas_personal_{desde.isoformat()}_a_{hasta.isoformat()}.pdf",
-                                   mime="application/pdf", use_container_width=True)
+            st.markdown("**Desglose de horas por persona**")
+            _grafico_barras_apiladas(reporte.set_index("nombre"),
+                                     ["horas_normales","horas_extras","horas_dobles","horas_compensadas"])
+            st.write("")
+            pdf_bytes = generar_pdf_horas_personal(reporte.to_dict("records"), desde, hasta)
+            st.download_button("📄 Descargar reporte PDF de horas",
+                               data=pdf_bytes,
+                               file_name=f"horas_personal_{desde.isoformat()}_a_{hasta.isoformat()}.pdf",
+                               mime="application/pdf", use_container_width=True)
 
     # ======================== TAB: INSUMOS Y ENVASES ========================
     with tabs[3]:
