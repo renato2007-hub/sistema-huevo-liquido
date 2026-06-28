@@ -166,7 +166,8 @@ def render(db, username, rol):
     # ── cargar tablas ──────────────────────────────────────────────────────────
     produccion      = db.get_df("produccion_semielaborados")
     consumo_mp      = db.get_df("consumo_mp_produccion")
-    personal_detalle= db.get_df("produccion_personal")
+    personal_detalle= db.get_df("produccion_personal")  # tabla legado
+    jornadas_personal = db.get_df("jornadas_personal")   # nueva tabla centralizada
     pasteurizacion  = db.get_df("pasteurizacion_envasado")
     movimientos     = db.get_df("movimientos_envases_insumos")
     limpieza        = db.get_df("limpieza_desinfeccion")
@@ -197,13 +198,24 @@ def render(db, username, rol):
     agua_produccion     = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
     agua_limpieza       = _num(limpieza_f, "agua_litros").sum()
 
-    # horas hombre del período
+    # horas hombre del período — prioridad: jornadas_personal (nuevo módulo)
+    # con fallback a produccion_personal + supervision_diaria (tablas legado)
     hh_df = pd.DataFrame()
-    if not personal_detalle.empty and not produccion.empty:
-        hh_df = personal_detalle.merge(produccion[["lote_semielaborado_id","fecha"]], on="lote_semielaborado_id", how="left")
-    superv = db.get_df("supervision_diaria")
-    if not superv.empty:
-        hh_df = pd.concat([hh_df, superv[["personal_id","fecha","horas","horas_nocturnas","costo_calculado"]]], ignore_index=True)
+    if not jornadas_personal.empty:
+        # nueva fuente centralizada
+        hh_df = jornadas_personal[["personal_id","fecha","horas","horas_nocturnas","costo_calculado"]].copy()
+    else:
+        # fallback a fuente legado
+        if not personal_detalle.empty and not produccion.empty:
+            hh_df = personal_detalle.merge(
+                produccion[["lote_semielaborado_id","fecha"]], on="lote_semielaborado_id", how="left"
+            )
+        superv = db.get_df("supervision_diaria")
+        if not superv.empty:
+            hh_df = pd.concat(
+                [hh_df, superv[["personal_id","fecha","horas","horas_nocturnas","costo_calculado"]]],
+                ignore_index=True,
+            )
     hh_f = _filtrar_por_fecha(hh_df, desde, hasta)
     horas_totales_periodo = _num(hh_f, "horas").sum()
     hh_por_kg = horas_totales_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
@@ -435,18 +447,18 @@ def render(db, username, rol):
             costo_por_persona     = hh_f.groupby("personal_id")["costo_calculado"].sum() if not hh_f.empty else pd.Series(dtype=float)
             nocturnas_por_persona = hh_f.groupby("personal_id")["horas_nocturnas"].sum() if not hh_f.empty else pd.Series(dtype=float)
 
-            if not hh_f.empty:
-                por_persona_dia = hh_f.groupby(["personal_id","fecha"])["horas"].sum().reset_index()
-                feriados_set    = feriados_como_set(db.get_df("feriados"))
-                compensados_set = compensaciones_como_set(db.get_df("compensaciones_feriado"))
-                por_persona_dia = clasificar_horas_por_dia(por_persona_dia, feriados_set, compensados_set)
-                resumen_por_id  = por_persona_dia.groupby("personal_id").agg(
-                    horas_normales=("horas_normales","sum"), horas_extras=("horas_extras","sum"),
-                    horas_dobles=("horas_dobles","sum"), horas_compensadas=("horas_compensadas","sum"),
-                    horas_totales=("horas","sum"),
-                )
-            else:
-                resumen_por_id = pd.DataFrame(columns=["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"])
+        if not hh_f.empty:
+            por_persona_dia = hh_f.groupby(["personal_id","fecha"])["horas"].sum().reset_index()
+            feriados_set    = feriados_como_set(db.get_df("feriados"))
+            compensados_set = compensaciones_como_set(db.get_df("compensaciones_feriado"))
+            por_persona_dia = clasificar_horas_por_dia(por_persona_dia, feriados_set, compensados_set)
+            resumen_por_id  = por_persona_dia.groupby("personal_id").agg(
+                horas_normales=("horas_normales","sum"), horas_extras=("horas_extras","sum"),
+                horas_dobles=("horas_dobles","sum"), horas_compensadas=("horas_compensadas","sum"),
+                horas_totales=("horas","sum"),
+            )
+        else:
+            resumen_por_id = pd.DataFrame(columns=["horas_normales","horas_extras","horas_dobles","horas_compensadas","horas_totales"])
 
             if personal_cat.empty:
                 st.info("Configura personal en Catálogos → Personal.")
