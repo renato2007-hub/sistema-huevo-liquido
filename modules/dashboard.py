@@ -192,9 +192,9 @@ def render(db, username, rol):
     if not prod_costos.empty:
         for col in ["costo_total","kg_real","costo_huevo","costo_insumos","costo_mano_obra","agua_litros","cascara_real_kg"]:
             prod_costos[col] = pd.to_numeric(prod_costos[col], errors="coerce").fillna(0)
-    costo_total_periodo = prod_costos["costo_total"].sum() if not prod_costos.empty else 0.0
+    costo_huevo_periodo = prod_costos["costo_huevo"].sum() if not prod_costos.empty else 0.0
+    costo_insumos_periodo = prod_costos["costo_insumos"].sum() if not prod_costos.empty else 0.0
     kg_total_periodo    = prod_costos["kg_real"].sum() if not prod_costos.empty else 0.0
-    costo_por_kg_general= costo_total_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
     agua_produccion     = prod_costos["agua_litros"].sum() if not prod_costos.empty else 0.0
     agua_limpieza       = _num(limpieza_f, "agua_litros").sum()
 
@@ -218,6 +218,18 @@ def render(db, username, rol):
             )
     hh_f = _filtrar_por_fecha(hh_df, desde, hasta)
     horas_totales_periodo = _num(hh_f, "horas").sum()
+
+    # Costo MO real desde jornadas del período
+    costo_mo_periodo = _num(hh_f, "costo_calculado").sum()
+
+    # Costo total real = huevo + insumos + MO (desde jornadas) + envases (desde pasteurizacion)
+    costo_env_periodo = sum(
+        _num(past_f, c).sum() for c in
+        ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"]
+        if not past_f.empty and c in past_f.columns
+    )
+    costo_total_periodo = costo_huevo_periodo + costo_insumos_periodo + costo_mo_periodo + costo_env_periodo
+    costo_por_kg_general = costo_total_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
     hh_por_kg = horas_totales_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
 
     # ======================== RESUMEN EJECUTIVO ========================
@@ -381,16 +393,19 @@ def render(db, username, rol):
                 if prod_costos.empty:
                     st.info("Sin datos de costos en este período.")
                 else:
-                    costo_huevo_sum   = prod_costos["costo_huevo"].sum()
-                    costo_insumos_sum = prod_costos["costo_insumos"].sum()
-                    costo_mo_sum      = prod_costos["costo_mano_obra"].sum()
+                    costo_huevo_sum   = costo_huevo_periodo
+                    costo_insumos_sum = costo_insumos_periodo
+                    costo_mo_sum      = costo_mo_periodo
+                    costo_env_sum     = costo_env_periodo
                     pct = lambda v: (v/costo_total_periodo*100) if costo_total_periodo > 0 else 0
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2, c3, c4 = st.columns(4)
                     _kpi_card(c1, "🥚", "Huevo", f"${costo_huevo_sum:,.2f}", ayuda=f"{pct(costo_huevo_sum):.0f}% del costo total")
-                    _kpi_card(c2, "🧴", "Insumos", f"${costo_insumos_sum:,.2f}", ayuda=f"{pct(costo_insumos_sum):.0f}% del costo total")
-                    _kpi_card(c3, "👷", "Mano de obra", f"${costo_mo_sum:,.2f}", ayuda=f"{pct(costo_mo_sum):.0f}% del costo total")
-                    _grafico_dona(["Huevo","Insumos","Mano de obra"],
-                                  [costo_huevo_sum, costo_insumos_sum, costo_mo_sum], "Composición del costo")
+                    _kpi_card(c2, "📦", "Envases/etiquetas", f"${costo_env_sum:,.2f}", ayuda=f"{pct(costo_env_sum):.0f}% del costo total")
+                    _kpi_card(c3, "🧴", "Insumos", f"${costo_insumos_sum:,.2f}", ayuda=f"{pct(costo_insumos_sum):.0f}% del costo total")
+                    _kpi_card(c4, "👷", "Mano de obra", f"${costo_mo_sum:,.2f}", ayuda=f"{pct(costo_mo_sum):.0f}% del costo total")
+                    _grafico_dona(["Huevo","Envases","Insumos","Mano de obra"],
+                                  [costo_huevo_sum, costo_env_sum, costo_insumos_sum, costo_mo_sum],
+                                  "Composición del costo")
 
                     superv_periodo = _filtrar_por_fecha(db.get_df("supervision_diaria"), desde, hasta)
                     costo_superv = _num(superv_periodo, "costo_calculado").sum()
