@@ -839,14 +839,34 @@ def render(db, username, rol):
             ]
             if f.empty:
                 return []
+            # deduplicar por personal_id (evitar doble registro)
+            f = f.drop_duplicates(subset=["personal_id"])
             if not personal_cat_df.empty:
                 f = f.merge(personal_cat_df[["personal_id","nombre"]], on="personal_id", how="left")
                 f["nombre"] = f["nombre"].fillna(f["personal_id"])
                 return list(f["nombre"])
             return list(f["personal_id"])
 
+        def _turno_tiene_actividad(jornadas_df, prod_df, fecha, turno_id):
+            """True si hay jornadas o producción registrada para ese turno en esa fecha."""
+            if not jornadas_df.empty:
+                fj = jornadas_df[
+                    (jornadas_df["fecha"].astype(str) == str(fecha)) &
+                    (jornadas_df["turno_id"].astype(str) == str(turno_id))
+                ]
+                if not fj.empty:
+                    return True
+            if not prod_df.empty and "turno" in prod_df.columns:
+                fp = prod_df[
+                    (prod_df["fecha"].astype(str) == str(fecha)) &
+                    (prod_df["turno"].astype(str) == str(turno_id))
+                ]
+                if not fp.empty:
+                    return True
+            return False
+
         def _kg_turno(prod_df, fecha, turno_id):
-            if prod_df.empty:
+            if prod_df.empty or "turno" not in prod_df.columns:
                 return 0.0, {}
             f = prod_df[
                 (prod_df["fecha"].astype(str) == str(fecha)) &
@@ -854,6 +874,7 @@ def render(db, username, rol):
             ]
             if f.empty:
                 return 0.0, {}
+            f = f.copy()
             f["kg_real"] = pd.to_numeric(f["kg_real"], errors="coerce").fillna(0)
             por_tipo = f.groupby("tipo_producto")["kg_real"].sum().to_dict()
             return f["kg_real"].sum(), por_tipo
@@ -923,9 +944,16 @@ def render(db, username, rol):
 
             turnos_a_mostrar = list(turno_cat["turno_id"]) if (turno_sel == "Todos" and not turno_cat.empty) else [turno_sel]
             costo_overhead = _costo_mo_overhead_dia(jornadas, personal_cat, fecha_t)
-            n_turnos = len(turnos_a_mostrar) if turnos_a_mostrar else 1
+            # Solo mostrar turnos con actividad real ese día
+            turnos_con_actividad = [
+                tid for tid in turnos_a_mostrar
+                if _turno_tiene_actividad(jornadas, produccion, fecha_t, tid)
+            ]
+            if not turnos_con_actividad:
+                st.info(f"No hay actividad registrada para el {fecha_t} en ningún turno.")
+            n_turnos = len(turnos_con_actividad) if turnos_con_actividad else 1
 
-            for tid in turnos_a_mostrar:
+            for tid in turnos_con_actividad:
                 tnombre = tid
                 if not turno_cat.empty and tid in list(turno_cat["turno_id"]):
                     tnombre = turno_cat.set_index("turno_id").loc[tid, "nombre"]
