@@ -47,9 +47,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-CACHE_TTL = 20  # segundos que se reusa una lectura antes de pedirla de nuevo
-REINTENTOS = 3
-ESPERA_ENTRE_REINTENTOS = 2  # segundos
+CACHE_TTL = 60  # segundos que se reusa una lectura antes de pedirla de nuevo
+REINTENTOS = 5
+ESPERA_ENTRE_REINTENTOS = 3  # segundos (se duplica con backoff exponencial)
 
 
 def _a_tipo_nativo(v):
@@ -66,13 +66,22 @@ def _a_tipo_nativo(v):
 
 
 def _con_reintentos(funcion, *args, **kwargs):
-    """Ejecuta funcion(*args, **kwargs); si falla por un problema de red
-    transitorio (wifi cortado, timeout, etc.) reintenta unas pocas veces
-    antes de rendirse y dejar pasar el error real."""
+    """Ejecuta funcion(*args, **kwargs); reintenta ante errores de red y rate limit
+    de Google Sheets (429 / APIError) con backoff exponencial."""
+    import gspread.exceptions
     ultimo_error = None
     for intento in range(1, REINTENTOS + 1):
         try:
             return funcion(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            ultimo_error = e
+            status = e.response.status_code if hasattr(e, "response") else 0
+            if status == 429 or status >= 500:
+                espera = ESPERA_ENTRE_REINTENTOS * (2 ** (intento - 1))
+                if intento < REINTENTOS:
+                    time.sleep(espera)
+            else:
+                raise
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             ultimo_error = e
             if intento < REINTENTOS:
