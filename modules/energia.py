@@ -185,9 +185,9 @@ def render(db, username, rol):
                 m1.metric("Total kWh", f"{elec_df['kwh'].sum():,.1f}")
                 m2.metric("Total MJ", f"{elec_df['mj_total'].sum():,.1f}")
                 m3.metric("Costo total", f"${elec_df['costo_total'].sum():,.2f}")
+                elec_sorted = elec_df.sort_values("orden", ascending=False)
                 st.dataframe(
-                    elec_df[["periodo","kwh","costo_total","mj_total","observaciones"]]
-                    .sort_values("orden", ascending=False),
+                    elec_sorted[["periodo","kwh","costo_total","mj_total","observaciones"]],
                     use_container_width=True, hide_index=True,
                 )
 
