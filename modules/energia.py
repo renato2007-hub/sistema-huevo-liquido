@@ -180,13 +180,14 @@ def render(db, username, rol):
                 elec_df["periodo"] = elec_df.apply(
                     lambda r: f"{MESES[int(r['mes'])-1]} {int(r['anio'])}", axis=1
                 )
+                elec_df["orden"] = elec_df["anio"] * 100 + elec_df["mes"]
                 m1,m2,m3 = st.columns(3)
                 m1.metric("Total kWh", f"{elec_df['kwh'].sum():,.1f}")
                 m2.metric("Total MJ", f"{elec_df['mj_total'].sum():,.1f}")
                 m3.metric("Costo total", f"${elec_df['costo_total'].sum():,.2f}")
                 st.dataframe(
                     elec_df[["periodo","kwh","costo_total","mj_total","observaciones"]]
-                    .sort_values(["anio","mes"], ascending=False),
+                    .sort_values("orden", ascending=False),
                     use_container_width=True, hide_index=True,
                 )
 
