@@ -241,7 +241,13 @@ def render(db, username, rol):
         costo_elec_f = elec_periodo[elec_f_mask]["costo_total"].sum()
     costo_energia_periodo = costo_diesel_f + costo_elec_f
 
-    # Costo total real = huevo + envases + insumos + MO + energía
+    # Costo envases desde pasteurizacion
+    costo_env_periodo = sum(
+        _num(past_f, c).sum() for c in
+        ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"]
+        if not past_f.empty and c in past_f.columns
+    )
+
     costo_total_periodo = costo_huevo_periodo + costo_insumos_periodo + costo_mo_periodo + costo_env_periodo + costo_energia_periodo
     costo_por_kg_general = costo_total_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
     hh_por_kg = horas_totales_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
