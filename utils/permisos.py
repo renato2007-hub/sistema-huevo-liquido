@@ -29,7 +29,7 @@ _MODULOS_OPERATIVOS = {
     "Producción de semielaborados",
     "Pasteurización y envasado",
     "Cuarto frío",
-    "Limpieza y desinfección",
+    "Limpieza y desinfección", "Energía",
 }
 
 MODULOS_PERMITIDOS = {

@@ -14,6 +14,7 @@ from modules import (
     solicitud_compra,
     pedidos,
     plan_produccion,
+    energia,
     personal_turnos,
     dashboard,
     trazabilidad,
@@ -187,6 +188,8 @@ elif modulo == "Limpieza y desinfección":
     limpieza_desinfeccion.render(db, username, rol)
 elif modulo == "Supervisión y calidad":
     supervision.render(db, username, rol)
+elif modulo == "Energía":
+    energia.render(db, username, rol)
 elif modulo == "Trazabilidad":
     trazabilidad.render(db, username, rol)
 elif modulo == "Personal y turnos":

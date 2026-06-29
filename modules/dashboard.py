@@ -222,13 +222,27 @@ def render(db, username, rol):
     # Costo MO real desde jornadas del período
     costo_mo_periodo = _num(hh_f, "costo_calculado").sum()
 
-    # Costo total real = huevo + insumos + MO (desde jornadas) + envases (desde pasteurizacion)
-    costo_env_periodo = sum(
-        _num(past_f, c).sum() for c in
-        ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"]
-        if not past_f.empty and c in past_f.columns
-    )
-    costo_total_periodo = costo_huevo_periodo + costo_insumos_periodo + costo_mo_periodo + costo_env_periodo
+    # Costo de energía del período
+    diesel_periodo = db.get_df("registro_diesel")
+    elec_periodo   = db.get_df("registro_electricidad")
+    diesel_f = _filtrar_por_fecha(diesel_periodo, desde, hasta)
+    costo_diesel_f = _num(diesel_f, "costo_total").sum()
+    costo_elec_f   = 0.0
+    if not elec_periodo.empty:
+        for c in ["anio","mes","costo_total","mj_total","kwh"]:
+            elec_periodo[c] = pd.to_numeric(elec_periodo[c], errors="coerce").fillna(0)
+        elec_periodo["fecha_mes"] = pd.to_datetime(
+            elec_periodo.apply(lambda r: f"{int(r['anio'])}-{int(r['mes']):02d}-01", axis=1)
+        ).dt.date
+        elec_f_mask = (
+            (elec_periodo["fecha_mes"] >= desde.replace(day=1)) &
+            (elec_periodo["fecha_mes"] <= hasta.replace(day=1))
+        )
+        costo_elec_f = elec_periodo[elec_f_mask]["costo_total"].sum()
+    costo_energia_periodo = costo_diesel_f + costo_elec_f
+
+    # Costo total real = huevo + envases + insumos + MO + energía
+    costo_total_periodo = costo_huevo_periodo + costo_insumos_periodo + costo_mo_periodo + costo_env_periodo + costo_energia_periodo
     costo_por_kg_general = costo_total_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
     hh_por_kg = horas_totales_periodo / kg_total_periodo if kg_total_periodo > 0 else 0
 
@@ -514,6 +528,55 @@ def render(db, username, rol):
                 st.markdown("**Desglose de horas por persona**")
                 _grafico_barras_apiladas(reporte.set_index("nombre"),
                                          ["horas_normales","horas_extras","horas_dobles","horas_compensadas"])
+                st.write("")
+
+                # ── KPI de género (indicador GRI 405-1) ──────────────────
+                with st.container(border=True):
+                    st.markdown("##### 🚺🚹 Indicador de género (GRI 405-1)")
+                    if "genero" not in personal_cat.columns or personal_cat["genero"].isna().all():
+                        st.info("Agrega la columna **genero** (F/M) en el catálogo de personal del Sheet para ver este indicador.")
+                    else:
+                        if not hh_f.empty:
+                            gen_df = hh_f.merge(
+                                personal_cat[["personal_id","genero"]], on="personal_id", how="left"
+                            )
+                            gen_df["genero"] = gen_df["genero"].fillna("No especificado").str.upper()
+                            horas_por_genero = gen_df.groupby("genero")["horas"].apply(
+                                lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum()
+                            )
+                            horas_f = horas_por_genero.get("F", 0)
+                            horas_m = horas_por_genero.get("M", 0)
+                            horas_total_gen = horas_f + horas_m
+                            pct_f = horas_f / horas_total_gen * 100 if horas_total_gen > 0 else 0
+                            pct_m = horas_m / horas_total_gen * 100 if horas_total_gen > 0 else 0
+
+                            personas_f = gen_df[gen_df["genero"]=="F"]["personal_id"].nunique()
+                            personas_m = gen_df[gen_df["genero"]=="M"]["personal_id"].nunique()
+
+                            gc1, gc2, gc3, gc4 = st.columns(4)
+                            gc1.metric("🚺 Horas mujeres", f"{horas_f:,.1f} h", f"{pct_f:.1f}%")
+                            gc2.metric("🚹 Horas hombres", f"{horas_m:,.1f} h", f"{pct_m:.1f}%")
+                            gc3.metric("🚺 Mujeres activas", f"{personas_f}")
+                            gc4.metric("🚹 Hombres activos", f"{personas_m}")
+
+                            if horas_total_gen > 0:
+                                import plotly.graph_objects as go
+                                fig_g = go.Figure(go.Pie(
+                                    labels=["Mujeres (F)","Hombres (M)"],
+                                    values=[horas_f, horas_m],
+                                    hole=0.55,
+                                    marker_colors=["#e91e63","#1565c0"],
+                                    textinfo="label+percent",
+                                ))
+                                fig_g.update_layout(
+                                    showlegend=False, height=200,
+                                    margin=dict(t=10,b=10,l=10,r=10),
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                )
+                                st.plotly_chart(fig_g, use_container_width=True)
+                        else:
+                            st.info("Sin registros de jornadas en el período seleccionado.")
+
                 st.write("")
                 pdf_bytes = generar_pdf_horas_personal(reporte.to_dict("records"), desde, hasta)
                 st.download_button("📄 Descargar reporte PDF de horas",

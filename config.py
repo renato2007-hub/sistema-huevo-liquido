@@ -40,6 +40,14 @@ SHEET_SCHEMAS = {
         "horas", "horas_nocturnas", "costo_calculado", "usuario", "observaciones",
     ],
 
+    "registro_diesel": [
+        "diesel_id", "fecha", "uso", "galones", "costo_galon",
+        "costo_total", "mj_total", "usuario", "observaciones",
+    ],
+    "registro_electricidad": [
+        "elec_id", "anio", "mes", "kwh", "costo_total", "mj_total", "usuario", "observaciones",
+    ],
+
     "stock_a_granel": [
         "stock_id", "fecha_entrada", "lote_origen", "tipo_producto",
         "kg_inicial", "kg_saldo", "usuario", "observaciones",
@@ -51,7 +59,7 @@ SHEET_SCHEMAS = {
         "fecha_pedido", "fecha_produccion", "fecha_entrega",
         "producido", "usuario", "observaciones",
     ],
-    "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "activo"],
+    "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "genero", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
     "areas_limpieza": ["area_id", "nombre", "activo"],
