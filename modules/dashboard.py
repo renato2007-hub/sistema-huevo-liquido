@@ -862,19 +862,26 @@ def render(db, username, rol):
 
         def _personas_turno(jornadas_df, personal_cat_df, fecha, turno_id):
             if jornadas_df.empty:
-                return []
+                return [], []
             f = jornadas_df[
                 (jornadas_df["fecha"].astype(str) == str(fecha)) &
                 (jornadas_df["turno_id"].astype(str) == str(turno_id))
             ]
             if f.empty:
-                return []
+                return [], []
             f = f.drop_duplicates(subset=["personal_id"])
-            if not personal_cat_df.empty:
-                f = f.merge(personal_cat_df[["personal_id","nombre"]], on="personal_id", how="left")
-                f["nombre"] = f["nombre"].fillna(f["personal_id"])
-                return list(f["nombre"])
-            return list(f["personal_id"])
+            ids_jefes = set(personal_cat_df[personal_cat_df["personal_id"].str.startswith("JEF_")]["personal_id"]) if not personal_cat_df.empty else set()
+            f_ops  = f[~f["personal_id"].isin(ids_jefes)]
+            f_jefs = f[f["personal_id"].isin(ids_jefes)]
+            def _nombres(df_sub):
+                if df_sub.empty:
+                    return []
+                if not personal_cat_df.empty:
+                    df_sub = df_sub.merge(personal_cat_df[["personal_id","nombre"]], on="personal_id", how="left")
+                    df_sub["nombre"] = df_sub["nombre"].fillna(df_sub["personal_id"])
+                    return list(df_sub["nombre"])
+                return list(df_sub["personal_id"])
+            return _nombres(f_ops), _nombres(f_jefs)
 
         def _turno_tiene_actividad(jornadas_df, prod_df, fecha, turno_id):
             if not jornadas_df.empty:
@@ -997,7 +1004,7 @@ def render(db, username, rol):
                 costo_ins = _costo_insumos_dia(limpieza_f, fecha_t) / n_turnos
                 overhead_turno = costo_overhead / n_turnos
                 agua      = _agua_turno(prod_f, limpieza_f, fecha_t, tid)
-                personas  = _personas_turno(jornadas, personal_cat, fecha_t, tid)
+                personas, jefes_en_turno = _personas_turno(jornadas, personal_cat, fecha_t, tid)
 
                 costo_total_turno = costo_mp + costo_env + costo_mo + costo_ins + overhead_turno
                 costo_kg_turno    = costo_total_turno / kg_total if kg_total > 0 else 0
@@ -1040,9 +1047,11 @@ def render(db, username, rol):
                             st.plotly_chart(fig, use_container_width=True)
 
                     if personas:
-                        st.caption("👷 Personal: " + ", ".join(personas))
+                        st.caption("👷 Operarios: " + ", ".join(personas))
+                    if jefes_en_turno:
+                        st.caption("👔 Jefes (overhead diario): " + ", ".join(jefes_en_turno))
                     if costo_overhead > 0:
-                        st.caption(f"👔 Jefes de planta/calidad (costo diario ${ costo_overhead:,.2f} dividido entre {n_turnos} turno(s))")
+                        st.caption(f"👔 Costo jefes del día ${costo_overhead:,.2f} dividido entre {n_turnos} turno(s) activo(s)")
 
         # ── TAB: POR DÍA ────────────────────────────────────────────────
         with sub_dia:
