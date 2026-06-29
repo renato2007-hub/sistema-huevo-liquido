@@ -105,6 +105,7 @@ if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "T
     _boton_modulo("Supervisión y calidad", "👔")
     _boton_modulo("Trazabilidad", "📄")
     _boton_modulo("Personal y turnos", "👥")
+    _boton_modulo("Energía", "⚡")
 
 if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
     _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
