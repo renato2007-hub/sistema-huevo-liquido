@@ -930,9 +930,9 @@ def render(db, username, rol):
                 if not turno_cat.empty and tid in list(turno_cat["turno_id"]):
                     tnombre = turno_cat.set_index("turno_id").loc[tid, "nombre"]
 
-                kg_total, kg_por_tipo = _kg_turno(prod_f, fecha_t, tid)
-                costo_mp  = _costo_mp_turno(consumo_f, prod_f, fecha_t, tid)
-                costo_env = _costo_envases_turno(past_full, prod_f, fecha_t, tid)
+                kg_total, kg_por_tipo = _kg_turno(produccion, fecha_t, tid)
+                costo_mp  = _costo_mp_turno(consumo_full, produccion, fecha_t, tid)
+                costo_env = _costo_envases_turno(past_full, produccion, fecha_t, tid)
                 costo_mo  = _costo_mo_turno(jornadas, personal_cat, fecha_t, tid)
                 costo_ins = _costo_insumos_dia(limpieza_f, fecha_t) / n_turnos
                 overhead_turno = costo_overhead / n_turnos
@@ -995,7 +995,6 @@ def render(db, username, rol):
             if not cons_dia.empty and not prod_dia.empty:
                 lotes_dia = prod_dia["lote_semielaborado_id"].tolist()
                 cons_dia  = cons_dia[cons_dia["lote_semielaborado_id"].isin(lotes_dia)]
-
             kg_dia     = _num_col(prod_dia, "kg_real").sum()
             costo_mp_d = _num_col(cons_dia, "costo_total_aplicado").sum()
             costo_env_d= sum(_num_col(past_dia, c).sum() for c in ["costo_envases","costo_tapas","costo_etiquetas","costo_cartones","costo_liners"] if c in past_dia.columns)
