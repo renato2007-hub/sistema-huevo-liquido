@@ -847,8 +847,36 @@ def render(db, username, rol):
                 return list(f["nombre"])
             return list(f["personal_id"])
 
+        # Mapa turno_id -> posibles valores en produccion_semielaborados.turno
+        mapa_turno_aliases = {}
+        if not turno_cat.empty:
+            for _, tr in turno_cat.iterrows():
+                tid  = str(tr["turno_id"])
+                nom  = str(tr.get("nombre", tid))
+                # guardar todas las variantes posibles
+                mapa_turno_aliases[tid] = {tid, nom, tid.replace("Turno_","T").replace("turno_","T")}
+
+        def _turno_values(turno_id):
+            """Devuelve el set de valores que pueden aparecer en produccion.turno para este turno_id."""
+            return mapa_turno_aliases.get(str(turno_id), {str(turno_id)})
+
+        def _personas_turno(jornadas_df, personal_cat_df, fecha, turno_id):
+            if jornadas_df.empty:
+                return []
+            f = jornadas_df[
+                (jornadas_df["fecha"].astype(str) == str(fecha)) &
+                (jornadas_df["turno_id"].astype(str) == str(turno_id))
+            ]
+            if f.empty:
+                return []
+            f = f.drop_duplicates(subset=["personal_id"])
+            if not personal_cat_df.empty:
+                f = f.merge(personal_cat_df[["personal_id","nombre"]], on="personal_id", how="left")
+                f["nombre"] = f["nombre"].fillna(f["personal_id"])
+                return list(f["nombre"])
+            return list(f["personal_id"])
+
         def _turno_tiene_actividad(jornadas_df, prod_df, fecha, turno_id):
-            """True si hay jornadas o producción registrada para ese turno en esa fecha."""
             if not jornadas_df.empty:
                 fj = jornadas_df[
                     (jornadas_df["fecha"].astype(str) == str(fecha)) &
@@ -857,9 +885,10 @@ def render(db, username, rol):
                 if not fj.empty:
                     return True
             if not prod_df.empty and "turno" in prod_df.columns:
+                vals = _turno_values(turno_id)
                 fp = prod_df[
                     (prod_df["fecha"].astype(str) == str(fecha)) &
-                    (prod_df["turno"].astype(str) == str(turno_id))
+                    (prod_df["turno"].astype(str).isin(vals))
                 ]
                 if not fp.empty:
                     return True
@@ -868,9 +897,10 @@ def render(db, username, rol):
         def _kg_turno(prod_df, fecha, turno_id):
             if prod_df.empty or "turno" not in prod_df.columns:
                 return 0.0, {}
+            vals = _turno_values(turno_id)
             f = prod_df[
                 (prod_df["fecha"].astype(str) == str(fecha)) &
-                (prod_df["turno"].astype(str) == str(turno_id))
+                (prod_df["turno"].astype(str).isin(vals))
             ]
             if f.empty:
                 return 0.0, {}
@@ -882,10 +912,11 @@ def render(db, username, rol):
         def _costo_mp_turno(consumo_df, prod_df, fecha, turno_id):
             if consumo_df.empty or prod_df.empty:
                 return 0.0
+            vals = _turno_values(turno_id)
             lotes_turno = prod_df[
                 (prod_df["fecha"].astype(str) == str(fecha)) &
-                (prod_df["turno"].astype(str) == str(turno_id))
-            ]["lote_semielaborado_id"].tolist()
+                (prod_df["turno"].astype(str).isin(vals))
+            ]["lote_semielaborado_id"].tolist() if "turno" in prod_df.columns else []
             if not lotes_turno:
                 return 0.0
             c = consumo_df[consumo_df["lote_semielaborado_id"].isin(lotes_turno)]
@@ -894,10 +925,11 @@ def render(db, username, rol):
         def _costo_envases_turno(past_df, prod_df, fecha, turno_id):
             if past_df.empty or prod_df.empty:
                 return 0.0
+            vals = _turno_values(turno_id)
             lotes_turno = prod_df[
                 (prod_df["fecha"].astype(str) == str(fecha)) &
-                (prod_df["turno"].astype(str) == str(turno_id))
-            ]["lote_semielaborado_id"].tolist()
+                (prod_df["turno"].astype(str).isin(vals))
+            ]["lote_semielaborado_id"].tolist() if "turno" in prod_df.columns else []
             if not lotes_turno:
                 return 0.0
             p = past_df[past_df["lote_semielaborado_id"].isin(lotes_turno)]
