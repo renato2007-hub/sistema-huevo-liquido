@@ -102,12 +102,13 @@ if not es_despachador(rol):
 _boton_modulo("Cuarto frío", "❄️")
 
 if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad") or puede_ver_modulo(rol, "Supervisión y calidad"):
-    _categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
-    _boton_modulo("Limpieza y desinfección", "🧽")
-    _boton_modulo("Supervisión y calidad", "👔")
-    _boton_modulo("Trazabilidad", "📄")
-    _boton_modulo("Personal y turnos", "👥")
-    _boton_modulo("Energía", "⚡")
+    if not es_despachador(rol):
+        _categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
+        _boton_modulo("Limpieza y desinfección", "🧽")
+        _boton_modulo("Supervisión y calidad", "👔")
+        _boton_modulo("Trazabilidad", "📄")
+        _boton_modulo("Personal y turnos", "👥")
+        _boton_modulo("Energía", "⚡")
 
 if es_despachador(rol):
     _categoria("🔍&nbsp;&nbsp;CONSULTA", "#0E8A8A")
