@@ -92,34 +92,32 @@ if es_despachador(rol):
         ("Cuarto frío",          "❄️",  "#0D6EFD"),
         ("Recepción de pedidos", "📋",  "#198754"),
     ]
-    st.sidebar.markdown("""
-        <style>
-        div[data-testid="stSidebar"] button[kind="secondary"] {
-            height: 90px !important;
-            font-size: 1.1rem !important;
-            font-weight: 800 !important;
-            border-radius: 14px !important;
-            margin-bottom: 10px !important;
-            white-space: pre-line !important;
-        }
-        div[data-testid="stSidebar"] button[kind="primary"] {
-            height: 90px !important;
-            font-size: 1.1rem !important;
-            font-weight: 800 !important;
-            border-radius: 14px !important;
-            margin-bottom: 10px !important;
-            white-space: pre-line !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
     for nombre_mod, icono, color in tarjetas:
         activo = modulo_actual == nombre_mod
-        label  = f"{icono}\n{nombre_mod.upper()}"
+        fondo  = "#FFD700" if activo else color
+        texto  = "#000000" if activo else "#ffffff"
+        borde  = "4px solid #FFD700" if activo else f"4px solid {color}"
+        # Botón real de Streamlit debajo pero con label que incluye el ícono
+        # Para hacerlo grande usamos markdown encima y botón nativo debajo
+        st.sidebar.markdown(
+            f"""<style>
+            div[data-testid="stSidebar"] div[data-testid="stButton"]:has(button[data-testid*="{nombre_mod.replace(' ','_')}"]) button {{
+                background-color: {fondo} !important;
+                color: {texto} !important;
+                border: {borde} !important;
+                height: 90px !important;
+                font-size: 1.15rem !important;
+                font-weight: 900 !important;
+                border-radius: 14px !important;
+                letter-spacing: 1px !important;
+            }}
+            </style>""",
+            unsafe_allow_html=True,
+        )
         if st.sidebar.button(
-            label,
-            key=f"nav_desp_{nombre_mod}",
+            f"{icono}  {nombre_mod.upper()}",
+            key=f"nav_desp_{nombre_mod.replace(' ','_')}",
             use_container_width=True,
-            type="primary" if activo else "secondary",
         ):
             st.session_state["modulo_actual"] = nombre_mod
             st.rerun()
