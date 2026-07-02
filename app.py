@@ -2,7 +2,7 @@ import base64
 import streamlit as st
 from utils.sheets_client import get_db
 from utils.auth import login
-from utils.permisos import puede_ver_modulo, NOMBRES_ROL, rol_normalizado
+from utils.permisos import puede_ver_modulo, NOMBRES_ROL, rol_normalizado, es_despachador
 from modules import (
     bodega_mp,
     bodega_envases_insumos,
@@ -92,11 +92,13 @@ if puede_ver_modulo(rol, "Solicitud MP e Insumos") or puede_ver_modulo(rol, "Rec
     _boton_modulo("Recepción de pedidos", "🧾")
     _boton_modulo("Plan de producción", "📅")
 
-_categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
-_boton_modulo("Bodega de materia prima", "🥚")
-_boton_modulo("Bodega de envases e insumos", "📦")
-_boton_modulo("Producción de semielaborados", "⚗️")
-_boton_modulo("Pasteurización y envasado", "🧪")
+if not es_despachador(rol):
+    _categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
+    _boton_modulo("Bodega de materia prima", "🥚")
+    _boton_modulo("Bodega de envases e insumos", "📦")
+    _boton_modulo("Producción de semielaborados", "⚗️")
+    _boton_modulo("Pasteurización y envasado", "🧪")
+
 _boton_modulo("Cuarto frío", "❄️")
 
 if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad") or puede_ver_modulo(rol, "Supervisión y calidad"):
@@ -106,6 +108,10 @@ if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "T
     _boton_modulo("Trazabilidad", "📄")
     _boton_modulo("Personal y turnos", "👥")
     _boton_modulo("Energía", "⚡")
+
+if es_despachador(rol):
+    _categoria("🔍&nbsp;&nbsp;CONSULTA", "#0E8A8A")
+    _boton_modulo("Trazabilidad", "📄")
 
 if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
     _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
