@@ -88,39 +88,50 @@ _boton_modulo("Inicio", "🏠")
 
 if es_despachador(rol):
     modulo_actual = st.session_state.get("modulo_actual", "Cuarto frío")
+    # CSS global para los botones del despachador
+    st.sidebar.markdown("""
+        <style>
+        .desp-btn {
+            display: block;
+            width: 100%;
+            padding: 22px 10px;
+            margin-bottom: 12px;
+            border: none;
+            border-radius: 16px;
+            font-size: 1.2rem;
+            font-weight: 900;
+            letter-spacing: 1px;
+            cursor: pointer;
+            text-align: center;
+            line-height: 1.4;
+        }
+        .desp-btn-cf  { background:#0D6EFD; color:#fff; }
+        .desp-btn-rp  { background:#198754; color:#fff; }
+        .desp-btn-active { background:#FFD700 !important; color:#000 !important;
+                           border: 4px solid #000 !important; }
+        </style>
+    """, unsafe_allow_html=True)
+
     tarjetas = [
-        ("Cuarto frío",          "❄️",  "#0D6EFD"),
-        ("Recepción de pedidos", "📋",  "#198754"),
+        ("Cuarto frío",          "❄️",  "cf"),
+        ("Recepción de pedidos", "📋",  "rp"),
     ]
-    for nombre_mod, icono, color in tarjetas:
+    for nombre_mod, icono, cls in tarjetas:
         activo = modulo_actual == nombre_mod
-        fondo  = "#FFD700" if activo else color
-        texto  = "#000000" if activo else "#ffffff"
-        borde  = "4px solid #FFD700" if activo else f"4px solid {color}"
-        # Botón real de Streamlit debajo pero con label que incluye el ícono
-        # Para hacerlo grande usamos markdown encima y botón nativo debajo
-        st.sidebar.markdown(
-            f"""<style>
-            div[data-testid="stSidebar"] div[data-testid="stButton"]:has(button[data-testid*="{nombre_mod.replace(' ','_')}"]) button {{
-                background-color: {fondo} !important;
-                color: {texto} !important;
-                border: {borde} !important;
-                height: 90px !important;
-                font-size: 1.15rem !important;
-                font-weight: 900 !important;
-                border-radius: 14px !important;
-                letter-spacing: 1px !important;
-            }}
-            </style>""",
-            unsafe_allow_html=True,
-        )
+        clase  = f"desp-btn desp-btn-{cls}" + (" desp-btn-active" if activo else "")
         if st.sidebar.button(
             f"{icono}  {nombre_mod.upper()}",
-            key=f"nav_desp_{nombre_mod.replace(' ','_')}",
+            key=f"nav_desp_{cls}",
             use_container_width=True,
         ):
             st.session_state["modulo_actual"] = nombre_mod
             st.rerun()
+        # Overlay de color encima con pointer-events:none (solo visual)
+        st.sidebar.markdown(
+            f'<div class="{clase}" style="margin-top:-44px; pointer-events:none;">'
+            f'{icono}<br>{nombre_mod.upper()}</div>',
+            unsafe_allow_html=True,
+        )
 else:
     _categoria("📋&nbsp;&nbsp;PLANIFICACIÓN", "#2D6CA2")
     _boton_modulo("Solicitud MP e Insumos", "📑")
