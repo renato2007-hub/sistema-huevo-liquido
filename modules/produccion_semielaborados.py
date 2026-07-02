@@ -210,18 +210,41 @@ def render(db, username, rol):
         mapa_recepcion_a_costo = dict(zip(recepciones_con_saldo["recepcion_id"], pd.to_numeric(recepciones_con_saldo["costo_cubeta"], errors="coerce").fillna(0)))
         mapa_recepcion_a_categoria = dict(zip(recepciones_con_saldo["recepcion_id"], recepciones_con_saldo["categoria_id"]))
 
-        # Pre-poblar con sugerencia FEFO (por vencimiento) pero el usuario puede cambiar todo
-        recepciones_sorted = recepciones_con_saldo.sort_values("fecha_vencimiento")
-        filas_sugeridas = []
-        restante = cubetas_necesarias
-        for _, lote in recepciones_sorted.iterrows():
-            if restante <= 0:
-                break
-            saldo = float(lote["cubetas_saldo_num"])
-            tomar = min(saldo, restante)
-            opcion = f"{lote['recepcion_id']} — {mapa_cat_nombre.get(lote['categoria_id'], lote['categoria_id'])} — saldo: {int(saldo)} cub."
-            filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": tomar})
-            restante -= tomar
+        # Pre-poblar: si hay plan de MP para esta fecha, usarlo; sino FEFO normal
+        plan_mp_df = db.get_df("plan_mp_asignado")
+        plan_fecha = pd.DataFrame()
+        if not plan_mp_df.empty:
+            plan_fecha = plan_mp_df[plan_mp_df["fecha"].astype(str) == fecha.isoformat()].copy()
+            if not plan_fecha.empty:
+                plan_fecha["cubetas_asignadas"] = pd.to_numeric(plan_fecha["cubetas_asignadas"], errors="coerce").fillna(0)
+                plan_fecha = plan_fecha[plan_fecha["cubetas_asignadas"] > 0]
+
+        if not plan_fecha.empty:
+            st.info(f"📅 Plan de producción del día: cargando lotes asignados por el jefe de planta.")
+            filas_sugeridas = []
+            for _, prow in plan_fecha.iterrows():
+                rec_id = prow["recepcion_id"]
+                cub    = float(prow["cubetas_asignadas"])
+                rec_match = recepciones_con_saldo[recepciones_con_saldo["recepcion_id"] == rec_id]
+                if rec_match.empty:
+                    continue
+                saldo = float(rec_match.iloc[0]["cubetas_saldo_num"])
+                cat   = rec_match.iloc[0]["categoria_id"]
+                opcion = f"{rec_id} — {mapa_cat_nombre.get(cat, cat)} — saldo: {int(saldo)} cub."
+                filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": min(cub, saldo)})
+        else:
+            # FEFO normal por vencimiento
+            recepciones_sorted = recepciones_con_saldo.sort_values("fecha_vencimiento")
+            filas_sugeridas = []
+            restante = cubetas_necesarias
+            for _, lote in recepciones_sorted.iterrows():
+                if restante <= 0:
+                    break
+                saldo = float(lote["cubetas_saldo_num"])
+                tomar = min(saldo, restante)
+                opcion = f"{lote['recepcion_id']} — {mapa_cat_nombre.get(lote['categoria_id'], lote['categoria_id'])} — saldo: {int(saldo)} cub."
+                filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": tomar})
+                restante -= tomar
 
         st.markdown("**Lotes a usar — elige el lote y la cantidad de cubetas de cada uno**")
         st.caption("Puedes mezclar lotes de distintas categorías. Agrega o quita filas según necesites.")

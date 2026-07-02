@@ -53,6 +53,14 @@ SHEET_SCHEMAS = {
         "kg_inicial", "kg_saldo", "usuario", "observaciones",
     ],
 
+    "pedidos_items": [
+        "item_id", "pedido_id", "tipo_producto", "presentacion_id",
+        "cantidad_kg", "unidades_solicitadas", "observaciones",
+    ],
+    "plan_mp_asignado": [
+        "plan_mp_id", "fecha", "recepcion_id", "cubetas_asignadas", "usuario", "observaciones",
+    ],
+
     "pedidos": [
         "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
         "tipo_producto", "presentacion_id", "unidades_solicitadas", "cantidad_kg",

@@ -42,58 +42,91 @@ def render(db, username, rol):
             cliente_id = c1.selectbox(
                 "Cliente", clientes["cliente_id"],
                 format_func=lambda x: clientes.set_index("cliente_id").loc[x, "nombre"],
+                key="ped_cliente",
             )
-            medio_recepcion = c2.selectbox("Medio de recepción", MEDIOS_RECEPCION)
-            ciudad = c3.text_input("Ciudad", "Quito")
-
+            medio_recepcion = c2.selectbox("Medio de recepción", MEDIOS_RECEPCION, key="ped_medio")
+            ciudad = c3.text_input("Ciudad", "Quito", key="ped_ciudad")
             c4, c5 = st.columns(2)
-            pedido_cliente_ref = c4.text_input("N° de pedido del cliente (si lo dieron)", "")
-            fecha_pedido = c5.date_input("Fecha en que hicieron el pedido", value=datetime.date.today())
+            pedido_cliente_ref = c4.text_input("N° de pedido del cliente (si lo dieron)", "", key="ped_ref")
+            fecha_pedido = c5.date_input("Fecha del pedido", value=datetime.date.today(), key="ped_fecha")
 
         with st.container(border=True):
-            st.markdown("##### 🥚 Qué piden")
-            c1, c2, c3, c4 = st.columns(4)
-            tipo_producto = c1.selectbox("Producto", ["Huevo entero", "Clara", "Yema"])
-            presentacion_id = c2.selectbox(
-                "Presentación", presentaciones["presentacion_id"],
-                format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
-            )
-            unidades_solicitadas = c3.number_input("N° de envases solicitados", min_value=0, step=1)
-            cantidad_kg = c4.number_input("Cantidad (kg)", min_value=0.0, step=0.5)
-
-            kg_nominal = float(presentaciones.set_index("presentacion_id").loc[presentacion_id, "kg_nominal"])
-            if unidades_solicitadas > 0 and kg_nominal > 0:
-                kg_sugerido = unidades_solicitadas * kg_nominal
-                if cantidad_kg > 0 and abs(kg_sugerido - cantidad_kg) > 0.1:
-                    st.caption(
-                        f"⚠️ {unidades_solicitadas:.0f} envases × {kg_nominal:.2f}kg = {kg_sugerido:.1f} kg, "
-                        f"pero pusiste {cantidad_kg:.1f} kg — revisa si está bien así."
-                    )
-                else:
-                    st.caption(f"≈ {kg_sugerido:.1f} kg para {unidades_solicitadas:.0f} envases de esta presentación")
-
-        with st.container(border=True):
-            st.markdown("##### 📅 Fechas comprometidas")
-            fecha_entrega = st.date_input("Fecha en que se debe entregar", value=datetime.date.today())
+            st.markdown("##### 📅 Fechas")
+            fecha_entrega = st.date_input("Fecha de entrega comprometida", value=datetime.date.today(), key="ped_entrega")
             st.caption("La fecha de producción planeada la asigna el jefe de planta desde 'Todos los pedidos'.")
 
-        observaciones = st.text_area("Observaciones", "", key="pedido_obs")
+        # ── Líneas de productos ──────────────────────────────────────────
+        st.markdown("##### 🥚 Productos del pedido")
+        st.caption("Agrega una línea por cada producto que pide el cliente.")
 
-        if st.button("💾 Guardar pedido", type="primary", use_container_width=True):
-            if cantidad_kg <= 0:
-                st.error("La cantidad en kg debe ser mayor a 0.")
+        clave_items = f"pedido_items_{cliente_id}"
+        if clave_items not in st.session_state:
+            st.session_state[clave_items] = []
+
+        # Formulario de línea
+        ca, cb, cc, cd = st.columns([2, 2, 1, 1])
+        tipo_sel     = ca.selectbox("Tipo de producto", ["Huevo entero pasteurizado", "Clara pasteurizada", "Clara sin pasteurizar", "Yema pasteurizada"], key="ped_tipo")
+        pres_sel     = cb.selectbox(
+            "Presentación", presentaciones["presentacion_id"],
+            format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
+            key="ped_pres",
+        )
+        unid_sel     = cc.number_input("Unidades", min_value=0, step=1, key="ped_unid")
+        kg_nominal_l = float(presentaciones.set_index("presentacion_id").loc[pres_sel, "kg_nominal"])
+        kg_sel       = cd.number_input("Kg", min_value=0.0,
+                                        value=round(unid_sel * kg_nominal_l, 2) if unid_sel > 0 else 0.0,
+                                        step=0.5, key="ped_kg")
+
+        if st.button("➕ Agregar producto al pedido", use_container_width=True):
+            if kg_sel <= 0 and unid_sel <= 0:
+                st.error("Ingresa al menos unidades o kg.")
+            else:
+                pres_nombre = presentaciones.set_index("presentacion_id").loc[pres_sel, "nombre"]
+                st.session_state[clave_items].append({
+                    "tipo_producto": tipo_sel,
+                    "presentacion_id": pres_sel,
+                    "presentacion_nombre": pres_nombre,
+                    "unidades_solicitadas": unid_sel,
+                    "cantidad_kg": kg_sel if kg_sel > 0 else round(unid_sel * kg_nominal_l, 2),
+                })
+                st.rerun()
+
+        # Tabla acumulada de productos
+        items_acum = st.session_state[clave_items]
+        if items_acum:
+            st.markdown("**Productos agregados:**")
+            df_items = pd.DataFrame(items_acum)[["tipo_producto","presentacion_nombre","unidades_solicitadas","cantidad_kg"]]
+            df_items.columns = ["Producto","Presentación","Unidades","Kg"]
+            st.dataframe(df_items, use_container_width=True, hide_index=True)
+            st.info(f"Total: **{df_items['Kg'].sum():.1f} kg** en {len(items_acum)} línea(s)")
+
+            ce, cf = st.columns(2)
+            if ce.button("🗑️ Quitar última línea"):
+                st.session_state[clave_items].pop()
+                st.rerun()
+            if cf.button("🗑️ Limpiar todo"):
+                st.session_state[clave_items] = []
+                st.rerun()
+
+        observaciones = st.text_area("Observaciones generales", "", key="pedido_obs")
+
+        if st.button("💾 Guardar pedido completo", type="primary", use_container_width=True):
+            if not items_acum:
+                st.error("Agrega al menos un producto antes de guardar.")
             else:
                 pedido_id = db.siguiente_id("pedidos", "PED", fecha_pedido)
+                # Guardar el pedido cabecera (resumen con primer producto para compatibilidad)
+                primer = items_acum[0]
                 db.append_row("pedidos", {
                     "pedido_id": pedido_id,
                     "pedido_cliente_ref": pedido_cliente_ref,
                     "cliente_id": cliente_id,
                     "medio_recepcion": medio_recepcion,
                     "ciudad": ciudad,
-                    "tipo_producto": tipo_producto,
-                    "presentacion_id": presentacion_id,
-                    "unidades_solicitadas": unidades_solicitadas,
-                    "cantidad_kg": cantidad_kg,
+                    "tipo_producto": ", ".join(set(i["tipo_producto"] for i in items_acum)),
+                    "presentacion_id": primer["presentacion_id"],
+                    "unidades_solicitadas": sum(i["unidades_solicitadas"] for i in items_acum),
+                    "cantidad_kg": sum(i["cantidad_kg"] for i in items_acum),
                     "fecha_pedido": fecha_pedido.isoformat(),
                     "fecha_produccion": "",
                     "fecha_entrega": fecha_entrega.isoformat(),
@@ -101,7 +134,20 @@ def render(db, username, rol):
                     "usuario": username,
                     "observaciones": observaciones,
                 })
-                st.success(f"✅ Pedido {pedido_id} guardado.")
+                # Guardar cada línea de producto en pedidos_items
+                for item in items_acum:
+                    item_id = db.siguiente_id("pedidos_items", "PI", fecha_pedido)
+                    db.append_row("pedidos_items", {
+                        "item_id": item_id,
+                        "pedido_id": pedido_id,
+                        "tipo_producto": item["tipo_producto"],
+                        "presentacion_id": item["presentacion_id"],
+                        "cantidad_kg": item["cantidad_kg"],
+                        "unidades_solicitadas": item["unidades_solicitadas"],
+                        "observaciones": "",
+                    })
+                st.session_state[clave_items] = []
+                st.success(f"✅ Pedido {pedido_id} guardado con {len(items_acum)} producto(s).")
                 st.rerun()
 
     # ======================== helper para mostrar tablas ========================

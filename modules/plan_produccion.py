@@ -43,7 +43,7 @@ def _cubetas_necesarias(kg_liquido, kg_por_cubeta):
 
 
 def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
-                 cubetas_disponibles, alerta_mp):
+                 cubetas_disponibles, alerta_mp, plan_mp_lista=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                              topMargin=1.8*cm, bottomMargin=1.8*cm,
@@ -91,6 +91,24 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
     mp_texto = (f"Cubetas necesarias: {cubetas_necesarias_total:.0f}  |  "
                 f"Disponibles en bodega: {cubetas_disponibles:.0f}")
     el.append(Paragraph(mp_texto, ESTILOS["Normal"]))
+    el.append(Spacer(1, 0.3*cm))
+
+    if plan_mp_lista:
+        el.append(Paragraph("Lotes de huevo asignados", ESTILOS["Heading2"]))
+        datos_mp = [[_p(h, negrita=True) for h in ["Lote MP", "Cubetas asignadas", "Obs."]]]
+        for r in plan_mp_lista:
+            datos_mp.append([_p(r["lote_desc"]), _p(str(r["cubetas"])), _p(r.get("obs",""))])
+        datos_mp.append([_p("TOTAL",negrita=True), _p(str(sum(r["cubetas"] for r in plan_mp_lista)),negrita=True), _p("")])
+        tmp = Table(datos_mp, repeatRows=1)
+        tmp.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#f9a825")),
+            ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#dddddd")),
+            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("TOPPADDING",(0,0),(-1,-1),4),
+        ]))
+        el.append(tmp)
+        el.append(Spacer(1, 0.4*cm))
+
     el.append(Spacer(1, 0.5*cm))
 
     el.append(Paragraph("Detalle por pedido", ESTILOS["Heading2"]))
@@ -262,6 +280,90 @@ def render(db, username, rol):
 
     st.write("")
 
+    # ── Asignación de lotes de MP ────────────────────────────────────────────
+    with st.container(border=True):
+        st.markdown("##### 🥚 Asignación de lotes de huevo para este día")
+        st.caption("Indica qué lotes de MP vas a usar y cuántas cubetas de cada uno — queda registrado y sale en el PDF del plan.")
+
+        plan_mp_df = db.get_df("plan_mp_asignado")
+        plan_hoy   = plan_mp_df[plan_mp_df["fecha"].astype(str) == fecha_sel.isoformat()] if not plan_mp_df.empty else pd.DataFrame()
+
+        # Recepciones disponibles
+        if recepciones.empty:
+            st.info("No hay recepciones de MP registradas.")
+        else:
+            recepciones["cubetas_saldo"] = pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0)
+            rec_disp = recepciones[recepciones["cubetas_saldo"] > 0].copy()
+            if not categorias.empty:
+                rec_disp = rec_disp.merge(
+                    categorias[["categoria_id","nombre"]].rename(columns={"nombre":"cat_nombre"}),
+                    on="categoria_id", how="left",
+                )
+                rec_disp["cat_nombre"] = rec_disp["cat_nombre"].fillna(rec_disp["categoria_id"])
+            else:
+                rec_disp["cat_nombre"] = rec_disp["categoria_id"]
+
+            opciones_rec = rec_disp["recepcion_id"].tolist()
+            fmt_rec = {
+                r["recepcion_id"]: f"{r['recepcion_id']} — {r['cat_nombre']} — saldo: {int(r['cubetas_saldo'])} cub."
+                for _, r in rec_disp.iterrows()
+            }
+
+            # Mostrar asignaciones existentes
+            if not plan_hoy.empty:
+                plan_hoy["cubetas_asignadas"] = pd.to_numeric(plan_hoy["cubetas_asignadas"], errors="coerce").fillna(0)
+                plan_hoy_vista = plan_hoy.copy()
+                plan_hoy_vista["Lote"] = plan_hoy_vista["recepcion_id"].map(fmt_rec).fillna(plan_hoy_vista["recepcion_id"])
+                st.dataframe(
+                    plan_hoy_vista[["plan_mp_id","Lote","cubetas_asignadas","observaciones"]].rename(columns={
+                        "plan_mp_id":"ID","cubetas_asignadas":"Cubetas asignadas","observaciones":"Obs."
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+                total_asignado = plan_hoy["cubetas_asignadas"].sum()
+                diff = total_asignado - cubetas_necesarias_total
+                if diff >= 0:
+                    st.success(f"✅ Asignadas {total_asignado:.0f} cubetas — cubre el plan ({cubetas_necesarias_total:.0f} necesarias)")
+                else:
+                    st.warning(f"⚠️ Asignadas {total_asignado:.0f} de {cubetas_necesarias_total:.0f} cubetas necesarias — faltan {abs(diff):.0f}")
+
+                if st.button("🗑️ Limpiar asignación del día"):
+                    for _, row in plan_hoy.iterrows():
+                        db.update_row("plan_mp_asignado", "plan_mp_id", row["plan_mp_id"], {"cubetas_asignadas": 0})
+                    st.success("Asignación eliminada.")
+                    st.rerun()
+            else:
+                st.info("No hay lotes asignados para este día todavía.")
+
+            st.write("")
+            st.markdown("**Agregar lote al plan:**")
+            pa, pb, pc = st.columns([3, 1, 2])
+            rec_sel  = pa.selectbox("Lote de MP", opciones_rec,
+                                     format_func=lambda x: fmt_rec.get(x, x), key="pmp_lote")
+            cub_sel  = pb.number_input("Cubetas", min_value=1, step=1, key="pmp_cub")
+            obs_sel  = pc.text_input("Obs. (opcional)", "", key="pmp_obs")
+
+            if st.button("➕ Agregar lote al plan", use_container_width=True):
+                # Validar que no supere el saldo
+                saldo_lote = float(rec_disp.set_index("recepcion_id").loc[rec_sel, "cubetas_saldo"])
+                ya_asignado = plan_hoy[plan_hoy["recepcion_id"] == rec_sel]["cubetas_asignadas"].sum() if not plan_hoy.empty else 0
+                if cub_sel > (saldo_lote - ya_asignado):
+                    st.error(f"⚠️ Solo hay {saldo_lote - ya_asignado:.0f} cubetas disponibles de ese lote.")
+                else:
+                    pmp_id = db.siguiente_id("plan_mp_asignado", "PMP", fecha_sel)
+                    db.append_row("plan_mp_asignado", {
+                        "plan_mp_id": pmp_id,
+                        "fecha": fecha_sel.isoformat(),
+                        "recepcion_id": rec_sel,
+                        "cubetas_asignadas": cub_sel,
+                        "usuario": username,
+                        "observaciones": obs_sel,
+                    })
+                    st.success(f"✅ {cub_sel} cubetas de {rec_sel} asignadas al plan del {fecha_sel}.")
+                    st.rerun()
+
+    st.write("")
+
     # Detalle por pedido
     with st.expander("📋 Ver detalle de todos los pedidos de este día", expanded=True):
         detalle_df = pedidos_fecha[[
@@ -280,7 +382,16 @@ def render(db, username, rol):
 
     st.write("")
 
-    # PDF
+    # PDF — incluye lotes asignados
+    plan_mp_lista = []
+    if not plan_hoy.empty:
+        for _, r in plan_hoy.iterrows():
+            plan_mp_lista.append({
+                "recepcion_id": r["recepcion_id"],
+                "lote_desc": fmt_rec.get(r["recepcion_id"], r["recepcion_id"]),
+                "cubetas": int(r["cubetas_asignadas"]),
+            })
+
     detalle_lista = [
         {
             "pedido_id": row["pedido_id"],
@@ -296,6 +407,7 @@ def render(db, username, rol):
     pdf_bytes = _generar_pdf(
         fecha_sel, consolidado, detalle_lista,
         cubetas_necesarias_total, cubetas_disponibles, alerta_mp,
+        plan_mp_lista,
     )
     st.download_button(
         "📄 Descargar plan del día (PDF)",
