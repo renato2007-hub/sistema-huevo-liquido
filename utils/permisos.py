@@ -50,7 +50,6 @@ MODULOS_PERMITIDOS = {
         "Inicio",
         "Cuarto frío",
         "Recepción de pedidos",
-        "Trazabilidad",
     },
 }
 

@@ -86,7 +86,39 @@ def _boton_modulo(nombre, icono):
 
 _boton_modulo("Inicio", "🏠")
 
-if puede_ver_modulo(rol, "Solicitud MP e Insumos") or puede_ver_modulo(rol, "Recepción de pedidos"):
+if es_despachador(rol):
+    # ── Sidebar especial para despachador: tarjetas grandes con color ──
+    modulo_actual = st.session_state.get("modulo_actual", "Cuarto frío")
+    tarjetas = [
+        ("Cuarto frío",          "❄️",  "#0D6EFD", "#ffffff"),
+        ("Recepción de pedidos", "📋",  "#198754", "#ffffff"),
+    ]
+    for nombre_mod, icono, color_fondo, color_texto in tarjetas:
+        activo = modulo_actual == nombre_mod
+        borde  = "4px solid #FFD700" if activo else f"4px solid {color_fondo}"
+        fondo  = "#FFD700" if activo else color_fondo
+        texto_c= "#000000" if activo else color_texto
+        st.sidebar.markdown(
+            f"""
+            <div style="
+                background:{fondo}; border:{borde}; border-radius:14px;
+                padding:18px 10px; margin-bottom:12px; text-align:center;
+                cursor:pointer;
+            ">
+                <div style="font-size:2.4rem; line-height:1.1;">{icono}</div>
+                <div style="font-size:1.1rem; font-weight:700; color:{texto_c};
+                            margin-top:6px; letter-spacing:0.5px;">
+                    {nombre_mod.upper()}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.sidebar.button(f"Ir a {nombre_mod}", key=f"nav_desp_{nombre_mod}",
+                             use_container_width=True):
+            st.session_state["modulo_actual"] = nombre_mod
+            st.rerun()
+else:
     _categoria("📋&nbsp;&nbsp;PLANIFICACIÓN", "#2D6CA2")
     _boton_modulo("Solicitud MP e Insumos", "📑")
     _boton_modulo("Recepción de pedidos", "🧾")
@@ -98,11 +130,9 @@ if not es_despachador(rol):
     _boton_modulo("Bodega de envases e insumos", "📦")
     _boton_modulo("Producción de semielaborados", "⚗️")
     _boton_modulo("Pasteurización y envasado", "🧪")
+    _boton_modulo("Cuarto frío", "❄️")
 
-_boton_modulo("Cuarto frío", "❄️")
-
-if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad") or puede_ver_modulo(rol, "Supervisión y calidad"):
-    if not es_despachador(rol):
+    if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad") or puede_ver_modulo(rol, "Supervisión y calidad"):
         _categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
         _boton_modulo("Limpieza y desinfección", "🧽")
         _boton_modulo("Supervisión y calidad", "👔")
@@ -110,14 +140,10 @@ if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "T
         _boton_modulo("Personal y turnos", "👥")
         _boton_modulo("Energía", "⚡")
 
-if es_despachador(rol):
-    _categoria("🔍&nbsp;&nbsp;CONSULTA", "#0E8A8A")
-    _boton_modulo("Trazabilidad", "📄")
-
-if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
-    _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
-    _boton_modulo("Dashboard", "📊")
-    _boton_modulo("Catálogos y configuración", "⚙️")
+    if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
+        _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
+        _boton_modulo("Dashboard", "📊")
+        _boton_modulo("Catálogos y configuración", "⚙️")
 
 st.sidebar.markdown(
     """
