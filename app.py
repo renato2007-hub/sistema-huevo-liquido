@@ -89,34 +89,37 @@ _boton_modulo("Inicio", "🏠")
 if es_despachador(rol):
     modulo_actual = st.session_state.get("modulo_actual", "Cuarto frío")
     tarjetas = [
-        ("Cuarto frío",          "❄️",  "#0D6EFD", "#ffffff"),
-        ("Recepción de pedidos", "📋",  "#198754", "#ffffff"),
+        ("Cuarto frío",          "❄️",  "#0D6EFD"),
+        ("Recepción de pedidos", "📋",  "#198754"),
     ]
-    for nombre_mod, icono, color_fondo, color_texto in tarjetas:
+    st.sidebar.markdown("""
+        <style>
+        div[data-testid="stSidebar"] button[kind="secondary"] {
+            height: 90px !important;
+            font-size: 1.1rem !important;
+            font-weight: 800 !important;
+            border-radius: 14px !important;
+            margin-bottom: 10px !important;
+            white-space: pre-line !important;
+        }
+        div[data-testid="stSidebar"] button[kind="primary"] {
+            height: 90px !important;
+            font-size: 1.1rem !important;
+            font-weight: 800 !important;
+            border-radius: 14px !important;
+            margin-bottom: 10px !important;
+            white-space: pre-line !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    for nombre_mod, icono, color in tarjetas:
         activo = modulo_actual == nombre_mod
-        fondo  = "#FFD700" if activo else color_fondo
-        texto_c= "#000000" if activo else color_texto
-        borde  = "4px solid #FFD700" if activo else f"4px solid {color_fondo}"
-        st.sidebar.markdown(
-            f"""
-            <div style="
-                background:{fondo}; border:{borde}; border-radius:14px;
-                padding:22px 10px; margin-bottom:12px; text-align:center;
-            ">
-                <div style="font-size:2.6rem; line-height:1.1;">{icono}</div>
-                <div style="font-size:1.15rem; font-weight:800; color:{texto_c};
-                            margin-top:8px; letter-spacing:0.5px;">
-                    {nombre_mod.upper()}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        # Botón invisible que ocupa el espacio de la tarjeta para hacer clic
+        label  = f"{icono}\n{nombre_mod.upper()}"
         if st.sidebar.button(
-            "‎",  # carácter invisible
+            label,
             key=f"nav_desp_{nombre_mod}",
             use_container_width=True,
+            type="primary" if activo else "secondary",
         ):
             st.session_state["modulo_actual"] = nombre_mod
             st.rerun()
