@@ -87,7 +87,6 @@ def _boton_modulo(nombre, icono):
 _boton_modulo("Inicio", "🏠")
 
 if es_despachador(rol):
-    # ── Sidebar especial para despachador: tarjetas grandes con color ──
     modulo_actual = st.session_state.get("modulo_actual", "Cuarto frío")
     tarjetas = [
         ("Cuarto frío",          "❄️",  "#0D6EFD", "#ffffff"),
@@ -95,27 +94,30 @@ if es_despachador(rol):
     ]
     for nombre_mod, icono, color_fondo, color_texto in tarjetas:
         activo = modulo_actual == nombre_mod
-        borde  = "4px solid #FFD700" if activo else f"4px solid {color_fondo}"
         fondo  = "#FFD700" if activo else color_fondo
         texto_c= "#000000" if activo else color_texto
+        borde  = "4px solid #FFD700" if activo else f"4px solid {color_fondo}"
         st.sidebar.markdown(
             f"""
             <div style="
                 background:{fondo}; border:{borde}; border-radius:14px;
-                padding:18px 10px; margin-bottom:12px; text-align:center;
-                cursor:pointer;
+                padding:22px 10px; margin-bottom:12px; text-align:center;
             ">
-                <div style="font-size:2.4rem; line-height:1.1;">{icono}</div>
-                <div style="font-size:1.1rem; font-weight:700; color:{texto_c};
-                            margin-top:6px; letter-spacing:0.5px;">
+                <div style="font-size:2.6rem; line-height:1.1;">{icono}</div>
+                <div style="font-size:1.15rem; font-weight:800; color:{texto_c};
+                            margin-top:8px; letter-spacing:0.5px;">
                     {nombre_mod.upper()}
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        if st.sidebar.button(f"Ir a {nombre_mod}", key=f"nav_desp_{nombre_mod}",
-                             use_container_width=True):
+        # Botón invisible que ocupa el espacio de la tarjeta para hacer clic
+        if st.sidebar.button(
+            "‎",  # carácter invisible
+            key=f"nav_desp_{nombre_mod}",
+            use_container_width=True,
+        ):
             st.session_state["modulo_actual"] = nombre_mod
             st.rerun()
 else:
