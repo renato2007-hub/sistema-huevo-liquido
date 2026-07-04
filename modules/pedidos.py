@@ -278,6 +278,29 @@ def render(db, username, rol):
                     st.success(f"✅ Pedido {pedido_fp} — fecha de producción asignada: {nueva_fp}.")
                     st.rerun()
 
+            if puede_editar_pedidos(rol):
+                st.divider()
+                st.markdown("##### ↩️ Revertir pedido marcado como producido")
+                st.caption("Solo admin y gerencia pueden revertir — úsalo si marcaste un pedido como producido por error.")
+                producidos = df[df["producido_bool"]]
+                if producidos.empty:
+                    st.info("No hay pedidos marcados como producidos.")
+                else:
+                    pedido_rev = st.selectbox(
+                        "Pedido a revertir",
+                        producidos["pedido_id"],
+                        format_func=lambda x: (
+                            f"{x} — {producidos.set_index('pedido_id').loc[x, 'cliente_nombre']} "
+                            f"({producidos.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
+                        ),
+                        key="revertir_prod_sel",
+                    )
+                    st.warning(f"⚠️ Al revertir, el pedido **{pedido_rev}** volverá a estado Pendiente y aparecerá en el plan de producción.")
+                    if st.button("↩️ Revertir a Pendiente", type="primary"):
+                        db.update_row("pedidos", "pedido_id", pedido_rev, {"producido": False})
+                        st.success(f"✅ Pedido {pedido_rev} revertido a Pendiente.")
+                        st.rerun()
+
     # ======================== EDITAR / ELIMINAR (solo admin y gerencia) ========================
     if puede_editar_pedidos(rol):
         with tabs_pedidos[3]:
