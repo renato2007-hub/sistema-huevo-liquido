@@ -105,8 +105,8 @@ def render(db, username, rol):
             st.info("No hay inventario en cuarto frío todavía.")
         elif clientes.empty:
             st.warning("Configura al menos un cliente en Catálogos.")
-        elif vehiculos.empty:
-            st.warning("Configura al menos un vehículo en Catálogos.")
+        elif vehiculos.empty or "vehiculo_id" not in vehiculos.columns:
+            st.warning("Configura al menos un vehículo en Catálogos (verifica que la columna vehiculo_id exista en el Sheet).")
         else:
             entradas["saldo"] = pd.to_numeric(entradas["saldo"], errors="coerce").fillna(0)
             disponibles = entradas[entradas["saldo"] > 0].copy()
