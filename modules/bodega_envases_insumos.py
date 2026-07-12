@@ -223,7 +223,6 @@ def render(db, username, rol):
                 if not motivo.strip():
                     st.error("Escribe el motivo del ajuste.")
                 else:
-                    import datetime as _dt
                     mov_id = db.siguiente_id("movimientos_envases_insumos", "AJ", fecha_aj)
                     costo_unit = 0.0
                     if "costo_unitario" in df_cat.columns:
