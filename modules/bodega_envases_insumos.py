@@ -29,9 +29,7 @@ def _saldo_actual(df_movimientos, item_tipo, item_id):
 
 def render(db, username, rol):
     st.title("Bodega de envases e insumos")
-    tab_movimiento, tab_inventario, tab_ajuste = st.tabs([
-        "Registrar movimiento", "Inventario actual", "✏️ Ajuste de inventario"
-    ])
+    tab_movimiento, tab_inventario = st.tabs(["Registrar movimiento", "Inventario actual"])
 
     insumos = db.get_df("insumos")
     presentaciones = db.get_df("presentaciones")
@@ -185,64 +183,3 @@ def render(db, username, rol):
                     st.dataframe(mermas_mostrar[columnas_merma], use_container_width=True)
         else:
             st.info("Configura insumos y presentaciones en Catálogos para ver el inventario.")
-
-    # ======================== AJUSTE DE INVENTARIO ========================
-    with tab_ajuste:
-        st.caption("Registra entradas o salidas manuales para corregir el inventario — por errores de conteo, devoluciones, etc.")
-
-        tipo_ajuste = st.radio("Tipo de ítem a ajustar",
-            ["Insumo de limpieza", "Envase", "Tapa (PET)", "Etiqueta", "Cartón", "Liner de aluminio"],
-            horizontal=True, key="ajuste_tipo")
-
-        cat_ajuste = {
-            "Insumo de limpieza": (insumos, "insumo_id"),
-            "Envase": (presentaciones, "presentacion_id"),
-            "Tapa (PET)": (tapas, "tapa_id"),
-            "Etiqueta": (etiquetas, "etiqueta_id"),
-            "Cartón": (cartones, "carton_id"),
-            "Liner de aluminio": (liners, "liner_id"),
-        }[tipo_ajuste]
-        df_cat, id_col = cat_ajuste
-
-        if df_cat.empty:
-            st.info(f"No hay {tipo_ajuste.lower()}s configurados en Catálogos.")
-        else:
-            c1, c2, c3, c4 = st.columns([2, 1, 1, 2])
-            item_sel = c1.selectbox(
-                "Ítem", df_cat[id_col],
-                format_func=lambda x: df_cat.set_index(id_col).loc[x, "nombre"],
-                key="ajuste_item",
-            )
-            tipo_mov = c2.selectbox("Movimiento", ["entrada", "salida", "merma"], key="ajuste_mov")
-            cantidad = c3.number_input("Cantidad", min_value=1, step=1, key="ajuste_cant")
-            motivo   = c4.text_input("Motivo del ajuste", "", key="ajuste_motivo")
-
-            fecha_aj = st.date_input("Fecha del ajuste", value=datetime.date.today(), key="ajuste_fecha")
-
-            if st.button("💾 Registrar ajuste", type="primary", use_container_width=True):
-                if not motivo.strip():
-                    st.error("Escribe el motivo del ajuste.")
-                else:
-                    import datetime as _dt
-                    mov_id = db.siguiente_id("movimientos_envases_insumos", "AJ", fecha_aj)
-                    costo_unit = 0.0
-                    if "costo_unitario" in df_cat.columns:
-                        costo_unit = float(pd.to_numeric(
-                            df_cat.set_index(id_col).loc[item_sel, "costo_unitario"],
-                            errors="coerce") or 0)
-                    db.append_row("movimientos_envases_insumos", {
-                        "movimiento_id": mov_id,
-                        "fecha": fecha_aj.isoformat(),
-                        "item_tipo": tipo_ajuste.split()[0].lower(),
-                        "item_id": item_sel,
-                        "tipo_movimiento": tipo_mov,
-                        "cantidad": cantidad,
-                        "costo_unitario": costo_unit,
-                        "costo_total": costo_unit * cantidad,
-                        "referencia": "ajuste_manual",
-                        "usuario": username,
-                        "observaciones": f"Ajuste manual: {motivo}",
-                    })
-                    accion = "ingresadas" if tipo_mov == "entrada" else "descontadas"
-                    st.success(f"✅ {cantidad} unidades {accion} de {item_sel} — motivo: {motivo}")
-                    st.rerun()
