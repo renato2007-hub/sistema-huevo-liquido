@@ -15,8 +15,8 @@ CAUSAS_MERMA_HUEVO = ["Caída", "Rotura en bodega", "Daño de transporte/proveed
 
 def render(db, username, rol):
     st.title("Bodega de materia prima — huevo")
-    tab_recepcion, tab_inventario, tab_historial, tab_perdida = st.tabs(
-        ["Registrar recepción", "Inventario actual", "Historial", "⚠️ Registrar pérdida/daño"]
+    tab_recepcion, tab_inventario, tab_historial, tab_perdida, tab_corregir = st.tabs(
+        ["Registrar recepción", "Inventario actual", "Historial", "⚠️ Registrar pérdida/daño", "✏️ Corregir recepción"]
     )
 
     galpones = db.get_df("galpones")
@@ -211,3 +211,48 @@ def render(db, username, rol):
             if ve_costos(rol):
                 costo_total_mermas = pd.to_numeric(mermas["costo_estimado"], errors="coerce").fillna(0).sum()
                 st.metric("Costo total acumulado en pérdidas", f"{costo_total_mermas:,.2f}")
+
+    # ======================== CORREGIR RECEPCIÓN ========================
+    with tab_corregir:
+        st.caption("Corrige errores en recepciones de materia prima — cubetas, costo o saldo incorrecto.")
+        recepciones = db.get_df("recepciones_mp")
+        if recepciones.empty:
+            st.info("No hay recepciones registradas todavía.")
+        else:
+            recepciones["cubetas_saldo"] = pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0)
+            recepciones["cubetas_recibidas"] = pd.to_numeric(recepciones["cubetas_recibidas"], errors="coerce").fillna(0)
+            recepciones["costo_cubeta"] = pd.to_numeric(recepciones["costo_cubeta"], errors="coerce").fillna(0)
+
+            rec_sel = st.selectbox(
+                "Recepción a corregir",
+                recepciones["recepcion_id"],
+                format_func=lambda x: (
+                    f"{x} — {recepciones.set_index('recepcion_id').loc[x, 'fecha']} — "
+                    f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas_recibidas']:.0f} cub. recibidas / "
+                    f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas_saldo']:.0f} cub. saldo"
+                ),
+                key="mp_corr_sel",
+            )
+            fila_r = recepciones.set_index("recepcion_id").loc[rec_sel]
+
+            with st.form("form_corr_mp"):
+                c1, c2, c3 = st.columns(3)
+                nuevas_cub   = c1.number_input("Cubetas recibidas", min_value=0.0, step=1.0,
+                                                value=float(fila_r["cubetas_recibidas"]))
+                nuevo_saldo  = c2.number_input("Saldo actual (cubetas)", min_value=0.0, step=1.0,
+                                                value=float(fila_r["cubetas_saldo"]))
+                nuevo_costo  = c3.number_input("Costo por cubeta ($)", min_value=0.0, step=0.01,
+                                                value=float(fila_r["costo_cubeta"]))
+                motivo = st.text_input("Motivo de la corrección", "")
+                submitted = st.form_submit_button("💾 Guardar corrección", type="primary")
+                if submitted:
+                    if not motivo.strip():
+                        st.error("Escribe el motivo de la corrección.")
+                    else:
+                        db.update_row("recepciones_mp", "recepcion_id", rec_sel, {
+                            "cubetas_recibidas": nuevas_cub,
+                            "cubetas_saldo": nuevo_saldo,
+                            "costo_cubeta": nuevo_costo,
+                        })
+                        st.success(f"✅ Recepción {rec_sel} corregida — saldo: {nuevo_saldo:.0f} cub., costo: ${nuevo_costo:.2f}/cub.")
+                        st.rerun()
