@@ -3,23 +3,11 @@ import streamlit as st
 from utils.sheets_client import get_db
 from utils.auth import login
 from utils.permisos import puede_ver_modulo, NOMBRES_ROL, rol_normalizado, es_despachador
-from modules import (
-    bodega_mp,
-    bodega_envases_insumos,
-    produccion_semielaborados,
-    pasteurizacion_envasado,
-    cuarto_frio,
-    limpieza_desinfeccion,
-    supervision,
-    solicitud_compra,
-    pedidos,
-    plan_produccion,
-    energia,
-    personal_turnos,
-    dashboard,
-    trazabilidad,
-    catalogos,
-)
+import importlib
+
+def _mod(nombre):
+    """Importa un módulo de modules/ solo cuando se necesita."""
+    return importlib.import_module(f"modules.{nombre}")
 
 st.set_page_config(page_title="Sistema de producción — Ovoproductos", layout="wide", page_icon="🥚")
 
@@ -221,32 +209,32 @@ if modulo == "Inicio":
             st.write(texto)
 
 elif modulo == "Dashboard":
-    dashboard.render(db, username, rol)
+    _mod("dashboard").render(db, username, rol)
 elif modulo == "Bodega de materia prima":
-    bodega_mp.render(db, username, rol)
+    _mod("bodega_mp").render(db, username, rol)
 elif modulo == "Bodega de envases e insumos":
-    bodega_envases_insumos.render(db, username, rol)
+    _mod("bodega_envases_insumos").render(db, username, rol)
 elif modulo == "Producción de semielaborados":
-    produccion_semielaborados.render(db, username, rol)
+    _mod("produccion_semielaborados").render(db, username, rol)
 elif modulo == "Pasteurización y envasado":
-    pasteurizacion_envasado.render(db, username, rol)
+    _mod("pasteurizacion_envasado").render(db, username, rol)
 elif modulo == "Cuarto frío":
-    cuarto_frio.render(db, username, rol)
+    _mod("cuarto_frio").render(db, username, rol)
 elif modulo == "Limpieza y desinfección":
-    limpieza_desinfeccion.render(db, username, rol)
+    _mod("limpieza_desinfeccion").render(db, username, rol)
 elif modulo == "Supervisión y calidad":
-    supervision.render(db, username, rol)
+    _mod("supervision").render(db, username, rol)
 elif modulo == "Energía":
-    energia.render(db, username, rol)
+    _mod("energia").render(db, username, rol)
 elif modulo == "Trazabilidad":
-    trazabilidad.render(db, username, rol)
+    _mod("trazabilidad").render(db, username, rol)
 elif modulo == "Personal y turnos":
-    personal_turnos.render(db, username, rol)
+    _mod("personal_turnos").render(db, username, rol)
 elif modulo == "Plan de producción":
-    plan_produccion.render(db, username, rol)
+    _mod("plan_produccion").render(db, username, rol)
 elif modulo == "Solicitud MP e Insumos":
-    solicitud_compra.render(db, username, rol)
+    _mod("solicitud_compra").render(db, username, rol)
 elif modulo == "Recepción de pedidos":
-    pedidos.render(db, username, rol)
+    _mod("pedidos").render(db, username, rol)
 elif modulo == "Catálogos y configuración":
-    catalogos.render(db, username, rol)
+    _mod("catalogos").render(db, username, rol)
