@@ -220,7 +220,7 @@ def render(db, username, rol):
             st.info("No hay recepciones registradas todavía.")
         else:
             recepciones["cubetas_saldo"] = pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0)
-            recepciones["cubetas_recibidas"] = pd.to_numeric(recepciones["cubetas_recibidas"], errors="coerce").fillna(0)
+            recepciones["cubetas"] = pd.to_numeric(recepciones["cubetas"], errors="coerce").fillna(0)
             recepciones["costo_cubeta"] = pd.to_numeric(recepciones["costo_cubeta"], errors="coerce").fillna(0)
 
             rec_sel = st.selectbox(
@@ -228,7 +228,7 @@ def render(db, username, rol):
                 recepciones["recepcion_id"],
                 format_func=lambda x: (
                     f"{x} — {recepciones.set_index('recepcion_id').loc[x, 'fecha']} — "
-                    f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas_recibidas']:.0f} cub. recibidas / "
+                    f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas']:.0f} cub. recibidas / "
                     f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas_saldo']:.0f} cub. saldo"
                 ),
                 key="mp_corr_sel",
@@ -238,7 +238,7 @@ def render(db, username, rol):
             with st.form("form_corr_mp"):
                 c1, c2, c3 = st.columns(3)
                 nuevas_cub   = c1.number_input("Cubetas recibidas", min_value=0.0, step=1.0,
-                                                value=float(fila_r["cubetas_recibidas"]))
+                                                value=float(fila_r["cubetas"]))
                 nuevo_saldo  = c2.number_input("Saldo actual (cubetas)", min_value=0.0, step=1.0,
                                                 value=float(fila_r["cubetas_saldo"]))
                 nuevo_costo  = c3.number_input("Costo por cubeta ($)", min_value=0.0, step=0.01,
@@ -250,7 +250,7 @@ def render(db, username, rol):
                         st.error("Escribe el motivo de la corrección.")
                     else:
                         db.update_row("recepciones_mp", "recepcion_id", rec_sel, {
-                            "cubetas_recibidas": nuevas_cub,
+                            "cubetas": nuevas_cub,
                             "cubetas_saldo": nuevo_saldo,
                             "costo_cubeta": nuevo_costo,
                         })
