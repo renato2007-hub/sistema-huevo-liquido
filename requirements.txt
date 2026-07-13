@@ -1,6 +1,6 @@
-streamlit>=1.32
-gspread>=6.0
-google-auth>=2.27
-pandas>=2.1
-reportlab>=4.0
-plotly>=5.18
+streamlit==1.35.0
+gspread==6.1.2
+google-auth==2.29.0
+pandas==2.2.2
+reportlab==4.2.0
+plotly==5.22.0
