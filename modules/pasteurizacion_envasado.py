@@ -405,7 +405,7 @@ def render(db, username, rol):
 
                 kg_a_trasladar = st.number_input(
                     f"Kg a trasladar al recipiente (máx {saldo_disp:.1f} kg)",
-                    min_value=0.1, max_value=saldo_disp, value=saldo_disp, step=0.1,
+                    min_value=0.1, max_value=max(saldo_disp, 0.1), value=max(saldo_disp, 0.1), step=0.1,
                     key="granel_kg",
                 )
                 fecha_gr = st.date_input("Fecha de traslado", value=datetime.date.today(), key="granel_fecha")
