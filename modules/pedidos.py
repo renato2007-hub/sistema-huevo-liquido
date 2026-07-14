@@ -232,21 +232,11 @@ def render(db, username, rol):
         if df.empty:
             st.info("No hay pedidos registrados todavía.")
         else:
-            hoy_d = datetime.date.today()
             c1, c2 = st.columns(2)
             filtro_estado = c1.selectbox("Estado", ["Todos", "Pendientes", "Producidos"])
             filtro_cliente = c2.selectbox(
                 "Cliente", ["Todos"] + sorted(df["cliente_nombre"].dropna().unique().tolist()),
             )
-
-            c3, c4, c5, c6 = st.columns(4)
-            filtro_tipo_fecha = c3.selectbox(
-                "Filtrar por fecha", ["Sin filtro de fecha", "Fecha de pedido", "Fecha de entrega"],
-                key="filtro_tipo_fecha",
-            )
-            if filtro_tipo_fecha != "Sin filtro de fecha":
-                desde_f = c4.date_input("Desde", value=hoy_d - datetime.timedelta(days=30), key="filtro_desde")
-                hasta_f = c5.date_input("Hasta", value=hoy_d, key="filtro_hasta")
 
             df_mostrar = df.copy()
             if filtro_estado == "Pendientes":
@@ -255,16 +245,6 @@ def render(db, username, rol):
                 df_mostrar = df_mostrar[df_mostrar["producido_bool"]]
             if filtro_cliente != "Todos":
                 df_mostrar = df_mostrar[df_mostrar["cliente_nombre"] == filtro_cliente]
-            if filtro_tipo_fecha == "Fecha de pedido":
-                df_mostrar = df_mostrar[
-                    (df_mostrar["fecha_pedido"].astype(str) >= desde_f.isoformat()) &
-                    (df_mostrar["fecha_pedido"].astype(str) <= hasta_f.isoformat())
-                ]
-            elif filtro_tipo_fecha == "Fecha de entrega":
-                df_mostrar = df_mostrar[
-                    (df_mostrar["fecha_entrega"].astype(str) >= desde_f.isoformat()) &
-                    (df_mostrar["fecha_entrega"].astype(str) <= hasta_f.isoformat())
-                ]
 
             df_mostrar = df_mostrar.copy()
             atrasados_total = df_mostrar[df_mostrar["atrasado"]]
