@@ -408,7 +408,7 @@ def render(db, username, rol):
 
                     kg_a_trasladar = st.number_input(
                         f"Kg a trasladar al recipiente (máx {saldo_disp:.1f} kg)",
-                        min_value=0.0, max_value=float(saldo_disp), value=float(saldo_disp), step=0.1,
+                        min_value=0.1, max_value=saldo_disp, value=saldo_disp, step=0.1,
                         key="granel_kg",
                     )
                     obs_gr = st.text_input("Observaciones (opcional)", "", key="granel_obs")
