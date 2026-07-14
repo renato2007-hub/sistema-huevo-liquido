@@ -276,11 +276,12 @@ def render(db, username, rol):
         df_lotes_editado = pd.DataFrame(filas_validas) if filas_validas else pd.DataFrame(columns=["recepcion_id", "cantidad_a_tomar", "costo_cubeta"])
 
         # categoria_id: usar la del primer lote seleccionado (para rendimientos teóricos)
+        categoria_id = ""
         if filas_validas:
-            categoria_id = mapa_recepcion_a_categoria.get(filas_validas[0]["recepcion_id"], "") if filas_validas else ""
-            if not categoria_id and not recepciones_con_saldo.empty:
-                recepciones_sorted_tmp = recepciones_con_saldo.sort_values("fecha_vencimiento")
-                categoria_id = recepciones_sorted_tmp.iloc[0]["categoria_id"] if not recepciones_sorted_tmp.empty else ""
+            categoria_id = mapa_recepcion_a_categoria.get(filas_validas[0]["recepcion_id"], "")
+        if not categoria_id and not recepciones_con_saldo.empty:
+            recepciones_sorted_tmp = recepciones_con_saldo.sort_values("fecha_vencimiento")
+            categoria_id = recepciones_sorted_tmp.iloc[0]["categoria_id"] if not recepciones_sorted_tmp.empty else ""
 
         total_tomado = float(pd.to_numeric(df_lotes_editado["cantidad_a_tomar"], errors="coerce").fillna(0).sum()) if not df_lotes_editado.empty else 0.0
         st.info(f"📦 Vas a consumir **{total_tomado:.0f} cubetas** de bodega de materia prima — revisa que sea correcto antes de guardar.")
