@@ -433,8 +433,8 @@ def render(db, username, rol):
                         db.update_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel, {
                             "kg_saldo": saldo_disp - kg_a_trasladar,
                         })
-                    st.success(f"✅ {stock_id}: {kg_a_trasladar:.1f} kg de {tipo_producto_gr} trasladados a recipiente.")
-                    st.rerun()
+                        st.success(f"✅ {stock_id}: {kg_a_trasladar:.1f} kg de {tipo_producto_gr} trasladados a recipiente.")
+                        st.rerun()
 
     with tab_historial:
         df_hist = db.get_df("pasteurizacion_envasado")
