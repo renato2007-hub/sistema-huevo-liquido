@@ -120,32 +120,34 @@ if es_despachador(rol):
             f'{icono}<br>{nombre_mod.upper()}</div>',
             unsafe_allow_html=True,
         )
-else:
+
+if not es_despachador(rol):
+    _categoria("🏪&nbsp;&nbsp;BODEGAS", "#5D4037")
+    _boton_modulo("Bodega de materia prima", "🥚")
+    _boton_modulo("Bodega de envases e insumos", "📦")
+
     _categoria("📋&nbsp;&nbsp;PLANIFICACIÓN", "#2D6CA2")
     _boton_modulo("Solicitud MP e Insumos", "📑")
     _boton_modulo("Recepción de pedidos", "🧾")
     _boton_modulo("Plan de producción", "📅")
 
-if not es_despachador(rol):
     _categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
-    _boton_modulo("Bodega de materia prima", "🥚")
-    _boton_modulo("Bodega de envases e insumos", "📦")
     _boton_modulo("Producción de semielaborados", "⚗️")
     _boton_modulo("Pasteurización y envasado", "🧪")
     _boton_modulo("Cuarto frío", "❄️")
 
-    if puede_ver_modulo(rol, "Limpieza y desinfección") or puede_ver_modulo(rol, "Trazabilidad") or puede_ver_modulo(rol, "Supervisión y calidad"):
-        _categoria("🧽&nbsp;&nbsp;OPERACIONES", "#0E8A8A")
-        _boton_modulo("Limpieza y desinfección", "🧽")
-        _boton_modulo("Supervisión y calidad", "👔")
-        _boton_modulo("Trazabilidad", "📄")
-        _boton_modulo("Personal y turnos", "👥")
-        _boton_modulo("Energía", "⚡")
+    _categoria("🔧&nbsp;&nbsp;RECURSOS", "#2E7D32")
+    _boton_modulo("Personal y turnos", "👥")
+    _boton_modulo("Limpieza y desinfección", "🧽")
+    _boton_modulo("Energía", "⚡")
 
-    if puede_ver_modulo(rol, "Dashboard") or puede_ver_modulo(rol, "Catálogos y configuración"):
-        _categoria("📊&nbsp;&nbsp;GESTIÓN", "#6D3FA8")
-        _boton_modulo("Dashboard", "📊")
-        _boton_modulo("Catálogos y configuración", "⚙️")
+    _categoria("🔬&nbsp;&nbsp;CALIDAD", "#6A1B9A")
+    _boton_modulo("Supervisión y calidad", "👔")
+    _boton_modulo("Trazabilidad", "📄")
+
+    _categoria("📊&nbsp;&nbsp;GESTIÓN", "#1565C0")
+    _boton_modulo("Dashboard", "📊")
+    _boton_modulo("Catálogos y configuración", "⚙️")
 
 st.sidebar.markdown(
     """
