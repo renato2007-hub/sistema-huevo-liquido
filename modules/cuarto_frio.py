@@ -387,14 +387,32 @@ def render(db, username, rol):
             # Barras por presentación
             with col_bar:
                 st.markdown("**Unidades por presentación**")
-                pres_g = inventario.groupby("presentacion_nombre")["saldo"].sum().reset_index()
+                # Para colorear por tipo de producto, unir con inv_kg
+                pres_g = inv_kg.groupby("presentacion_nombre").agg(
+                    saldo=("saldo","sum"), etiqueta=("etiqueta","first")
+                ).reset_index()
                 pres_g = pres_g[pres_g["saldo"] > 0].sort_values("saldo", ascending=True)
+                COLORES_PRODUCTO = {
+                    "huevo pasteurizado":      "#C68B54",  # café claro
+                    "huevo sin pasteurizar":   "#A0522D",  # café oscuro
+                    "clara pasteurizada":      "#90EE90",  # verde claro
+                    "clara sin pasteurizar":   "#2e7d32",  # verde oscuro
+                    "yema pasteurizada":       "#FFA500",  # anaranjado
+                    "yema sin pasteurizar":    "#FF6B35",  # anaranjado oscuro
+                }
                 COLS = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c","#c62828"]
+
+                def _color_etiq(etiq):
+                    et = str(etiq).lower()
+                    for key, color in COLORES_PRODUCTO.items():
+                        if key in et:
+                            return color
+                    return "#90a4ae"
                 fig_bar = go.Figure(go.Bar(
                     x=pres_g["saldo"].tolist(),
                     y=pres_g["presentacion_nombre"].tolist(),
                     orientation="h",
-                    marker_color=[COLS[i % len(COLS)] for i in range(len(pres_g))],
+                    marker_color=[_color_etiq(e) for e in pres_g.get("etiqueta", pres_g["presentacion_nombre"])],
                     text=pres_g["saldo"].apply(lambda v: f"{int(v)}").tolist(),
                     textposition="outside",
                     hovertemplate="%{y}: %{x} unidades<extra></extra>",
@@ -418,7 +436,7 @@ def render(db, username, rol):
                         labels=prod_g["etiqueta"].tolist(),
                         values=prod_g["kg"].tolist(),
                         hole=0.5,
-                        marker_colors=COLS[:len(prod_g)],
+                        marker_colors=[_color_etiq(e) for e in prod_g["etiqueta"]],
                         textinfo="label+percent",
                         hovertemplate="%{label}: %{value:,.1f} kg<extra></extra>",
                     ))
