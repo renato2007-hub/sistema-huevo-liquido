@@ -600,91 +600,90 @@ def render(db, username, rol):
                 st.rerun()
 
     with tab_inventario:
-        df = db.get_df("produccion_semielaborados")
-        if df.empty:
+        df_inv = db.get_df("produccion_semielaborados")
+        if df_inv.empty:
             st.info("Todavía no hay lotes de semielaborado.")
         else:
-            df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
-            disponibles = df[df["kg_saldo"] >= 0.1].copy()
+            df_inv["kg_saldo"] = pd.to_numeric(df_inv["kg_saldo"], errors="coerce").fillna(0)
+            disp = df_inv[df_inv["kg_saldo"] >= 0.1].copy()
 
-            # ── Visualización de cilindros ──────────────────────────────────
-            import plotly.graph_objects as go
-            CAPACIDAD = 1000  # kg por tanque
-            COLORES_PRODUCTO = {
-                "Huevo entero": "#C68B54",  # café claro
-                "Clara":        "#90EE90",  # verde claro
-                "Yema":         "#E8735A",  # tomate
-            }
-            COLOR_VACIO = "#e0e0e0"
+            if disp.empty:
+                st.info("No hay kg disponibles en los tanques actualmente.")
+            else:
+                # Tabla
+                cols_t = [c for c in ["lote_semielaborado_id","fecha","tipo_producto","tanque_id","kg_saldo"] if c in disp.columns]
+                t = disp[cols_t].copy()
+                t["kg_saldo"] = t["kg_saldo"].round(1)
+                if "tanque_id" in t.columns:
+                    t["tanque_id"] = t["tanque_id"].fillna("Sin asignar")
+                st.dataframe(t, use_container_width=True, hide_index=True)
 
-            def _color_lote(lote_id):
-                if str(lote_id).startswith("SR"):
-                    return COLORES_PRODUCTO["Huevo entero"]
-                elif str(lote_id).startswith("TK"):
-                    return COLORES_PRODUCTO["Yema"]
-                elif str(lote_id).startswith("R"):
-                    return COLORES_PRODUCTO["Clara"]
-                return COLOR_VACIO
+                # Gráficos de tanques con Plotly
+                st.write("")
+                st.markdown("##### 🛢️ Estado de los tanques")
+                import plotly.graph_objects as go
+                CAPACIDAD = 1000
+                COLORES = {"Huevo entero": "#C68B54", "Clara": "#90EE90", "Yema": "#FFA500"}
 
-            def _tipo_por_lote(lote_id, df_ref):
-                fila = df_ref[df_ref["lote_semielaborado_id"] == lote_id]
-                if not fila.empty and "tipo_producto" in fila.columns:
-                    return str(fila.iloc[0]["tipo_producto"])
-                return ""
-
-            col_t1, col_t2 = st.columns(2)
-            for col_tank, tid, tnom in [(col_t1, "T1", "Tanque 1"), (col_t2, "T2", "Tanque 2")]:
-                with col_tank:
-                    if "tanque_id" in disponibles.columns:
-                        lotes_t = disponibles[disponibles["tanque_id"].astype(str) == tid].copy()
-                    else:
-                        lotes_t = pd.DataFrame()
-                    total_kg = float(lotes_t["kg_saldo"].sum()) if not lotes_t.empty else 0.0
-                    pct = min(total_kg / CAPACIDAD * 100, 100)
-                    fig = go.Figure()
-                    if lotes_t.empty:
-                        fig.add_trace(go.Bar(x=[tnom], y=[CAPACIDAD],
-                            marker_color="#e0e0e0", text=["Vacío"], textposition="inside", name="Vacío"))
-                    else:
-                        for _, row in lotes_t.iterrows():
-                            tipo = str(row.get("tipo_producto", ""))
-                            kg = float(row["kg_saldo"])
-                            color = COLORES_PRODUCTO.get(tipo, "#e0e0e0")
-                            fig.add_trace(go.Bar(x=[tnom], y=[kg],
-                                marker_color=color,
-                                text=[f"{row['lote_semielaborado_id']}<br>{kg:.0f} kg"],
-                                textposition="inside",
-                                name=str(row["lote_semielaborado_id"]),
-                                hovertemplate=f"{row['lote_semielaborado_id']}<br>{tipo}<br>{kg:.1f} kg<extra></extra>"))
-                        restante = max(CAPACIDAD - total_kg, 0)
-                        if restante > 0:
-                            fig.add_trace(go.Bar(x=[tnom], y=[restante],
-                                marker_color="#f0f0f0", text=[f"{restante:.0f} kg libres"],
-                                textposition="inside", name="Libre", hoverinfo="skip"))
-                    fig.update_layout(
-                        barmode="stack", height=350,
-                        title=dict(text=f"{tnom}<br><sub>{total_kg:.0f}/{CAPACIDAD} kg ({pct:.0f}%)</sub>", x=0.5),
-                        showlegend=False, margin=dict(l=10,r=10,t=60,b=10),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        yaxis=dict(range=[0,CAPACIDAD], showgrid=False, showticklabels=False),
-                        xaxis=dict(showticklabels=False),
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    if not lotes_t.empty:
-                        for _, row in lotes_t.iterrows():
-                            st.caption(f"🔹 {row['lote_semielaborado_id']} — {row.get('tipo_producto','')} — {float(row['kg_saldo']):.1f} kg")
-
-            st.write("")
-            st.markdown("##### 📋 Detalle de lotes en tanque")
-            columnas_disp = ["lote_semielaborado_id", "fecha", "tipo_producto", "tanque_id", "kg_saldo"]
-            if ve_costos(rol):
-                columnas_disp.append("costo_unitario_kg")
-            cols_show = [c for c in columnas_disp if c in disponibles.columns]
-            tabla_disp = disponibles[cols_show].copy()
-            tabla_disp["kg_saldo"] = tabla_disp["kg_saldo"].round(1)
-            if "tanque_id" in tabla_disp.columns:
-                tabla_disp["tanque_id"] = tabla_disp["tanque_id"].fillna("Sin asignar")
-            st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+                col_t1, col_t2 = st.columns(2)
+                for col_tank, tid, tnom in [(col_t1, "T1", "Tanque 1"), (col_t2, "T2", "Tanque 2")]:
+                    with col_tank:
+                        if "tanque_id" in disp.columns:
+                            lotes_t = disp[disp["tanque_id"].astype(str) == tid].copy()
+                        else:
+                            lotes_t = pd.DataFrame()
+                        total_kg = float(lotes_t["kg_saldo"].sum()) if not lotes_t.empty else 0.0
+                        pct = min(total_kg / CAPACIDAD * 100, 100)
+                        fig = go.Figure()
+                        if lotes_t.empty:
+                            fig.add_trace(go.Bar(x=[tnom], y=[CAPACIDAD],
+                                marker_color="#e0e0e0", text=["Vacío"],
+                                textposition="inside", name="Vacío"))
+                        else:
+                            for _, row in lotes_t.iterrows():
+                                tipo = str(row.get("tipo_producto",""))
+                                kg = float(row["kg_saldo"])
+                                color = COLORES.get(tipo, "#e0e0e0")
+                                lote_id = str(row["lote_semielaborado_id"])
+                                if not color or color == "#e0e0e0":
+                                    if lote_id.startswith("SR"): color = COLORES["Huevo entero"]
+                                    elif lote_id.startswith("TK"): color = COLORES["Yema"]
+                                    elif lote_id.startswith("R"): color = COLORES["Clara"]
+                                fig.add_trace(go.Bar(
+                                    x=[tnom], y=[kg],
+                                    marker_color=color,
+                                    text=[f"{lote_id}: {kg:.0f} kg"],
+                                    textposition="inside",
+                                    name=lote_id,
+                                    hovertemplate=f"{lote_id}<br>{tipo}<br>{kg:.1f} kg<extra></extra>",
+                                ))
+                            restante = max(CAPACIDAD - total_kg, 0)
+                            if restante > 0:
+                                fig.add_trace(go.Bar(
+                                    x=[tnom], y=[restante],
+                                    marker_color="#f5f5f5",
+                                    text=[f"{restante:.0f} kg libres"],
+                                    textposition="inside",
+                                    textfont={"color":"#aaaaaa"},
+                                    name="Libre",
+                                    hoverinfo="skip",
+                                ))
+                        fig.update_layout(
+                            barmode="stack", height=350,
+                            title={"text": f"{tnom}: {total_kg:.0f}/{CAPACIDAD} kg ({pct:.0f}%)", "x":0.5},
+                            showlegend=False,
+                            margin={"l":10,"r":10,"t":50,"b":10},
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            yaxis={"range":[0,CAPACIDAD],"showgrid":False,"showticklabels":False},
+                            xaxis={"showticklabels":False},
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        if not lotes_t.empty:
+                            for _, row in lotes_t.iterrows():
+                                st.caption(f"🔹 {row['lote_semielaborado_id']} — {row.get('tipo_producto','')} — {float(row['kg_saldo']):.1f} kg")
+                        else:
+                            st.caption("Tanque vacío")
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
