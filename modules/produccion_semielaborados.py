@@ -619,108 +619,96 @@ def render(db, username, rol):
                 st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
 
             st.write("")
-            CAPACIDAD = 1000  # kg por tanque
-            COLORES_PRODUCTO = {
-                "Huevo entero": "#C68B54",  # café claro
-                "Clara":        "#90EE90",  # verde claro
-                "Yema":         "#E8735A",  # tomate
-            }
-            COLOR_VACIO = "#e0e0e0"
+            st.markdown("##### 🛢️ Estado de los tanques")
+            import plotly.graph_objects as go
 
-            def _color_lote(lote_id):
+            CAPACIDAD = 1000
+            COLORES_PRODUCTO = {
+                "Huevo entero": "#C68B54",
+                "Clara":        "#90EE90",
+                "Yema":         "#FFA500",
+            }
+
+            def _color_tipo(tipo, lote_id=""):
+                c = COLORES_PRODUCTO.get(str(tipo), None)
+                if c:
+                    return c
                 if str(lote_id).startswith("SR"):
                     return COLORES_PRODUCTO["Huevo entero"]
                 elif str(lote_id).startswith("TK"):
                     return COLORES_PRODUCTO["Yema"]
                 elif str(lote_id).startswith("R"):
                     return COLORES_PRODUCTO["Clara"]
-                return COLOR_VACIO
+                return "#e0e0e0"
 
-            def _tipo_por_lote(lote_id, df_ref):
-                fila = df_ref[df_ref["lote_semielaborado_id"] == lote_id]
-                if not fila.empty and "tipo_producto" in fila.columns:
-                    return str(fila.iloc[0]["tipo_producto"])
-                return ""
-
-            def _svg_cilindro(tanque_nombre, lotes_tanque, capacidad):
-                W, H = 200, 340
-                rx, ry = 70, 22       # elipse radios
-                cx = W // 2
-                cuerpo_top = 50
-                cuerpo_bot = 290
-                cuerpo_h = cuerpo_bot - cuerpo_top
-
-                total_kg = sum(l["kg"] for l in lotes_tanque)
-                pct = min(total_kg / capacidad, 1.0)
-
-                svg = [f'<svg width="{W}" height="{H+40}" xmlns="http://www.w3.org/2000/svg">']
-
-                # Fondo del cuerpo (vacío)
-                svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
-                svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_bot}" rx="{rx}" ry="{ry}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
-
-                # Relleno de lotes (apilado de abajo hacia arriba)
-                y_actual = cuerpo_bot
-                for lote in reversed(lotes_tanque):
-                    h_lote = int((lote["kg"] / capacidad) * cuerpo_h)
-                    y_lote = y_actual - h_lote
-                    color = lote["color"]
-                    svg.append(f'<rect x="{cx-rx}" y="{y_lote}" width="{rx*2}" height="{h_lote}" fill="{color}" opacity="0.85"/>')
-                    # etiqueta kg dentro
-                    y_label = y_lote + h_lote // 2
-                    svg.append(f'<text x="{cx}" y="{y_label}" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">{lote["kg"]:.0f} kg</text>')
-                    svg.append(f'<text x="{cx}" y="{y_label+13}" text-anchor="middle" font-size="9" fill="#555">{lote["id"]}</text>')
-                    y_actual = y_lote
-
-                # Elipse superior (tapa del cilindro)
-                tapa_color = lotes_tanque[-1]["color"] if lotes_tanque and pct > 0 else COLOR_VACIO
-                svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_top}" rx="{rx}" ry="{ry}" fill="{tapa_color}" opacity="0.85" stroke="#999" stroke-width="2"/>')
-
-                # Contorno del cuerpo
-                svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="none" stroke="#666" stroke-width="2"/>')
-
-                # Línea de nivel
-                nivel_y = cuerpo_bot - int(pct * cuerpo_h)
-                svg.append(f'<line x1="{cx-rx}" y1="{nivel_y}" x2="{cx+rx}" y2="{nivel_y}" stroke="#333" stroke-width="1.5" stroke-dasharray="4,3"/>')
-
-                # Título y total
-                svg.append(f'<text x="{cx}" y="30" text-anchor="middle" font-size="15" font-weight="bold" fill="#333">{tanque_nombre}</text>')
-                svg.append(f'<text x="{cx}" y="{H+20}" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">{total_kg:.0f} / {capacidad} kg</text>')
-                pct_txt = f"{pct*100:.0f}%"
-                svg.append(f'<text x="{cx}" y="{H+36}" text-anchor="middle" font-size="11" fill="#666">{pct_txt} de capacidad</text>')
-
-                svg.append('</svg>')
-                return "".join(svg)
-
-            st.markdown("##### 🛢️ Estado de los tanques")
             col_t1, col_t2 = st.columns(2)
             for col_tank, tid, tnom in [(col_t1, "T1", "Tanque 1"), (col_t2, "T2", "Tanque 2")]:
                 with col_tank:
                     if "tanque_id" in disponibles.columns:
-                        lotes_t = disponibles[disponibles["tanque_id"].astype(str) == tid]
+                        lotes_t = disponibles[disponibles["tanque_id"].astype(str) == tid].copy()
                     else:
                         lotes_t = pd.DataFrame()
 
-                    lotes_data = []
-                    for _, row in lotes_t.iterrows():
-                        tipo = str(row.get("tipo_producto", ""))
-                        color = COLORES_PRODUCTO.get(tipo, _color_lote(row["lote_semielaborado_id"]))
-                        lotes_data.append({
-                            "id": row["lote_semielaborado_id"],
-                            "kg": float(row["kg_saldo"]),
-                            "tipo": tipo,
-                            "color": color,
-                        })
+                    total_kg = float(lotes_t["kg_saldo"].sum()) if not lotes_t.empty else 0.0
+                    pct = min(total_kg / CAPACIDAD * 100, 100)
 
-                    svg_str = _svg_cilindro(tnom, lotes_data, CAPACIDAD)
-                    import streamlit.components.v1 as components
-                    components.html(svg_str, height=390)
+                    fig = go.Figure()
 
-                    if lotes_data:
-                        for l in lotes_data:
-                            st.caption(f"🔹 {l['id']} — {l['tipo']} — {l['kg']:.1f} kg")
+                    if lotes_t.empty:
+                        # Tanque vacío
+                        fig.add_trace(go.Bar(
+                            x=[tnom], y=[CAPACIDAD],
+                            marker_color="#e0e0e0",
+                            text=["Vacío"], textposition="inside",
+                            name="Vacío",
+                        ))
                     else:
-                        st.caption("Tanque vacío")
+                        for _, row in lotes_t.iterrows():
+                            tipo = str(row.get("tipo_producto", ""))
+                            kg = float(row["kg_saldo"])
+                            color = _color_tipo(tipo, row["lote_semielaborado_id"])
+                            fig.add_trace(go.Bar(
+                                x=[tnom],
+                                y=[kg],
+                                marker_color=color,
+                                text=[f"{row['lote_semielaborado_id']}<br>{kg:.0f} kg"],
+                                textposition="inside",
+                                name=f"{row['lote_semielaborado_id']}",
+                                hovertemplate=f"{row['lote_semielaborado_id']}<br>{tipo}<br>{kg:.1f} kg<extra></extra>",
+                            ))
+                        # Espacio vacío restante
+                        restante = max(CAPACIDAD - total_kg, 0)
+                        if restante > 0:
+                            fig.add_trace(go.Bar(
+                                x=[tnom], y=[restante],
+                                marker_color="#f0f0f0",
+                                marker_line_color="#cccccc",
+                                marker_line_width=1,
+                                text=[f"{restante:.0f} kg libres"],
+                                textposition="inside",
+                                textfont_color="#aaaaaa",
+                                name="Libre",
+                                hoverinfo="skip",
+                            ))
+
+                    fig.update_layout(
+                        barmode="stack",
+                        height=350,
+                        title=dict(text=f"{tnom}<br><sub>{total_kg:.0f} / {CAPACIDAD} kg ({pct:.0f}%)</sub>",
+                                   x=0.5, font_size=14),
+                        showlegend=False,
+                        margin=dict(l=10, r=10, t=60, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(range=[0, CAPACIDAD], showgrid=False, showticklabels=False),
+                        xaxis=dict(showticklabels=False),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    if not lotes_t.empty:
+                        for _, row in lotes_t.iterrows():
+                            tipo = str(row.get("tipo_producto",""))
+                            st.caption(f"🔹 {row['lote_semielaborado_id']} — {tipo} — {float(row['kg_saldo']):.1f} kg")
 
             st.write("")
             st.markdown("##### 📋 Detalle de lotes en tanque")
