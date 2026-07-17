@@ -783,6 +783,23 @@ def render(db, username, rol):
                 col_g2.markdown("**Balance de masa (%) en el tiempo**")
                 col_g2.line_chart(df.set_index("fecha")["balance_masa_pct"])
 
+    with tab_rendimiento:
+        st.markdown("##### ⚖️ Teórico vs. real")
+        df_rend = db.get_df("produccion_semielaborados")
+        if df_rend.empty:
+            st.info("No hay lotes registrados todavía.")
+        else:
+            for col in ["kg_liquido_teorico","kg_real","clara_teorica_kg","clara_real_kg",
+                        "yema_teorica_kg","yema_real_kg","cascara_teorica_kg","cascara_real_kg","balance_masa_pct"]:
+                if col in df_rend.columns:
+                    df_rend[col] = pd.to_numeric(df_rend[col], errors="coerce").fillna(0)
+            cols_rend = [c for c in ["lote_semielaborado_id","fecha","tipo_producto",
+                                      "kg_liquido_teorico","kg_real","clara_teorica_kg","clara_real_kg",
+                                      "yema_teorica_kg","yema_real_kg","cascara_teorica_kg","cascara_real_kg",
+                                      "balance_masa_pct"] if c in df_rend.columns]
+            st.dataframe(df_rend[cols_rend].sort_values("fecha", ascending=False),
+                         use_container_width=True, hide_index=True)
+
     with tab_corregir:
         if not es_admin(rol):
             st.error("🔒 Esta función está disponible solo para el administrador.")
