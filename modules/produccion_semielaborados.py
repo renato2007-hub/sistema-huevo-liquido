@@ -215,7 +215,10 @@ def render(db, username, rol):
         mapa_recepcion_a_categoria = dict(zip(recepciones_con_saldo["recepcion_id"], recepciones_con_saldo["categoria_id"]))
 
         # Pre-poblar: si hay plan de MP para esta fecha, usarlo; sino FEFO normal
-        plan_mp_df = db.get_df("plan_mp_asignado")
+        try:
+            plan_mp_df = db.get_df("plan_mp_asignado")
+        except Exception:
+            plan_mp_df = pd.DataFrame()
         plan_fecha = pd.DataFrame()
         if not plan_mp_df.empty:
             plan_fecha = plan_mp_df[plan_mp_df["fecha"].astype(str) == fecha.isoformat()].copy()
@@ -876,4 +879,3 @@ def render(db, username, rol):
                             f"volver a registrarla correctamente en 'Nueva producción'."
                         )
                         st.rerun()
-# cache bust Fri Jul 17 01:04:00 -05 2026
