@@ -341,7 +341,11 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
 def render(db, username, rol):
     st.title("Pasteurización y envasado")
-    tab_nueva, tab_disponibles, tab_granel, tab_historial = st.tabs(["Nuevo lote envasado", "Producto terminado disponible", "📦 Pasar a granel", "📋 Historial"])
+    # La pestaña "Producto terminado disponible" se eliminó: con el ingreso
+    # automático a cuarto frío, esa información vive en Cuarto frío → Inventario actual.
+    tab_nueva, tab_granel, tab_historial = st.tabs(
+        ["Nuevo lote envasado", "📦 Pasar a granel", "📋 Historial"]
+    )
 
     semielaborados = db.get_df("produccion_semielaborados")
     presentaciones = db.get_df("presentaciones")
@@ -364,137 +368,6 @@ def render(db, username, rol):
 
     with tab_nueva:
         _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos, tapas, etiquetas, cartones, liners)
-
-    with tab_disponibles:
-        df = db.get_df("pasteurizacion_envasado")
-        if df.empty:
-            st.info("Todavía no hay lotes de producto terminado.")
-        else:
-            df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
-            df["saldo_cf"] = df["lote_producto_id"].map(saldo_cf_por_lote).fillna(0)
-            df["unidades_saldo"] = df["unidades_saldo"] + df["saldo_cf"]
-            disponible_df = df[df["unidades_saldo"] > 0].copy()
-            disponible_df["estado"] = disponible_df["pasteurizado"].astype(str).str.upper().isin(
-                ["TRUE", "1", "SI", "SÍ"]
-            ).map({True: "✅ Pasteurizado", False: "🔴 Sin pasteurizar"})
-            if not semielaborados.empty:
-                disponible_df = disponible_df.merge(
-                    semielaborados[["lote_semielaborado_id", "tipo_producto"]],
-                    on="lote_semielaborado_id", how="left",
-                )
-                disponible_df["tipo_producto"] = disponible_df["tipo_producto"].fillna("—")
-            else:
-                disponible_df["tipo_producto"] = "—"
-            disponible_df = disponible_df.rename(columns={"lote_semielaborado_id": "lote_origen"})
-            columnas_disp = [
-                "lote_producto_id", "fecha", "lote_origen", "tipo_producto",
-                "presentacion_id", "estado", "etiqueta_id", "unidades_saldo",
-            ]
-            if ve_costos(rol):
-                columnas_disp.append("costo_unitario")
-            st.dataframe(disponible_df[[c for c in columnas_disp if c in disponible_df.columns]], use_container_width=True)
-
-            st.markdown("##### Kg totales disponibles por producto")
-            resumen_kg = disponible_df.copy()
-            if not presentaciones.empty:
-                resumen_kg = resumen_kg.merge(
-                    presentaciones[["presentacion_id", "kg_nominal"]], on="presentacion_id", how="left",
-                )
-            else:
-                resumen_kg["kg_nominal"] = 0
-            resumen_kg["kg_nominal"] = pd.to_numeric(resumen_kg["kg_nominal"], errors="coerce").fillna(0)
-            # tipo_producto ya viene en disponible_df del merge anterior — no re-mergear
-            if "tipo_producto" not in resumen_kg.columns:
-                resumen_kg["tipo_producto"] = "Sin clasificar"
-            resumen_kg["tipo_producto"] = resumen_kg["tipo_producto"].fillna("Sin clasificar")
-            resumen_kg["kg"] = resumen_kg["unidades_saldo"] * resumen_kg["kg_nominal"]
-            resumen_kg["pasteurizado_bool"] = resumen_kg["pasteurizado"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
-
-            def _nombre_producto(tipo, past):
-                nombre = {"Huevo entero": "Huevo entero", "Clara": "Clara", "Yema": "Yema"}.get(tipo, tipo)
-                return f"{nombre} pasteurizado{'a' if nombre in ('Clara','Yema') else ''}" if past else f"{nombre} sin pasteurizar"
-
-            resumen_kg["nombre_producto"] = resumen_kg.apply(
-                lambda r: _nombre_producto(r["tipo_producto"], r["pasteurizado_bool"]), axis=1
-            )
-            por_tipo_kg = resumen_kg.groupby("nombre_producto")["kg"].sum()
-            por_tipo_kg = por_tipo_kg[por_tipo_kg > 0]
-            if por_tipo_kg.empty:
-                st.info("No hay datos suficientes para calcular el total en kg.")
-            else:
-                cols_kg = st.columns(min(len(por_tipo_kg), 4))
-                for col, (nombre, kg) in zip(cols_kg, por_tipo_kg.items()):
-                    col.metric(nombre, f"{kg:,.1f} kg")
-
-            # Gráfica de barras por presentación
-            st.write("")
-            st.markdown("##### 📊 Unidades disponibles por presentación")
-            import plotly.graph_objects as go
-            # Asegurar que disponible_df tenga nombre de presentación
-            graf_src = disponible_df.copy()
-            if "presentacion_nombre" not in graf_src.columns:
-                if not presentaciones.empty and "presentacion_id" in graf_src.columns:
-                    graf_src = graf_src.merge(
-                        presentaciones[["presentacion_id","nombre"]].rename(columns={"nombre":"presentacion_nombre"}),
-                        on="presentacion_id", how="left"
-                    )
-                    graf_src["presentacion_nombre"] = graf_src["presentacion_nombre"].fillna(graf_src["presentacion_id"])
-                else:
-                    graf_src["presentacion_nombre"] = graf_src.get("presentacion_id", "Sin nombre")
-
-            graf_df = graf_src.groupby("presentacion_nombre").agg(
-                unidades=("unidades_saldo", "sum")
-            ).reset_index().sort_values("unidades", ascending=True)
-            graf_df = graf_df[graf_df["unidades"] > 0]
-            if graf_df.empty:
-                st.info("Sin unidades disponibles para graficar.")
-            else:
-                COLORES_PRES = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c"]
-
-                # Color por tipo de producto según nombre de presentación/lote
-                def _color_pres(nombre):
-                    n = str(nombre).lower()
-                    if any(x in n for x in ["huevo", "sr", "entero"]):
-                        return "#C68B54"   # café claro
-                    elif any(x in n for x in ["yema", "tk"]):
-                        return "#FFA500"   # anaranjado
-                    elif any(x in n for x in ["clara", "r2", " r "]):
-                        return "#90EE90"   # verde claro
-                    return "#90a4ae"
-
-                # Intentar colorear por tipo_producto si está disponible en graf_src
-                if "tipo_producto" in graf_src.columns:
-                    tipo_por_pres = graf_src.groupby("presentacion_nombre")["tipo_producto"].first().to_dict()
-                    def _color_final(nombre):
-                        tipo = str(tipo_por_pres.get(nombre, "")).lower()
-                        if "huevo" in tipo:
-                            return "#C68B54"
-                        elif "yema" in tipo:
-                            return "#FFA500"
-                        elif "clara" in tipo:
-                            return "#90EE90"
-                        return _color_pres(nombre)
-                    colores_barras = [_color_final(n) for n in graf_df["presentacion_nombre"]]
-                else:
-                    colores_barras = [_color_pres(n) for n in graf_df["presentacion_nombre"]]
-
-                fig = go.Figure(go.Bar(
-                    x=graf_df["unidades"].tolist(),
-                    y=graf_df["presentacion_nombre"].tolist(),
-                    orientation="h",
-                    marker_color=colores_barras,
-                    text=graf_df["unidades"].apply(lambda v: f"{int(v)} unid.").tolist(),
-                    textposition="outside",
-                    hovertemplate="%{y}: %{x} unidades<extra></extra>",
-                ))
-                fig.update_layout(
-                    height=max(200, len(graf_df) * 55),
-                    margin=dict(l=10, r=80, t=20, b=20),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
-                )
-                st.plotly_chart(fig, use_container_width=True)
 
     with tab_granel:
         st.caption(
