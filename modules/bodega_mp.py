@@ -242,7 +242,7 @@ def render(db, username, rol):
             st.info("No hay recepciones registradas todavía.")
         else:
             recepciones["cubetas_saldo"] = pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0)
-            recepciones["cubetas_recibidas"] = pd.to_numeric(recepciones["cubetas_recibidas"], errors="coerce").fillna(0)
+            recepciones["cubetas"] = pd.to_numeric(recepciones["cubetas"], errors="coerce").fillna(0)
             recepciones["costo_cubeta"] = pd.to_numeric(recepciones["costo_cubeta"], errors="coerce").fillna(0)
 
             rec_sel = st.selectbox(
