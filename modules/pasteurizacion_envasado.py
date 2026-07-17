@@ -400,11 +400,39 @@ def render(db, username, rol):
                 st.info("Sin unidades disponibles para graficar.")
             else:
                 COLORES_PRES = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c"]
+
+                # Color por tipo de producto según nombre de presentación/lote
+                def _color_pres(nombre):
+                    n = str(nombre).lower()
+                    if any(x in n for x in ["huevo", "sr", "entero"]):
+                        return "#C68B54"   # café claro
+                    elif any(x in n for x in ["yema", "tk"]):
+                        return "#FFA500"   # anaranjado
+                    elif any(x in n for x in ["clara", "r2", " r "]):
+                        return "#90EE90"   # verde claro
+                    return "#90a4ae"
+
+                # Intentar colorear por tipo_producto si está disponible en graf_src
+                if "tipo_producto" in graf_src.columns:
+                    tipo_por_pres = graf_src.groupby("presentacion_nombre")["tipo_producto"].first().to_dict()
+                    def _color_final(nombre):
+                        tipo = str(tipo_por_pres.get(nombre, "")).lower()
+                        if "huevo" in tipo:
+                            return "#C68B54"
+                        elif "yema" in tipo:
+                            return "#FFA500"
+                        elif "clara" in tipo:
+                            return "#90EE90"
+                        return _color_pres(nombre)
+                    colores_barras = [_color_final(n) for n in graf_df["presentacion_nombre"]]
+                else:
+                    colores_barras = [_color_pres(n) for n in graf_df["presentacion_nombre"]]
+
                 fig = go.Figure(go.Bar(
                     x=graf_df["unidades"].tolist(),
                     y=graf_df["presentacion_nombre"].tolist(),
                     orientation="h",
-                    marker_color=[COLORES_PRES[i % len(COLORES_PRES)] for i in range(len(graf_df))],
+                    marker_color=colores_barras,
                     text=graf_df["unidades"].apply(lambda v: f"{int(v)} unid.").tolist(),
                     textposition="outside",
                     hovertemplate="%{y}: %{x} unidades<extra></extra>",
