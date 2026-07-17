@@ -603,6 +603,7 @@ def render(db, username, rol):
                 st.rerun()
 
     with tab_inventario:
+        st.write("TAB INV OK")
         df_tanque = db.get_df("produccion_semielaborados")
         if df_tanque.empty:
             st.info("Todavía no hay lotes de semielaborado.")
@@ -618,6 +619,7 @@ def render(db, username, rol):
                 st.dataframe(t, use_container_width=True, hide_index=True)
 
     with tab_rendimiento:
+        st.write("TAB REND OK")
         df_rend = db.get_df("produccion_semielaborados")
         if df_rend.empty:
             st.info("No hay lotes registrados.")
@@ -626,6 +628,7 @@ def render(db, username, rol):
             st.dataframe(df_rend[cols_r].sort_values("fecha", ascending=False), use_container_width=True, hide_index=True)
 
     with tab_historial:
+        st.write("TAB HIST OK")
         df_hist = db.get_df("produccion_semielaborados")
         if df_hist.empty:
             st.info("Todavía no hay lotes registrados.")
@@ -668,6 +671,7 @@ def render(db, username, rol):
             )
 
     with tab_perdida:
+        st.write("TAB PERD OK")
         st.caption(
             "Para clara o yema sobrante sin cliente (u otro semielaborado dañado/vencido) "
             "que se va a desechar — reduce el saldo del tanque y queda registrado en mermas."
@@ -790,6 +794,7 @@ def render(db, username, rol):
                 col_g2.line_chart(df.set_index("fecha")["balance_masa_pct"])
 
     with tab_corregir:
+        st.write("TAB CORR OK")
         if not es_admin(rol):
             st.error("🔒 Esta función está disponible solo para el administrador.")
             return
