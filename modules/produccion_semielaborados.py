@@ -600,6 +600,7 @@ def render(db, username, rol):
                 st.rerun()
 
     with tab_inventario:
+        import plotly.graph_objects as go
         df_inv = db.get_df("produccion_semielaborados")
         if df_inv.empty:
             st.info("Todavía no hay lotes de semielaborado.")
@@ -609,7 +610,6 @@ def render(db, username, rol):
             if disp.empty:
                 st.info("No hay kg disponibles en los tanques actualmente.")
             else:
-                # Tabla
                 cols_t = [c for c in ["lote_semielaborado_id","fecha","tipo_producto","tanque_id","kg_saldo"] if c in disp.columns]
                 t = disp[cols_t].copy()
                 t["kg_saldo"] = t["kg_saldo"].round(1)
@@ -617,86 +617,57 @@ def render(db, username, rol):
                     t["tanque_id"] = t["tanque_id"].fillna("Sin asignar")
                 st.dataframe(t, use_container_width=True, hide_index=True)
 
-                # Termómetros SVG via HTML completo
-                import streamlit.components.v1 as components
+                st.write("")
+                st.markdown("##### 🛢️ Nivel de los tanques")
                 CAPACIDAD = 1000
-                COLORES = {"Huevo entero": "#C68B54", "Clara": "#90EE90", "Yema": "#FFA500"}
-
-                def _color(tipo, lote_id):
-                    c = COLORES.get(str(tipo))
-                    if c: return c
-                    lid = str(lote_id)
-                    if lid.startswith("SR"): return COLORES["Huevo entero"]
-                    if lid.startswith("TK"): return COLORES["Yema"]
-                    if lid.startswith("R"):  return COLORES["Clara"]
-                    return "#e0e0e0"
-
-                def _termometro(tid, tnom):
-                    if "tanque_id" in disp.columns:
-                        lotes_t = disp[disp["tanque_id"].astype(str) == tid].copy()
-                    else:
-                        lotes_t = pd.DataFrame()
-                    total_kg = float(lotes_t["kg_saldo"].sum()) if not lotes_t.empty else 0.0
-                    pct = min(total_kg / CAPACIDAD, 1.0)
-
-                    W, H_tubo = 120, 300
-                    x0, ancho = 35, 50
-                    y_top = 20
-                    y_bot = y_top + H_tubo
-                    r_base = 30
-
-                    rects = []
-                    y_actual = y_bot
-                    for _, row in (lotes_t.iterrows() if not lotes_t.empty else []):
-                        kg = float(row["kg_saldo"])
-                        h = int((kg / CAPACIDAD) * H_tubo)
-                        color = _color(row.get("tipo_producto",""), row["lote_semielaborado_id"])
-                        y_rect = y_actual - h
-                        mid = y_rect + h // 2
-                        rects.append(f'''
-                            <rect x="{x0}" y="{y_rect}" width="{ancho}" height="{h}" fill="{color}" opacity="0.9"/>
-                            <text x="{x0+ancho//2}" y="{mid+5}" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">{kg:.0f} kg</text>
-                        ''')
-                        y_actual = y_rect
-
-                    nivel_y = y_bot - int(pct * H_tubo)
-                    leyendas = "".join(
-                        f'<text x="{W//2}" y="{y_bot+50+i*16}" text-anchor="middle" font-size="10" fill="{_color(row.get("tipo_producto",""), row["lote_semielaborado_id"])}" font-weight="bold">⬤ {row["lote_semielaborado_id"]}: {float(row["kg_saldo"]):.0f} kg</text>'
-                        for i, (_, row) in enumerate(lotes_t.iterrows() if not lotes_t.empty else [])
-                    )
-                    n_leyendas = len(lotes_t) if not lotes_t.empty else 0
-                    SVG_H = y_bot + r_base + 60 + n_leyendas * 16
-
-                    return f"""
-                    <svg width="{W}" height="{SVG_H}" xmlns="http://www.w3.org/2000/svg">
-                      <text x="{W//2}" y="14" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">{tnom}</text>
-                      <!-- fondo tubo -->
-                      <rect x="{x0}" y="{y_top}" width="{ancho}" height="{H_tubo}" fill="#f0f0f0" stroke="#bbb" stroke-width="2" rx="6"/>
-                      <!-- relleno -->
-                      {"".join(rects)}
-                      <!-- contorno tubo -->
-                      <rect x="{x0}" y="{y_top}" width="{ancho}" height="{H_tubo}" fill="none" stroke="#888" stroke-width="2" rx="6"/>
-                      <!-- línea nivel -->
-                      <line x1="{x0-8}" y1="{nivel_y}" x2="{x0+ancho+8}" y2="{nivel_y}" stroke="#333" stroke-width="1.5" stroke-dasharray="4,3"/>
-                      <!-- base circular -->
-                      <ellipse cx="{x0+ancho//2}" cy="{y_bot}" rx="{r_base}" ry="12" fill="#e0e0e0" stroke="#bbb" stroke-width="2"/>
-                      <!-- total -->
-                      <text x="{W//2}" y="{y_bot+r_base+18}" text-anchor="middle" font-size="12" font-weight="bold" fill="#333">{total_kg:.0f} / {CAPACIDAD} kg</text>
-                      <text x="{W//2}" y="{y_bot+r_base+32}" text-anchor="middle" font-size="11" fill="#666">{pct*100:.0f}% lleno</text>
-                      {leyendas}
-                    </svg>
-                    """
-
-                svg1 = _termometro("T1", "Tanque 1")
-                svg2 = _termometro("T2", "Tanque 2")
-
-                html = f"""
-                <div style="display:flex; justify-content:space-around; align-items:flex-start; padding:10px;">
-                    <div style="text-align:center;">{svg1}</div>
-                    <div style="text-align:center;">{svg2}</div>
-                </div>
-                """
-                components.html(html, height=500, scrolling=False)
+                COLORES = {"Huevo entero":"#C68B54","Clara":"#90EE90","Yema":"#FFA500"}
+                col_t1, col_t2 = st.columns(2)
+                for col_tank, tid, tnom in [(col_t1,"T1","Tanque 1"),(col_t2,"T2","Tanque 2")]:
+                    with col_tank:
+                        if "tanque_id" in disp.columns:
+                            lt = disp[disp["tanque_id"].astype(str)==tid].copy()
+                        else:
+                            lt = pd.DataFrame()
+                        total = float(lt["kg_saldo"].sum()) if not lt.empty else 0.0
+                        pct = min(total/CAPACIDAD*100,100)
+                        fig = go.Figure()
+                        if lt.empty:
+                            fig.add_trace(go.Bar(x=[tnom],y=[CAPACIDAD],
+                                marker_color="#e0e0e0",text=["Vacío"],
+                                textposition="inside",name="Vacío"))
+                        else:
+                            for _,row in lt.iterrows():
+                                tipo = str(row.get("tipo_producto",""))
+                                kg = float(row["kg_saldo"])
+                                lid = str(row["lote_semielaborado_id"])
+                                col = COLORES.get(tipo)
+                                if not col:
+                                    col = COLORES["Huevo entero"] if lid.startswith("SR") else (COLORES["Yema"] if lid.startswith("TK") else (COLORES["Clara"] if lid.startswith("R") else "#e0e0e0"))
+                                fig.add_trace(go.Bar(x=[tnom],y=[kg],
+                                    marker_color=col,
+                                    text=[f"{lid}<br>{kg:.0f}kg"],
+                                    textposition="inside",name=lid,
+                                    hovertemplate=f"{lid}<br>{tipo}<br>{kg:.1f}kg<extra></extra>"))
+                            libre = max(CAPACIDAD-total,0)
+                            if libre>0:
+                                fig.add_trace(go.Bar(x=[tnom],y=[libre],
+                                    marker_color="#f5f5f5",
+                                    text=[f"{libre:.0f}kg libre"],
+                                    textposition="inside",
+                                    textfont={"color":"#aaa"},
+                                    name="Libre",hoverinfo="skip"))
+                        fig.update_layout(
+                            barmode="stack",height=400,
+                            title={"text":f"{tnom}<br><b>{total:.0f}/{CAPACIDAD}kg ({pct:.0f}%)</b>","x":0.5,"font":{"size":13}},
+                            showlegend=True,
+                            legend={"orientation":"h","y":-0.15},
+                            margin={"l":5,"r":5,"t":70,"b":5},
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            yaxis={"range":[0,CAPACIDAD],"showgrid":True,"gridcolor":"#eee","showticklabels":True,"title":"kg"},
+                            xaxis={"showticklabels":False},
+                        )
+                        st.plotly_chart(fig,use_container_width=True)
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
