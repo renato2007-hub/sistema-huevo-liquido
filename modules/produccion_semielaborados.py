@@ -607,7 +607,18 @@ def render(db, username, rol):
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
             disponibles = df[df["kg_saldo"] >= 0.1].copy()
 
-            # ── Visualización de cilindros ──────────────────────────────────
+            # Tabla primero
+            if disponibles.empty:
+                st.info("No hay kg disponibles en los tanques actualmente.")
+            else:
+                cols_t = [c for c in ["lote_semielaborado_id","fecha","tipo_producto","tanque_id","kg_saldo"] if c in disponibles.columns]
+                tabla_disp = disponibles[cols_t].copy()
+                tabla_disp["kg_saldo"] = tabla_disp["kg_saldo"].round(1)
+                if "tanque_id" in tabla_disp.columns:
+                    tabla_disp["tanque_id"] = tabla_disp["tanque_id"].fillna("Sin asignar")
+                st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+
+            st.write("")
             CAPACIDAD = 1000  # kg por tanque
             COLORES_PRODUCTO = {
                 "Huevo entero": "#C68B54",  # café claro
