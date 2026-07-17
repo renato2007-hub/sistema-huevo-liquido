@@ -166,6 +166,39 @@ def render(db, username, rol):
                 )
             st.dataframe(df_inv, use_container_width=True)
 
+            # Gráficas de barras por tipo de ítem
+            import plotly.graph_objects as go
+            st.write("")
+            COLORES = {
+                "Insumo": "#00695c", "Envase": "#1565c0",
+                "Tapa": "#f9a825", "Etiqueta": "#6a1b9a",
+                "Cartón": "#D9740C", "Liner": "#2e7d32",
+            }
+            tipos = df_inv["tipo"].unique().tolist()
+            cols_graf = st.columns(min(len(tipos), 3))
+            for col_g, tipo in zip(cols_graf * (len(tipos)//max(len(cols_graf),1)+1), tipos):
+                df_tipo = df_inv[df_inv["tipo"] == tipo].copy()
+                df_tipo = df_tipo[df_tipo["saldo"] != 0].sort_values("saldo", ascending=True)
+                if df_tipo.empty:
+                    continue
+                fig = go.Figure(go.Bar(
+                    x=df_tipo["saldo"].tolist(),
+                    y=df_tipo["nombre"].tolist(),
+                    orientation="h",
+                    marker_color=COLORES.get(tipo, "#2e7d32"),
+                    text=df_tipo["saldo"].apply(lambda v: f"{int(v)}").tolist(),
+                    textposition="outside",
+                    hovertemplate="%{y}: %{x} unidades<extra></extra>",
+                ))
+                fig.update_layout(
+                    title=f"{tipo}s",
+                    height=max(180, len(df_tipo) * 45),
+                    margin=dict(l=10, r=50, t=40, b=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                )
+                col_g.plotly_chart(fig, use_container_width=True)
+
             if not df_movimientos.empty and "tipo_movimiento" in df_movimientos.columns:
                 mermas = df_movimientos[df_movimientos["tipo_movimiento"] == "merma"]
                 if not mermas.empty:
@@ -223,6 +256,7 @@ def render(db, username, rol):
                 if not motivo.strip():
                     st.error("Escribe el motivo del ajuste.")
                 else:
+                    import datetime as _dt
                     mov_id = db.siguiente_id("movimientos_envases_insumos", "AJ", fecha_aj)
                     costo_unit = 0.0
                     if "costo_unitario" in df_cat.columns:
