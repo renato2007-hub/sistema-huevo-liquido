@@ -608,124 +608,93 @@ def render(db, username, rol):
             disponibles = df[df["kg_saldo"] >= 0.1].copy()
 
             if disponibles.empty:
-                st.info("No hay kg disponibles en los tanques.")
+                st.info("No hay kg disponibles en los tanques actualmente.")
             else:
-                st.caption(f"Lotes con saldo: {len(disponibles)} — total kg: {disponibles['kg_saldo'].sum():.1f}")
+                CAPACIDAD = 1000
+                COLORES_PRODUCTO = {
+                    "Huevo entero": "#C68B54",
+                    "Clara":        "#90EE90",
+                    "Yema":         "#E8735A",
+                }
+                COLOR_VACIO = "#e0e0e0"
 
-            # ── Visualización de cilindros ──────────────────────────────────
-            CAPACIDAD = 1000  # kg por tanque
-            COLORES_PRODUCTO = {
-                "Huevo entero": "#C68B54",  # café claro
-                "Clara":        "#90EE90",  # verde claro
-                "Yema":         "#E8735A",  # tomate
-            }
-            COLOR_VACIO = "#e0e0e0"
+                def _color_lote(lote_id, tipo=""):
+                    if tipo == "Huevo entero" or str(lote_id).startswith("SR"):
+                        return COLORES_PRODUCTO["Huevo entero"]
+                    elif tipo == "Yema" or str(lote_id).startswith("TK"):
+                        return COLORES_PRODUCTO["Yema"]
+                    elif tipo == "Clara" or str(lote_id).startswith("R"):
+                        return COLORES_PRODUCTO["Clara"]
+                    return COLOR_VACIO
 
-            def _color_lote(lote_id):
-                if str(lote_id).startswith("SR"):
-                    return COLORES_PRODUCTO["Huevo entero"]
-                elif str(lote_id).startswith("TK"):
-                    return COLORES_PRODUCTO["Yema"]
-                elif str(lote_id).startswith("R"):
-                    return COLORES_PRODUCTO["Clara"]
-                return COLOR_VACIO
+                def _svg_cilindro(tanque_nombre, lotes_tanque, capacidad):
+                    W, H = 200, 340
+                    rx, ry = 70, 22
+                    cx = W // 2
+                    cuerpo_top = 50
+                    cuerpo_bot = 290
+                    cuerpo_h = cuerpo_bot - cuerpo_top
+                    total_kg = sum(l["kg"] for l in lotes_tanque)
+                    pct = min(total_kg / capacidad, 1.0) if capacidad > 0 else 0
+                    svg = [f'<svg width="{W}" height="{H+40}" xmlns="http://www.w3.org/2000/svg">']
+                    svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
+                    svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_bot}" rx="{rx}" ry="{ry}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
+                    y_actual = cuerpo_bot
+                    for lote in reversed(lotes_tanque):
+                        h_lote = max(1, int((lote["kg"] / capacidad) * cuerpo_h))
+                        y_lote = y_actual - h_lote
+                        svg.append(f'<rect x="{cx-rx}" y="{y_lote}" width="{rx*2}" height="{h_lote}" fill="{lote["color"]}" opacity="0.85"/>')
+                        y_label = y_lote + h_lote // 2
+                        svg.append(f'<text x="{cx}" y="{y_label+4}" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">{lote["kg"]:.0f} kg</text>')
+                        svg.append(f'<text x="{cx}" y="{y_label+16}" text-anchor="middle" font-size="9" fill="#555">{lote["id"]}</text>')
+                        y_actual = y_lote
+                    tapa_color = lotes_tanque[-1]["color"] if lotes_tanque and pct > 0 else COLOR_VACIO
+                    svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_top}" rx="{rx}" ry="{ry}" fill="{tapa_color}" opacity="0.85" stroke="#999" stroke-width="2"/>')
+                    svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="none" stroke="#666" stroke-width="2"/>')
+                    nivel_y = cuerpo_bot - int(pct * cuerpo_h)
+                    svg.append(f'<line x1="{cx-rx}" y1="{nivel_y}" x2="{cx+rx}" y2="{nivel_y}" stroke="#333" stroke-width="1.5" stroke-dasharray="4,3"/>')
+                    svg.append(f'<text x="{cx}" y="30" text-anchor="middle" font-size="15" font-weight="bold" fill="#333">{tanque_nombre}</text>')
+                    svg.append(f'<text x="{cx}" y="{H+20}" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">{total_kg:.0f} / {capacidad} kg</text>')
+                    svg.append(f'<text x="{cx}" y="{H+36}" text-anchor="middle" font-size="11" fill="#666">{pct*100:.0f}% de capacidad</text>')
+                    svg.append('</svg>')
+                    return "".join(svg)
 
-            def _tipo_por_lote(lote_id, df_ref):
-                fila = df_ref[df_ref["lote_semielaborado_id"] == lote_id]
-                if not fila.empty and "tipo_producto" in fila.columns:
-                    return str(fila.iloc[0]["tipo_producto"])
-                return ""
+                st.markdown("##### 🛢️ Estado de los tanques")
+                col_t1, col_t2 = st.columns(2)
+                for col_tank, tid, tnom in [(col_t1, "T1", "Tanque 1"), (col_t2, "T2", "Tanque 2")]:
+                    with col_tank:
+                        if "tanque_id" in disponibles.columns:
+                            lotes_t = disponibles[disponibles["tanque_id"].astype(str) == tid]
+                        else:
+                            lotes_t = pd.DataFrame()
+                        lotes_data = []
+                        for _, row in lotes_t.iterrows():
+                            tipo = str(row.get("tipo_producto", ""))
+                            lotes_data.append({
+                                "id": row["lote_semielaborado_id"],
+                                "kg": float(row["kg_saldo"]),
+                                "tipo": tipo,
+                                "color": _color_lote(row["lote_semielaborado_id"], tipo),
+                            })
+                        svg_str = _svg_cilindro(tnom, lotes_data, CAPACIDAD)
+                        st.markdown(svg_str, unsafe_allow_html=True)
+                        if lotes_data:
+                            for l in lotes_data:
+                                st.caption(f"🔹 {l['id']} — {l['tipo']} — {l['kg']:.1f} kg")
+                        else:
+                            st.caption("Tanque vacío")
 
-            def _svg_cilindro(tanque_nombre, lotes_tanque, capacidad):
-                W, H = 200, 340
-                rx, ry = 70, 22       # elipse radios
-                cx = W // 2
-                cuerpo_top = 50
-                cuerpo_bot = 290
-                cuerpo_h = cuerpo_bot - cuerpo_top
-
-                total_kg = sum(l["kg"] for l in lotes_tanque)
-                pct = min(total_kg / capacidad, 1.0)
-
-                svg = [f'<svg width="{W}" height="{H+40}" xmlns="http://www.w3.org/2000/svg">']
-
-                # Fondo del cuerpo (vacío)
-                svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
-                svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_bot}" rx="{rx}" ry="{ry}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
-
-                # Relleno de lotes (apilado de abajo hacia arriba)
-                y_actual = cuerpo_bot
-                for lote in reversed(lotes_tanque):
-                    h_lote = int((lote["kg"] / capacidad) * cuerpo_h)
-                    y_lote = y_actual - h_lote
-                    color = lote["color"]
-                    svg.append(f'<rect x="{cx-rx}" y="{y_lote}" width="{rx*2}" height="{h_lote}" fill="{color}" opacity="0.85"/>')
-                    # etiqueta kg dentro
-                    y_label = y_lote + h_lote // 2
-                    svg.append(f'<text x="{cx}" y="{y_label}" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">{lote["kg"]:.0f} kg</text>')
-                    svg.append(f'<text x="{cx}" y="{y_label+13}" text-anchor="middle" font-size="9" fill="#555">{lote["id"]}</text>')
-                    y_actual = y_lote
-
-                # Elipse superior (tapa del cilindro)
-                tapa_color = lotes_tanque[-1]["color"] if lotes_tanque and pct > 0 else COLOR_VACIO
-                svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_top}" rx="{rx}" ry="{ry}" fill="{tapa_color}" opacity="0.85" stroke="#999" stroke-width="2"/>')
-
-                # Contorno del cuerpo
-                svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="none" stroke="#666" stroke-width="2"/>')
-
-                # Línea de nivel
-                nivel_y = cuerpo_bot - int(pct * cuerpo_h)
-                svg.append(f'<line x1="{cx-rx}" y1="{nivel_y}" x2="{cx+rx}" y2="{nivel_y}" stroke="#333" stroke-width="1.5" stroke-dasharray="4,3"/>')
-
-                # Título y total
-                svg.append(f'<text x="{cx}" y="30" text-anchor="middle" font-size="15" font-weight="bold" fill="#333">{tanque_nombre}</text>')
-                svg.append(f'<text x="{cx}" y="{H+20}" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">{total_kg:.0f} / {capacidad} kg</text>')
-                pct_txt = f"{pct*100:.0f}%"
-                svg.append(f'<text x="{cx}" y="{H+36}" text-anchor="middle" font-size="11" fill="#666">{pct_txt} de capacidad</text>')
-
-                svg.append('</svg>')
-                return "".join(svg)
-
-            st.markdown("##### 🛢️ Estado de los tanques")
-            col_t1, col_t2 = st.columns(2)
-            for col_tank, tid, tnom in [(col_t1, "T1", "Tanque 1"), (col_t2, "T2", "Tanque 2")]:
-                with col_tank:
-                    if "tanque_id" in disponibles.columns:
-                        lotes_t = disponibles[disponibles["tanque_id"].astype(str) == tid]
-                    else:
-                        lotes_t = pd.DataFrame()
-
-                    lotes_data = []
-                    for _, row in lotes_t.iterrows():
-                        tipo = str(row.get("tipo_producto", ""))
-                        color = COLORES_PRODUCTO.get(tipo, _color_lote(row["lote_semielaborado_id"]))
-                        lotes_data.append({
-                            "id": row["lote_semielaborado_id"],
-                            "kg": float(row["kg_saldo"]),
-                            "tipo": tipo,
-                            "color": color,
-                        })
-
-                    svg_str = _svg_cilindro(tnom, lotes_data, CAPACIDAD)
-                    st.markdown(svg_str, unsafe_allow_html=True)
-
-                    if lotes_data:
-                        for l in lotes_data:
-                            st.caption(f"🔹 {l['id']} — {l['tipo']} — {l['kg']:.1f} kg")
-                    else:
-                        st.caption("Tanque vacío")
-
-            st.write("")
-            st.markdown("##### 📋 Detalle de lotes en tanque")
-            columnas_disp = ["lote_semielaborado_id", "fecha", "tipo_producto", "tanque_id", "kg_saldo"]
-            if ve_costos(rol):
-                columnas_disp.append("costo_unitario_kg")
-            cols_show = [c for c in columnas_disp if c in disponibles.columns]
-            tabla_disp = disponibles[cols_show].copy()
-            tabla_disp["kg_saldo"] = tabla_disp["kg_saldo"].round(1)
-            if "tanque_id" in tabla_disp.columns:
-                tabla_disp["tanque_id"] = tabla_disp["tanque_id"].fillna("Sin asignar")
-            st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
+                st.write("")
+                st.markdown("##### 📋 Detalle de lotes en tanque")
+                columnas_disp = ["lote_semielaborado_id", "fecha", "tipo_producto", "tanque_id", "kg_saldo"]
+                if ve_costos(rol):
+                    columnas_disp.append("costo_unitario_kg")
+                cols_show = [c for c in columnas_disp if c in disponibles.columns]
+                tabla_disp = disponibles[cols_show].copy()
+                tabla_disp["kg_saldo"] = tabla_disp["kg_saldo"].round(1)
+                if "tanque_id" in tabla_disp.columns:
+                    tabla_disp["tanque_id"] = tabla_disp["tanque_id"].fillna("Sin asignar")
+                st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
