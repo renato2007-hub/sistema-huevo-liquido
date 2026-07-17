@@ -600,7 +600,6 @@ def render(db, username, rol):
                 st.rerun()
 
     with tab_inventario:
-        import plotly.graph_objects as go
         df_inv = db.get_df("produccion_semielaborados")
         if df_inv.empty:
             st.info("Todavía no hay lotes de semielaborado.")
@@ -619,55 +618,28 @@ def render(db, username, rol):
 
                 st.write("")
                 st.markdown("##### 🛢️ Nivel de los tanques")
+                col_t1, col_t2 = st.columns(2)
                 CAPACIDAD = 1000
                 COLORES = {"Huevo entero":"#C68B54","Clara":"#90EE90","Yema":"#FFA500"}
-                col_t1, col_t2 = st.columns(2)
                 for col_tank, tid, tnom in [(col_t1,"T1","Tanque 1"),(col_t2,"T2","Tanque 2")]:
                     with col_tank:
+                        st.markdown(f"**{tnom}**")
                         if "tanque_id" in disp.columns:
                             lt = disp[disp["tanque_id"].astype(str)==tid].copy()
                         else:
                             lt = pd.DataFrame()
                         total = float(lt["kg_saldo"].sum()) if not lt.empty else 0.0
                         pct = min(total/CAPACIDAD*100,100)
-                        fig = go.Figure()
                         if lt.empty:
-                            fig.add_trace(go.Bar(x=[tnom],y=[CAPACIDAD],
-                                marker_color="#e0e0e0",text=["Vacío"],
-                                textposition="inside",name="Vacío"))
+                            st.info("Vacío")
                         else:
+                            chart_data = lt.set_index("lote_semielaborado_id")[["kg_saldo"]]
+                            st.bar_chart(chart_data, height=300)
                             for _,row in lt.iterrows():
                                 tipo = str(row.get("tipo_producto",""))
                                 kg = float(row["kg_saldo"])
-                                lid = str(row["lote_semielaborado_id"])
-                                col = COLORES.get(tipo)
-                                if not col:
-                                    col = COLORES["Huevo entero"] if lid.startswith("SR") else (COLORES["Yema"] if lid.startswith("TK") else (COLORES["Clara"] if lid.startswith("R") else "#e0e0e0"))
-                                fig.add_trace(go.Bar(x=[tnom],y=[kg],
-                                    marker_color=col,
-                                    text=[f"{lid}<br>{kg:.0f}kg"],
-                                    textposition="inside",name=lid,
-                                    hovertemplate=f"{lid}<br>{tipo}<br>{kg:.1f}kg<extra></extra>"))
-                            libre = max(CAPACIDAD-total,0)
-                            if libre>0:
-                                fig.add_trace(go.Bar(x=[tnom],y=[libre],
-                                    marker_color="#f5f5f5",
-                                    text=[f"{libre:.0f}kg libre"],
-                                    textposition="inside",
-                                    textfont={"color":"#aaa"},
-                                    name="Libre",hoverinfo="skip"))
-                        fig.update_layout(
-                            barmode="stack",height=400,
-                            title={"text":f"{tnom}<br><b>{total:.0f}/{CAPACIDAD}kg ({pct:.0f}%)</b>","x":0.5,"font":{"size":13}},
-                            showlegend=True,
-                            legend={"orientation":"h","y":-0.15},
-                            margin={"l":5,"r":5,"t":70,"b":5},
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="rgba(0,0,0,0)",
-                            yaxis={"range":[0,CAPACIDAD],"showgrid":True,"gridcolor":"#eee","showticklabels":True,"title":"kg"},
-                            xaxis={"showticklabels":False},
-                        )
-                        st.plotly_chart(fig,use_container_width=True)
+                                st.caption(f"🔹 {row['lote_semielaborado_id']} — {tipo} — {kg:.1f} kg")
+                        st.caption(f"Total: {total:.0f}/{CAPACIDAD} kg ({pct:.0f}%)")
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
