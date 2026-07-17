@@ -380,30 +380,43 @@ def render(db, username, rol):
             st.write("")
             st.markdown("##### 📊 Unidades disponibles por presentación")
             import plotly.graph_objects as go
-            if not presentaciones.empty and "presentacion_nombre" in disponible_df.columns:
-                graf_df = disponible_df.groupby("presentacion_nombre").agg(
-                    unidades=("unidades_saldo", "sum")
-                ).reset_index().sort_values("unidades", ascending=True)
-                graf_df = graf_df[graf_df["unidades"] > 0]
-                if not graf_df.empty:
-                    COLORES_PRES = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c"]
-                    fig = go.Figure(go.Bar(
-                        x=graf_df["unidades"].tolist(),
-                        y=graf_df["presentacion_nombre"].tolist(),
-                        orientation="h",
-                        marker_color=[COLORES_PRES[i % len(COLORES_PRES)] for i in range(len(graf_df))],
-                        text=graf_df["unidades"].apply(lambda v: f"{int(v)} unid.").tolist(),
-                        textposition="outside",
-                        hovertemplate="%{y}: %{x} unidades<extra></extra>",
-                    ))
-                    fig.update_layout(
-                        height=max(200, len(graf_df) * 50),
-                        margin=dict(l=10, r=80, t=20, b=20),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+            # Asegurar que disponible_df tenga nombre de presentación
+            graf_src = disponible_df.copy()
+            if "presentacion_nombre" not in graf_src.columns:
+                if not presentaciones.empty and "presentacion_id" in graf_src.columns:
+                    graf_src = graf_src.merge(
+                        presentaciones[["presentacion_id","nombre"]].rename(columns={"nombre":"presentacion_nombre"}),
+                        on="presentacion_id", how="left"
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    graf_src["presentacion_nombre"] = graf_src["presentacion_nombre"].fillna(graf_src["presentacion_id"])
+                else:
+                    graf_src["presentacion_nombre"] = graf_src.get("presentacion_id", "Sin nombre")
+
+            graf_df = graf_src.groupby("presentacion_nombre").agg(
+                unidades=("unidades_saldo", "sum")
+            ).reset_index().sort_values("unidades", ascending=True)
+            graf_df = graf_df[graf_df["unidades"] > 0]
+            if graf_df.empty:
+                st.info("Sin unidades disponibles para graficar.")
+            else:
+                COLORES_PRES = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c"]
+                fig = go.Figure(go.Bar(
+                    x=graf_df["unidades"].tolist(),
+                    y=graf_df["presentacion_nombre"].tolist(),
+                    orientation="h",
+                    marker_color=[COLORES_PRES[i % len(COLORES_PRES)] for i in range(len(graf_df))],
+                    text=graf_df["unidades"].apply(lambda v: f"{int(v)} unid.").tolist(),
+                    textposition="outside",
+                    hovertemplate="%{y}: %{x} unidades<extra></extra>",
+                ))
+                fig.update_layout(
+                    height=max(200, len(graf_df) * 55),
+                    margin=dict(l=10, r=80, t=20, b=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
     with tab_granel:
         st.caption(
