@@ -713,7 +713,8 @@ def render(db, username, rol):
                         })
 
                     svg_str = _svg_cilindro(tnom, lotes_data, CAPACIDAD)
-                    st.markdown(svg_str, unsafe_allow_html=True)
+                    import streamlit.components.v1 as components
+                    components.html(svg_str, height=390)
 
                     if lotes_data:
                         for l in lotes_data:
