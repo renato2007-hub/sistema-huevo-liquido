@@ -188,7 +188,8 @@ def render(db, username, rol):
                     marker_color=COLORES.get(tipo, "#2e7d32"),
                     text=df_tipo["saldo"].apply(lambda v: f"{int(v)}").tolist(),
                     textposition="inside",
-                    insidetextanchor="middle",
+                    insidetextanchor="start",
+                    textangle=0,
                     textfont=dict(color="white", size=11, family="Arial Black"),
                     hovertemplate="%{y}: %{x} unidades<extra></extra>",
                 ))
