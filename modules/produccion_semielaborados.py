@@ -842,3 +842,4 @@ def render(db, username, rol):
                             f"volver a registrarla correctamente en 'Nueva producción'."
                         )
                         st.rerun()
+Fri Jul 17 06:18:31 -05 2026
