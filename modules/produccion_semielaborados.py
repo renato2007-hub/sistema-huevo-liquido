@@ -13,9 +13,9 @@ from utils.permisos import ve_costos, es_admin
 
 def render(db, username, rol):
     st.title("Producción de semielaborados")
-    tab_nueva, tab_inventario, tab_historial, tab_perdida, tab_rendimiento, tab_corregir, tab_tanques = st.tabs(
+    tab_nueva, tab_inventario, tab_historial, tab_perdida, tab_rendimiento, tab_corregir = st.tabs(
         ["Nueva producción", "Inventario de tanques", "📋 Historial",
-         "⚠️ Registrar pérdida", "Teórico vs. real", "✏️ Corregir / eliminar", "🛢️ Tanques"]
+         "⚠️ Registrar pérdida", "Teórico vs. real", "✏️ Corregir / eliminar"]
     )
 
     categorias = db.get_df("categorias_huevo")
@@ -600,6 +600,7 @@ def render(db, username, rol):
                 st.rerun()
 
     with tab_inventario:
+        import plotly.graph_objects as go
         df_inv = db.get_df("produccion_semielaborados")
         if df_inv.empty:
             st.info("Todavía no hay lotes de semielaborado.")
@@ -609,6 +610,7 @@ def render(db, username, rol):
             if disp.empty:
                 st.info("No hay kg disponibles en los tanques actualmente.")
             else:
+                # Tabla
                 cols_t = [c for c in ["lote_semielaborado_id","fecha","tipo_producto","tanque_id","kg_saldo"] if c in disp.columns]
                 t = disp[cols_t].copy()
                 t["kg_saldo"] = t["kg_saldo"].round(1)
@@ -618,28 +620,57 @@ def render(db, username, rol):
 
                 st.write("")
                 st.markdown("##### 🛢️ Nivel de los tanques")
-                col_t1, col_t2 = st.columns(2)
                 CAPACIDAD = 1000
-                COLORES = {"Huevo entero":"#C68B54","Clara":"#90EE90","Yema":"#FFA500"}
-                for col_tank, tid, tnom in [(col_t1,"T1","Tanque 1"),(col_t2,"T2","Tanque 2")]:
-                    with col_tank:
-                        st.markdown(f"**{tnom}**")
+                COLORES = {"Huevo entero": "#C68B54", "Clara": "#90EE90", "Yema": "#FFA500"}
+                c1, c2 = st.columns(2)
+                for col, tid, tnom in [(c1, "T1", "Tanque 1"), (c2, "T2", "Tanque 2")]:
+                    with col:
                         if "tanque_id" in disp.columns:
-                            lt = disp[disp["tanque_id"].astype(str)==tid].copy()
+                            lt = disp[disp["tanque_id"].astype(str) == tid].copy()
                         else:
                             lt = pd.DataFrame()
                         total = float(lt["kg_saldo"].sum()) if not lt.empty else 0.0
-                        pct = min(total/CAPACIDAD*100,100)
+                        pct = min(total / CAPACIDAD * 100, 100)
+                        fig = go.Figure()
                         if lt.empty:
-                            st.info("Vacío")
+                            fig.add_trace(go.Bar(x=[tnom], y=[CAPACIDAD],
+                                marker_color="#e0e0e0", text=["Vacío"],
+                                textposition="inside", name="Vacío"))
                         else:
-                            chart_data = lt.set_index("lote_semielaborado_id")[["kg_saldo"]]
-                            st.bar_chart(chart_data, height=300)
-                            for _,row in lt.iterrows():
-                                tipo = str(row.get("tipo_producto",""))
+                            for _, row in lt.iterrows():
+                                tipo = str(row.get("tipo_producto", ""))
                                 kg = float(row["kg_saldo"])
-                                st.caption(f"🔹 {row['lote_semielaborado_id']} — {tipo} — {kg:.1f} kg")
-                        st.caption(f"Total: {total:.0f}/{CAPACIDAD} kg ({pct:.0f}%)")
+                                lid = str(row["lote_semielaborado_id"])
+                                cc = COLORES.get(tipo)
+                                if not cc:
+                                    cc = "#C68B54" if lid.startswith("SR") else ("#FFA500" if lid.startswith("TK") else "#90EE90")
+                                fig.add_trace(go.Bar(
+                                    x=[tnom], y=[kg],
+                                    marker_color=cc,
+                                    text=[f"{lid}: {kg:.0f}kg"],
+                                    textposition="inside", name=lid
+                                ))
+                            libre = max(CAPACIDAD - total, 0)
+                            if libre > 0:
+                                fig.add_trace(go.Bar(
+                                    x=[tnom], y=[libre],
+                                    marker_color="#f5f5f5",
+                                    text=[f"{libre:.0f}kg libre"],
+                                    textposition="inside",
+                                    textfont={"color": "#aaa"},
+                                    name="Libre", hoverinfo="skip"
+                                ))
+                        fig.update_layout(
+                            barmode="stack", height=400,
+                            title={"text": f"{tnom}: {total:.0f}/{CAPACIDAD}kg ({pct:.0f}%)", "x": 0.5},
+                            showlegend=False,
+                            margin={"l": 5, "r": 5, "t": 60, "b": 5},
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            yaxis={"range": [0, CAPACIDAD], "showgrid": True, "gridcolor": "#eee", "title": "kg"},
+                            xaxis={"showticklabels": False},
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
@@ -897,66 +928,3 @@ def render(db, username, rol):
                         )
                         st.rerun()
 
-    with tab_tanques:
-        import plotly.graph_objects as go
-        df_t = db.get_df("produccion_semielaborados")
-        if df_t.empty:
-            st.info("No hay lotes registrados.")
-        else:
-            df_t["kg_saldo"] = pd.to_numeric(df_t["kg_saldo"], errors="coerce").fillna(0)
-            disp_t = df_t[df_t["kg_saldo"] >= 0.1].copy()
-            CAPACIDAD = 1000
-            COLORES = {"Huevo entero": "#C68B54", "Clara": "#90EE90", "Yema": "#FFA500"}
-            c1, c2 = st.columns(2)
-            for col, tid, tnom in [(c1, "T1", "Tanque 1"), (c2, "T2", "Tanque 2")]:
-                with col:
-                    if "tanque_id" in disp_t.columns:
-                        lt = disp_t[disp_t["tanque_id"].astype(str) == tid].copy()
-                    else:
-                        lt = pd.DataFrame()
-                    total = float(lt["kg_saldo"].sum()) if not lt.empty else 0.0
-                    pct = min(total / CAPACIDAD * 100, 100)
-                    fig = go.Figure()
-                    if lt.empty:
-                        fig.add_trace(go.Bar(
-                            x=[tnom], y=[CAPACIDAD],
-                            marker_color="#e0e0e0",
-                            text=["Vacío"], textposition="inside", name="Vacío"
-                        ))
-                    else:
-                        for _, row in lt.iterrows():
-                            tipo = str(row.get("tipo_producto", ""))
-                            kg = float(row["kg_saldo"])
-                            lid = str(row["lote_semielaborado_id"])
-                            cc = COLORES.get(tipo)
-                            if not cc:
-                                cc = "#C68B54" if lid.startswith("SR") else ("#FFA500" if lid.startswith("TK") else "#90EE90")
-                            fig.add_trace(go.Bar(
-                                x=[tnom], y=[kg],
-                                marker_color=cc,
-                                text=[f"{lid}: {kg:.0f}kg"],
-                                textposition="inside", name=lid
-                            ))
-                        libre = max(CAPACIDAD - total, 0)
-                        if libre > 0:
-                            fig.add_trace(go.Bar(
-                                x=[tnom], y=[libre],
-                                marker_color="#f5f5f5",
-                                text=[f"{libre:.0f}kg libre"],
-                                textposition="inside",
-                                textfont={"color": "#aaa"},
-                                name="Libre", hoverinfo="skip"
-                            ))
-                    fig.update_layout(
-                        barmode="stack", height=400,
-                        title={"text": f"{tnom}: {total:.0f}/{CAPACIDAD}kg ({pct:.0f}%)", "x": 0.5},
-                        showlegend=False,
-                        margin={"l": 5, "r": 5, "t": 60, "b": 5},
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        yaxis={"range": [0, CAPACIDAD], "showgrid": True, "gridcolor": "#eee", "title": "kg"},
-                        xaxis={"showticklabels": False},
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-# Fri Jul 17 16:45:18 -05 2026
