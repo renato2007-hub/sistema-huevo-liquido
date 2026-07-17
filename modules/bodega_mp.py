@@ -260,7 +260,7 @@ def render(db, username, rol):
             with st.form("form_corr_mp"):
                 c1, c2, c3 = st.columns(3)
                 nuevas_cub   = c1.number_input("Cubetas recibidas", min_value=0.0, step=1.0,
-                                                value=float(fila_r["cubetas_recibidas"]))
+                                                value=float(fila_r["cubetas"]))
                 nuevo_saldo  = c2.number_input("Saldo actual (cubetas)", min_value=0.0, step=1.0,
                                                 value=float(fila_r["cubetas_saldo"]))
                 nuevo_costo  = c3.number_input("Costo por cubeta ($)", min_value=0.0, step=0.01,
@@ -272,7 +272,7 @@ def render(db, username, rol):
                         st.error("Escribe el motivo de la corrección.")
                     else:
                         db.update_row("recepciones_mp", "recepcion_id", rec_sel, {
-                            "cubetas_recibidas": nuevas_cub,
+                            "cubetas": nuevas_cub,
                             "cubetas_saldo": nuevo_saldo,
                             "costo_cubeta": nuevo_costo,
                         })
