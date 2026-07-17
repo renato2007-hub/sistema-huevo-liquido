@@ -608,6 +608,7 @@ def render(db, username, rol):
             disponibles = df[df["kg_saldo"] >= 0.1].copy()
 
             # ── Visualización de cilindros ──────────────────────────────────
+            import plotly.graph_objects as go
             CAPACIDAD = 1000  # kg por tanque
             COLORES_PRODUCTO = {
                 "Huevo entero": "#C68B54",  # café claro
