@@ -600,12 +600,20 @@ def render(db, username, rol):
                 st.rerun()
 
     with tab_inventario:
-        df = db.get_df("produccion_semielaborados")
-        if df.empty:
-            st.info("Todavía no hay lotes de semielaborado.")
-        else:
-            df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
-            disponibles = df[df["kg_saldo"] >= 0.1].copy()
+        try:
+            df = db.get_df("produccion_semielaborados")
+            st.write(f"Total filas en Sheet: {len(df)}")
+            if df.empty:
+                st.info("No hay lotes.")
+            else:
+                df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
+                disponibles = df[df["kg_saldo"] >= 0.1].copy()
+                st.write(f"Lotes con saldo >= 0.1 kg: {len(disponibles)}")
+                if not disponibles.empty:
+                    cols = [c for c in ["lote_semielaborado_id","fecha","tipo_producto","tanque_id","kg_saldo"] if c in disponibles.columns]
+                    st.dataframe(disponibles[cols], use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.error(f"Error: {e}")
 
             if disponibles.empty:
                 st.info("No hay kg disponibles en los tanques actualmente.")
