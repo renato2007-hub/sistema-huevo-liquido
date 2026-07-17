@@ -128,7 +128,7 @@ SHEET_SCHEMAS = {
         "cascara_teorica_kg", "cascara_real_kg",
         "agua_litros",
         "costo_huevo", "costo_insumos", "costo_mano_obra", "costo_total",
-        "costo_unitario_kg", "kg_saldo", "balance_masa_pct", "turno", "usuario", "observaciones",
+        "costo_unitario_kg", "kg_saldo", "balance_masa_pct", "turno", "tanque_id", "usuario", "observaciones",
     ],
 
     # ---------- Pasteurizacion y envasado ----------
