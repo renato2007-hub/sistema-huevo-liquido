@@ -372,9 +372,38 @@ def render(db, username, rol):
             if por_tipo_kg.empty:
                 st.info("No hay datos suficientes para calcular el total en kg.")
             else:
-                cols_kg = st.columns(len(por_tipo_kg))
+                cols_kg = st.columns(min(len(por_tipo_kg), 4))
                 for col, (nombre, kg) in zip(cols_kg, por_tipo_kg.items()):
                     col.metric(nombre, f"{kg:,.1f} kg")
+
+            # Gráfica de barras por presentación
+            st.write("")
+            st.markdown("##### 📊 Unidades disponibles por presentación")
+            import plotly.graph_objects as go
+            if not presentaciones.empty and "presentacion_nombre" in disponible_df.columns:
+                graf_df = disponible_df.groupby("presentacion_nombre").agg(
+                    unidades=("unidades_saldo", "sum")
+                ).reset_index().sort_values("unidades", ascending=True)
+                graf_df = graf_df[graf_df["unidades"] > 0]
+                if not graf_df.empty:
+                    COLORES_PRES = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c"]
+                    fig = go.Figure(go.Bar(
+                        x=graf_df["unidades"].tolist(),
+                        y=graf_df["presentacion_nombre"].tolist(),
+                        orientation="h",
+                        marker_color=[COLORES_PRES[i % len(COLORES_PRES)] for i in range(len(graf_df))],
+                        text=graf_df["unidades"].apply(lambda v: f"{int(v)} unid.").tolist(),
+                        textposition="outside",
+                        hovertemplate="%{y}: %{x} unidades<extra></extra>",
+                    ))
+                    fig.update_layout(
+                        height=max(200, len(graf_df) * 50),
+                        margin=dict(l=10, r=80, t=20, b=20),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
     with tab_granel:
         st.caption(

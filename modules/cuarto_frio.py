@@ -335,10 +335,12 @@ def render(db, username, rol):
             ]
             if ve_costos(rol):
                 columnas_inv[5:5] = ["costo_unitario", "valor"]
-            st.dataframe(inventario[columnas_inv], use_container_width=True)
+            st.dataframe(inventario[columnas_inv], use_container_width=True, hide_index=True)
 
-            # ---- desglose en kg por tipo de producto y estado de pasteurizacion ----
-            st.markdown("##### Kg disponibles en cuarto frío")
+            # ── Visualización estilo Power BI ──────────────────────────────
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+
             inv_kg = inventario.copy()
             if not presentaciones.empty:
                 inv_kg = inv_kg.merge(
@@ -356,27 +358,79 @@ def render(db, username, rol):
                 )
             else:
                 inv_kg["tipo_producto"] = ""
-            inv_kg["tipo_producto"] = inv_kg["tipo_producto"].fillna("")
-            inv_kg["pasteurizado"] = inv_kg["pasteurizado"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+            inv_kg["tipo_producto"] = inv_kg["tipo_producto"].fillna("Sin clasificar")
+            inv_kg["pasteurizado_bool"] = inv_kg.get("pasteurizado", pd.Series(dtype=str)).astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
             inv_kg["kg"] = inv_kg["saldo"] * inv_kg["kg_nominal"]
 
-            resumen_kg = inv_kg.groupby(["tipo_producto", "pasteurizado"])["kg"].sum().reset_index()
-            resumen_kg = resumen_kg[resumen_kg["kg"] > 0]
+            def _etiqueta(tipo, past):
+                t = {"Huevo entero":"Huevo","Clara":"Clara","Yema":"Yema"}.get(tipo, tipo or "Producto")
+                s = "a" if t in ("Clara","Yema") else "o"
+                return f"{t} pasteurizad{s}" if past else f"{t} sin pasteurizar"
 
-            def _etiqueta(tipo, pasteurizado):
-                tipo_legible = {"Huevo entero": "Huevo", "Clara": "Clara", "Yema": "Yema"}.get(tipo, tipo or "Producto")
-                sufijo = "a" if tipo_legible in ("Clara", "Yema") else "o"
-                if pasteurizado:
-                    return f"{tipo_legible} pasteurizad{sufijo}"
-                return f"{tipo_legible} sin pasteurizar"
+            inv_kg["etiqueta"] = inv_kg.apply(lambda r: _etiqueta(r["tipo_producto"], r["pasteurizado_bool"]), axis=1)
 
-            if resumen_kg.empty:
-                st.info("No hay datos suficientes para calcular el desglose en kg.")
-            else:
-                st.markdown("##### Kg disponibles en cuarto frío")
-                cols = st.columns(len(resumen_kg))
-                for col, (_, fila) in zip(cols, resumen_kg.iterrows()):
-                    col.metric(_etiqueta(fila["tipo_producto"], fila["pasteurizado"]), f"{fila['kg']:,.1f} kg")
+            # ── KPIs ──
+            st.write("")
+            total_unidades = int(inventario["saldo"].sum())
+            total_kg = inv_kg["kg"].sum()
+            n_presentaciones = inventario["presentacion_nombre"].nunique()
+            n_lotes = inventario["lote_producto_id"].nunique()
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("📦 Total unidades", f"{total_unidades:,}")
+            k2.metric("⚖️ Total kg", f"{total_kg:,.1f} kg")
+            k3.metric("🏷️ Presentaciones", f"{n_presentaciones}")
+            k4.metric("🔢 Lotes en stock", f"{n_lotes}")
+
+            st.write("")
+            col_bar, col_dona = st.columns([3, 2])
+
+            # Barras por presentación
+            with col_bar:
+                st.markdown("**Unidades por presentación**")
+                pres_g = inventario.groupby("presentacion_nombre")["saldo"].sum().reset_index()
+                pres_g = pres_g[pres_g["saldo"] > 0].sort_values("saldo", ascending=True)
+                COLS = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c","#c62828"]
+                fig_bar = go.Figure(go.Bar(
+                    x=pres_g["saldo"].tolist(),
+                    y=pres_g["presentacion_nombre"].tolist(),
+                    orientation="h",
+                    marker_color=[COLS[i % len(COLS)] for i in range(len(pres_g))],
+                    text=pres_g["saldo"].apply(lambda v: f"{int(v)}").tolist(),
+                    textposition="outside",
+                    hovertemplate="%{y}: %{x} unidades<extra></extra>",
+                ))
+                fig_bar.update_layout(
+                    height=max(220, len(pres_g) * 52),
+                    margin=dict(l=10, r=60, t=10, b=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Dona por tipo de producto en kg
+            with col_dona:
+                st.markdown("**Kg por tipo de producto**")
+                prod_g = inv_kg.groupby("etiqueta")["kg"].sum().reset_index()
+                prod_g = prod_g[prod_g["kg"] > 0]
+                if not prod_g.empty:
+                    fig_dona = go.Figure(go.Pie(
+                        labels=prod_g["etiqueta"].tolist(),
+                        values=prod_g["kg"].tolist(),
+                        hole=0.5,
+                        marker_colors=COLS[:len(prod_g)],
+                        textinfo="label+percent",
+                        hovertemplate="%{label}: %{value:,.1f} kg<extra></extra>",
+                    ))
+                    fig_dona.update_layout(
+                        height=280,
+                        showlegend=False,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_dona, use_container_width=True)
+                else:
+                    st.info("Sin datos de kg.")
 
             st.write("")
             st.markdown("##### Unidades por presentación y producto")
