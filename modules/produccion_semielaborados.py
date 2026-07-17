@@ -605,7 +605,7 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de semielaborado.")
         else:
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
-            disponibles = df[df["kg_saldo"] > 0].copy()
+            disponibles = df[df["kg_saldo"] >= 0.1].copy()
 
             # ── Visualización de cilindros ──────────────────────────────────
             CAPACIDAD = 1000  # kg por tanque
@@ -716,7 +716,11 @@ def render(db, username, rol):
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario_kg")
             cols_show = [c for c in columnas_disp if c in disponibles.columns]
-            st.dataframe(disponibles[cols_show], use_container_width=True)
+            tabla_disp = disponibles[cols_show].copy()
+            tabla_disp["kg_saldo"] = tabla_disp["kg_saldo"].round(1)
+            if "tanque_id" in tabla_disp.columns:
+                tabla_disp["tanque_id"] = tabla_disp["tanque_id"].fillna("Sin asignar")
+            st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
