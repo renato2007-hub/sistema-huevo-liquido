@@ -607,6 +607,11 @@ def render(db, username, rol):
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
             disponibles = df[df["kg_saldo"] >= 0.1].copy()
 
+            if disponibles.empty:
+                st.info("No hay kg disponibles en los tanques.")
+            else:
+                st.caption(f"Lotes con saldo: {len(disponibles)} — total kg: {disponibles['kg_saldo'].sum():.1f}")
+
             # ── Visualización de cilindros ──────────────────────────────────
             CAPACIDAD = 1000  # kg por tanque
             COLORES_PRODUCTO = {
