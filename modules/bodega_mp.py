@@ -250,7 +250,7 @@ def render(db, username, rol):
                 recepciones["recepcion_id"],
                 format_func=lambda x: (
                     f"{x} — {recepciones.set_index('recepcion_id').loc[x, 'fecha']} — "
-                    f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas_recibidas']:.0f} cub. recibidas / "
+                    f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas']:.0f} cub. recibidas / "
                     f"{recepciones.set_index('recepcion_id').loc[x, 'cubetas_saldo']:.0f} cub. saldo"
                 ),
                 key="mp_corr_sel",
