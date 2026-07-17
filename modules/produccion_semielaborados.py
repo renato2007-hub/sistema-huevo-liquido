@@ -96,10 +96,14 @@ def render(db, username, rol):
                 "(esto permite saber después quién estuvo a cargo de cada lote)."
             )
             return
-        turno_id = st.selectbox(
+        c_turno, c_tanque = st.columns(2)
+        turno_id = c_turno.selectbox(
             "Turno", turnos["turno_id"],
             format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
         )
+        tanque_id = c_tanque.selectbox("Tanque", ["T1", "T2"],
+                                        format_func=lambda x: f"Tanque {'1' if x=='T1' else '2'}",
+                                        key="prod_tanque")
         orden_produccion = st.text_input("Orden de producción", "")
         if orden_produccion:
             producciones_existentes = db.get_df("produccion_semielaborados")
@@ -115,6 +119,15 @@ def render(db, username, rol):
         producciones_existentes = db.get_df("produccion_semielaborados")
         ids_existentes = set(producciones_existentes["lote_semielaborado_id"].astype(str)) if not producciones_existentes.empty else set()
 
+        # Lotes ya registrados en esta fecha+turno (para advertir duplicado en mismo turno)
+        ids_este_turno = set()
+        if not producciones_existentes.empty and "turno" in producciones_existentes.columns:
+            mismo_turno = producciones_existentes[
+                (producciones_existentes["fecha"].astype(str) == fecha.isoformat()) &
+                (producciones_existentes["turno"].astype(str) == str(turno_id))
+            ]
+            ids_este_turno = set(mismo_turno["lote_semielaborado_id"].astype(str))
+
         st.caption("Convención de planta: SR = huevo entero, R = clara, TK = yema, + fecha DDMMAA. Puedes editar el código libremente.")
         if tipo_producto == "Clara y yema":
             col_codigo1, col_codigo2 = st.columns(2)
@@ -127,14 +140,20 @@ def render(db, username, rol):
             for codigo in (codigo_clara, codigo_yema):
                 if codigo in ids_existentes:
                     st.error(f"⚠️ El código '{codigo}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
+                elif codigo in ids_este_turno:
+                    st.warning(f"⚠️ El lote '{codigo}' ya fue registrado en este turno — si es el mismo turno, revisa si es un duplicado.")
         elif tipo_producto == "Clara":
             col_c1, col_c2 = st.columns(2)
             codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha))
             codigo_coproducto = col_c2.text_input("Código de lote — Yema (co-producto)", value=sugerir_codigo_lote("Yema", fecha))
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
+            elif codigo_lote in ids_este_turno:
+                st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno.")
             if codigo_coproducto in ids_existentes:
                 st.error(f"⚠️ El código co-producto '{codigo_coproducto}' ya existe.")
+            elif codigo_coproducto in ids_este_turno:
+                st.warning(f"⚠️ El co-producto '{codigo_coproducto}' ya fue registrado en este turno.")
             st.caption("La yema que salga también quedará como lote propio en el inventario. Si no hubo yema, deja el campo de yema real en 0 y no se creará ese lote.")
         elif tipo_producto == "Yema":
             col_c1, col_c2 = st.columns(2)
@@ -142,8 +161,12 @@ def render(db, username, rol):
             codigo_coproducto = col_c2.text_input("Código de lote — Clara (co-producto)", value=sugerir_codigo_lote("Clara", fecha))
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
+            elif codigo_lote in ids_este_turno:
+                st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno.")
             if codigo_coproducto in ids_existentes:
                 st.error(f"⚠️ El código co-producto '{codigo_coproducto}' ya existe.")
+            elif codigo_coproducto in ids_este_turno:
+                st.warning(f"⚠️ El co-producto '{codigo_coproducto}' ya fue registrado en este turno.")
             st.caption("La clara que salga también quedará como lote propio en el inventario. Si no hubo clara, deja el campo en 0 y no se creará ese lote.")
         else:
             codigo_lote = st.text_input(
@@ -152,6 +175,8 @@ def render(db, username, rol):
             codigo_coproducto = ""
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
+            elif codigo_lote in ids_este_turno:
+                st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno — si quieres continuar en otro turno, cambia el turno arriba.")
 
         recepciones_con_saldo = recepciones[
             pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0) > 0
@@ -189,18 +214,41 @@ def render(db, username, rol):
         mapa_recepcion_a_costo = dict(zip(recepciones_con_saldo["recepcion_id"], pd.to_numeric(recepciones_con_saldo["costo_cubeta"], errors="coerce").fillna(0)))
         mapa_recepcion_a_categoria = dict(zip(recepciones_con_saldo["recepcion_id"], recepciones_con_saldo["categoria_id"]))
 
-        # Pre-poblar con sugerencia FEFO (por vencimiento) pero el usuario puede cambiar todo
-        recepciones_sorted = recepciones_con_saldo.sort_values("fecha_vencimiento")
-        filas_sugeridas = []
-        restante = cubetas_necesarias
-        for _, lote in recepciones_sorted.iterrows():
-            if restante <= 0:
-                break
-            saldo = float(lote["cubetas_saldo_num"])
-            tomar = min(saldo, restante)
-            opcion = f"{lote['recepcion_id']} — {mapa_cat_nombre.get(lote['categoria_id'], lote['categoria_id'])} — saldo: {int(saldo)} cub."
-            filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": tomar})
-            restante -= tomar
+        # Pre-poblar: si hay plan de MP para esta fecha, usarlo; sino FEFO normal
+        plan_mp_df = db.get_df("plan_mp_asignado")
+        plan_fecha = pd.DataFrame()
+        if not plan_mp_df.empty:
+            plan_fecha = plan_mp_df[plan_mp_df["fecha"].astype(str) == fecha.isoformat()].copy()
+            if not plan_fecha.empty:
+                plan_fecha["cubetas_asignadas"] = pd.to_numeric(plan_fecha["cubetas_asignadas"], errors="coerce").fillna(0)
+                plan_fecha = plan_fecha[plan_fecha["cubetas_asignadas"] > 0]
+
+        if not plan_fecha.empty:
+            st.info(f"📅 Plan de producción del día: cargando lotes asignados por el jefe de planta.")
+            filas_sugeridas = []
+            for _, prow in plan_fecha.iterrows():
+                rec_id = prow["recepcion_id"]
+                cub    = float(prow["cubetas_asignadas"])
+                rec_match = recepciones_con_saldo[recepciones_con_saldo["recepcion_id"] == rec_id]
+                if rec_match.empty:
+                    continue
+                saldo = float(rec_match.iloc[0]["cubetas_saldo_num"])
+                cat   = rec_match.iloc[0]["categoria_id"]
+                opcion = f"{rec_id} — {mapa_cat_nombre.get(cat, cat)} — saldo: {int(saldo)} cub."
+                filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": min(cub, saldo)})
+        else:
+            # FEFO normal por vencimiento
+            recepciones_sorted = recepciones_con_saldo.sort_values("fecha_vencimiento")
+            filas_sugeridas = []
+            restante = cubetas_necesarias
+            for _, lote in recepciones_sorted.iterrows():
+                if restante <= 0:
+                    break
+                saldo = float(lote["cubetas_saldo_num"])
+                tomar = min(saldo, restante)
+                opcion = f"{lote['recepcion_id']} — {mapa_cat_nombre.get(lote['categoria_id'], lote['categoria_id'])} — saldo: {int(saldo)} cub."
+                filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": tomar})
+                restante -= tomar
 
         st.markdown("**Lotes a usar — elige el lote y la cantidad de cubetas de cada uno**")
         st.caption("Puedes mezclar lotes de distintas categorías. Agrega o quita filas según necesites.")
@@ -232,12 +280,12 @@ def render(db, username, rol):
         df_lotes_editado = pd.DataFrame(filas_validas) if filas_validas else pd.DataFrame(columns=["recepcion_id", "cantidad_a_tomar", "costo_cubeta"])
 
         # categoria_id: usar la del primer lote seleccionado (para rendimientos teóricos)
+        categoria_id = ""
         if filas_validas:
             categoria_id = mapa_recepcion_a_categoria.get(filas_validas[0]["recepcion_id"], "")
-        elif not recepciones_sorted.empty:
-            categoria_id = recepciones_sorted.iloc[0]["categoria_id"]
-        else:
-            categoria_id = ""
+        if not categoria_id and not recepciones_con_saldo.empty:
+            recepciones_sorted_tmp = recepciones_con_saldo.sort_values("fecha_vencimiento")
+            categoria_id = recepciones_sorted_tmp.iloc[0]["categoria_id"] if not recepciones_sorted_tmp.empty else ""
 
         total_tomado = float(pd.to_numeric(df_lotes_editado["cantidad_a_tomar"], errors="coerce").fillna(0).sum()) if not df_lotes_editado.empty else 0.0
         st.info(f"📦 Vas a consumir **{total_tomado:.0f} cubetas** de bodega de materia prima — revisa que sea correcto antes de guardar.")
@@ -247,22 +295,9 @@ def render(db, username, rol):
                 f"pero se necesitan {cubetas_necesarias}. Ajusta antes de guardar."
             )
 
-        st.markdown("**Personal que trabajó la jornada**")
-        st.caption("Elige quiénes trabajaron y la hora de entrada/salida de cada uno — el sistema calcula las horas totales y cuántas son nocturnas (19:00-05:00).")
-        opciones_personal_nombres = list(personal["nombre"]) if not personal.empty else []
-        mapa_nombre_a_personal_id = dict(zip(personal["nombre"], personal["personal_id"])) if not personal.empty else {}
-
-        personas_seleccionadas = st.multiselect(
-            "Personas que trabajaron esta jornada", opciones_personal_nombres, key="personas_seleccionadas_prod",
-        )
+        st.caption("ℹ️ El registro de personal y horas se hace en **👥 Personal y turnos** — se enlaza por fecha y turno.")
         filas_personal_horas = []
-        for nombre_persona in personas_seleccionadas:
-            c1, c2, c3 = st.columns([2, 1, 1])
-            c1.markdown(f"**{nombre_persona}**")
-            entrada_p = c2.time_input("Hora entrada", value=None, key=f"prod_entrada_{nombre_persona}")
-            salida_p = c3.time_input("Hora salida", value=None, key=f"prod_salida_{nombre_persona}")
-            filas_personal_horas.append({"nombre": nombre_persona, "hora_entrada": entrada_p, "hora_salida": salida_p})
-
+        costo_mano_obra_total = 0.0
         agua_litros = 0.0
 
         if not categorias.empty and categoria_id in categorias["categoria_id"].values:
@@ -341,12 +376,18 @@ def render(db, username, rol):
                 if codigo_clara in ids_existentes or codigo_yema in ids_existentes:
                     st.error("Uno de los códigos ya existe. Corrígelo antes de guardar.")
                     return
+                if codigo_clara in ids_este_turno or codigo_yema in ids_este_turno:
+                    st.error(f"⚠️ Uno de esos lotes ya fue registrado en este turno ({turno_id}). No se puede duplicar en el mismo turno.")
+                    return
             else:
                 if not codigo_lote:
                     st.error("Ingresa el código de lote.")
                     return
                 if codigo_lote in ids_existentes:
                     st.error("Ese código ya existe. Corrígelo antes de guardar.")
+                    return
+                if codigo_lote in ids_este_turno:
+                    st.error(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno ({turno_id}). No se puede duplicar en el mismo turno — si es otra producción, usa otro código o cambia el turno.")
                     return
 
             detalle_lotes = [
@@ -364,26 +405,7 @@ def render(db, username, rol):
 
             costo_mano_obra_total = 0.0
             detalle_personal = []
-            for fila in filas_personal_horas:
-                nombre_seleccionado = fila["nombre"]
-                personal_id_real = mapa_nombre_a_personal_id.get(nombre_seleccionado, nombre_seleccionado)
-                if fila["hora_entrada"] is None or fila["hora_salida"] is None:
-                    st.error(
-                        f"Falta hora de entrada o salida para {nombre_seleccionado}. "
-                        f"Completa ambas antes de guardar."
-                    )
-                    return
-                costo_hora = float(personal.set_index("personal_id").loc[personal_id_real, "costo_hora"])
-                horas, horas_nocturnas = calcular_horas_sesion(fila["hora_entrada"], fila["hora_salida"], fecha)
-                costo_mano_obra_total += costo_hora * horas
-                detalle_personal.append({
-                    "personal_id": personal_id_real,
-                    "hora_entrada": fila["hora_entrada"].strftime("%H:%M"),
-                    "hora_salida": fila["hora_salida"].strftime("%H:%M"),
-                    "horas": horas,
-                    "horas_nocturnas": horas_nocturnas,
-                    "costo_calculado": costo_hora * horas,
-                })
+            detalle_personal = []
 
             costo_total = costo_huevo_total + costo_insumos_total + costo_mano_obra_total
 
@@ -452,6 +474,7 @@ def render(db, username, rol):
                 "kg_teorico_bruto": teorico["kg_teorico_bruto"],
                 "agua_litros": agua_litros,
                 "turno": turno_id,
+                "tanque_id": tanque_id,
                 "usuario": username,
             }
 
@@ -582,11 +605,122 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de semielaborado.")
         else:
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
-            disponibles = df[df["kg_saldo"] > 0]
-            columnas_disp = ["lote_semielaborado_id", "fecha", "tipo_producto", "kg_saldo"]
+            disponibles = df[df["kg_saldo"] >= 0.1].copy()
+
+            # ── Visualización de cilindros ──────────────────────────────────
+            CAPACIDAD = 1000  # kg por tanque
+            COLORES_PRODUCTO = {
+                "Huevo entero": "#C68B54",  # café claro
+                "Clara":        "#90EE90",  # verde claro
+                "Yema":         "#E8735A",  # tomate
+            }
+            COLOR_VACIO = "#e0e0e0"
+
+            def _color_lote(lote_id):
+                if str(lote_id).startswith("SR"):
+                    return COLORES_PRODUCTO["Huevo entero"]
+                elif str(lote_id).startswith("TK"):
+                    return COLORES_PRODUCTO["Yema"]
+                elif str(lote_id).startswith("R"):
+                    return COLORES_PRODUCTO["Clara"]
+                return COLOR_VACIO
+
+            def _tipo_por_lote(lote_id, df_ref):
+                fila = df_ref[df_ref["lote_semielaborado_id"] == lote_id]
+                if not fila.empty and "tipo_producto" in fila.columns:
+                    return str(fila.iloc[0]["tipo_producto"])
+                return ""
+
+            def _svg_cilindro(tanque_nombre, lotes_tanque, capacidad):
+                W, H = 200, 340
+                rx, ry = 70, 22       # elipse radios
+                cx = W // 2
+                cuerpo_top = 50
+                cuerpo_bot = 290
+                cuerpo_h = cuerpo_bot - cuerpo_top
+
+                total_kg = sum(l["kg"] for l in lotes_tanque)
+                pct = min(total_kg / capacidad, 1.0)
+
+                svg = [f'<svg width="{W}" height="{H+40}" xmlns="http://www.w3.org/2000/svg">']
+
+                # Fondo del cuerpo (vacío)
+                svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
+                svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_bot}" rx="{rx}" ry="{ry}" fill="{COLOR_VACIO}" stroke="#999" stroke-width="2"/>')
+
+                # Relleno de lotes (apilado de abajo hacia arriba)
+                y_actual = cuerpo_bot
+                for lote in reversed(lotes_tanque):
+                    h_lote = int((lote["kg"] / capacidad) * cuerpo_h)
+                    y_lote = y_actual - h_lote
+                    color = lote["color"]
+                    svg.append(f'<rect x="{cx-rx}" y="{y_lote}" width="{rx*2}" height="{h_lote}" fill="{color}" opacity="0.85"/>')
+                    # etiqueta kg dentro
+                    y_label = y_lote + h_lote // 2
+                    svg.append(f'<text x="{cx}" y="{y_label}" text-anchor="middle" font-size="11" font-weight="bold" fill="#333">{lote["kg"]:.0f} kg</text>')
+                    svg.append(f'<text x="{cx}" y="{y_label+13}" text-anchor="middle" font-size="9" fill="#555">{lote["id"]}</text>')
+                    y_actual = y_lote
+
+                # Elipse superior (tapa del cilindro)
+                tapa_color = lotes_tanque[-1]["color"] if lotes_tanque and pct > 0 else COLOR_VACIO
+                svg.append(f'<ellipse cx="{cx}" cy="{cuerpo_top}" rx="{rx}" ry="{ry}" fill="{tapa_color}" opacity="0.85" stroke="#999" stroke-width="2"/>')
+
+                # Contorno del cuerpo
+                svg.append(f'<rect x="{cx-rx}" y="{cuerpo_top}" width="{rx*2}" height="{cuerpo_h}" fill="none" stroke="#666" stroke-width="2"/>')
+
+                # Línea de nivel
+                nivel_y = cuerpo_bot - int(pct * cuerpo_h)
+                svg.append(f'<line x1="{cx-rx}" y1="{nivel_y}" x2="{cx+rx}" y2="{nivel_y}" stroke="#333" stroke-width="1.5" stroke-dasharray="4,3"/>')
+
+                # Título y total
+                svg.append(f'<text x="{cx}" y="30" text-anchor="middle" font-size="15" font-weight="bold" fill="#333">{tanque_nombre}</text>')
+                svg.append(f'<text x="{cx}" y="{H+20}" text-anchor="middle" font-size="13" font-weight="bold" fill="#333">{total_kg:.0f} / {capacidad} kg</text>')
+                pct_txt = f"{pct*100:.0f}%"
+                svg.append(f'<text x="{cx}" y="{H+36}" text-anchor="middle" font-size="11" fill="#666">{pct_txt} de capacidad</text>')
+
+                svg.append('</svg>')
+                return "".join(svg)
+
+            st.markdown("##### 🛢️ Estado de los tanques")
+            col_t1, col_t2 = st.columns(2)
+            for col_tank, tid, tnom in [(col_t1, "T1", "Tanque 1"), (col_t2, "T2", "Tanque 2")]:
+                with col_tank:
+                    if "tanque_id" in disponibles.columns:
+                        lotes_t = disponibles[disponibles["tanque_id"].astype(str) == tid]
+                    else:
+                        lotes_t = pd.DataFrame()
+
+                    lotes_data = []
+                    for _, row in lotes_t.iterrows():
+                        tipo = str(row.get("tipo_producto", ""))
+                        color = COLORES_PRODUCTO.get(tipo, _color_lote(row["lote_semielaborado_id"]))
+                        lotes_data.append({
+                            "id": row["lote_semielaborado_id"],
+                            "kg": float(row["kg_saldo"]),
+                            "tipo": tipo,
+                            "color": color,
+                        })
+
+                    svg_str = _svg_cilindro(tnom, lotes_data, CAPACIDAD)
+                    st.markdown(svg_str, unsafe_allow_html=True)
+
+                    if lotes_data:
+                        for l in lotes_data:
+                            st.caption(f"🔹 {l['id']} — {l['tipo']} — {l['kg']:.1f} kg")
+                    else:
+                        st.caption("Tanque vacío")
+
+            st.write("")
+            st.markdown("##### 📋 Detalle de lotes en tanque")
+            columnas_disp = ["lote_semielaborado_id", "fecha", "tipo_producto", "tanque_id", "kg_saldo"]
             if ve_costos(rol):
                 columnas_disp.append("costo_unitario_kg")
-            st.dataframe(disponibles[columnas_disp], use_container_width=True)
+            cols_show = [c for c in columnas_disp if c in disponibles.columns]
+            tabla_disp = disponibles[cols_show].copy()
+            tabla_disp["kg_saldo"] = tabla_disp["kg_saldo"].round(1)
+            if "tanque_id" in tabla_disp.columns:
+                tabla_disp["tanque_id"] = tabla_disp["tanque_id"].fillna("Sin asignar")
+            st.dataframe(tabla_disp, use_container_width=True, hide_index=True)
 
     with tab_historial:
         df_hist = db.get_df("produccion_semielaborados")
@@ -715,6 +849,7 @@ def render(db, username, rol):
             )
             kg_total_desechado = pd.to_numeric(df_mermas_vista["kg_desechado"], errors="coerce").fillna(0).sum()
             st.caption(f"Total desechado histórico: **{kg_total_desechado:,.1f} kg** en {len(df_mermas_vista)} registro(s)")
+    with tab_rendimiento:
         df = db.get_df("produccion_semielaborados")
         if df.empty:
             st.info("No hay datos todavía.")
@@ -842,4 +977,3 @@ def render(db, username, rol):
                             f"volver a registrarla correctamente en 'Nueva producción'."
                         )
                         st.rerun()
-Fri Jul 17 06:18:31 -05 2026
