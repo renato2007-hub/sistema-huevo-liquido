@@ -217,7 +217,7 @@ elif modulo == "Bodega de materia prima":
 elif modulo == "Bodega de envases e insumos":
     _mod("bodega_envases_insumos").render(db, username, rol)
 elif modulo == "Producción de semielaborados":
-    _mod("produccion_semielaborados").render(db, username, rol)
+    _mod("produccion_semi").render(db, username, rol)
 elif modulo == "Pasteurización y envasado":
     _mod("pasteurizacion_envasado").render(db, username, rol)
 elif modulo == "Cuarto frío":
