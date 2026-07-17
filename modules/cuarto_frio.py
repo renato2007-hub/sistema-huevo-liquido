@@ -1,8 +1,9 @@
 """
-Cuarto frio: ingreso del producto terminado que sale de pasteurizacion,
-despacho a clientes (organizado por vehiculo de reparto, ya que un mismo
-viaje normalmente lleva varias presentaciones para varios clientes), control
-de inventario, y vista de que se cargo en cada vehiculo.
+Cuarto frio: el producto terminado ingresa automaticamente al guardar el
+lote en Pasteurizacion y envasado (ya no hay ingreso manual). Este modulo
+maneja el despacho a clientes (organizado por vehiculo de reparto, ya que
+un mismo viaje normalmente lleva varias presentaciones para varios
+clientes), control de inventario, y vista de que se cargo en cada vehiculo.
 """
 import datetime
 import streamlit as st
@@ -19,11 +20,10 @@ def render(db, username, rol):
             "🚚 Despacho a cliente", "📦 Inventario actual",
             "🫙 Stock a granel", "🚛 Cargas por vehículo",
         ])
-        tab_ingreso = None
         tab_verificacion = None
     else:
-        tab_ingreso, tab_despacho, tab_inventario, tab_granel_cf, tab_vehiculos, tab_verificacion = st.tabs(
-            ["Ingreso desde envasado", "Despacho a cliente", "Inventario actual",
+        tab_despacho, tab_inventario, tab_granel_cf, tab_vehiculos, tab_verificacion = st.tabs(
+            ["Despacho a cliente", "Inventario actual",
              "🫙 Stock a granel", "🚚 Cargas por vehículo", "✅ Verificación de cargas"]
         )
 
@@ -33,71 +33,6 @@ def render(db, username, rol):
     vehiculos = db.get_df("vehiculos")
     usuarios_cat = db.get_df("usuarios")
     produccion_semi = db.get_df("produccion_semielaborados")
-
-    if tab_ingreso is not None:
-        with tab_ingreso:
-            if pasteurizado.empty:
-                st.info("No hay lotes de producto terminado todavía.")
-            else:
-                pasteurizado["unidades_saldo"] = pd.to_numeric(
-                    pasteurizado["unidades_saldo"], errors="coerce"
-                ).fillna(0)
-                disponibles = pasteurizado[pasteurizado["unidades_saldo"] > 0].copy()
-                if disponibles.empty:
-                    st.info("No hay producto terminado pendiente de ingresar a cuarto frío.")
-                else:
-                    if not presentaciones.empty:
-                        disponibles = disponibles.merge(
-                            presentaciones[["presentacion_id", "nombre"]].rename(
-                                columns={"nombre": "presentacion_nombre"}
-                            ),
-                            on="presentacion_id", how="left",
-                        )
-                    else:
-                        disponibles["presentacion_nombre"] = disponibles["presentacion_id"]
-                    disponibles["presentacion_nombre"] = disponibles["presentacion_nombre"].fillna(
-                        disponibles["presentacion_id"]
-                    )
-
-                    fecha = st.date_input("Fecha de ingreso", value=datetime.date.today(), key="cf_in_fecha")
-                    info_lotes = disponibles.set_index("lote_producto_id")
-                    lote_producto_id = st.selectbox(
-                        "Lote de producto terminado",
-                        disponibles["lote_producto_id"],
-                        format_func=lambda x: (
-                            f"{x} — {info_lotes.loc[x, 'presentacion_nombre']} — "
-                            f"{info_lotes.loc[x, 'unidades_saldo']:.0f} unidades — "
-                            f"origen {info_lotes.loc[x, 'lote_semielaborado_id']}"
-                        ),
-                    )
-                    fila = disponibles.set_index("lote_producto_id").loc[lote_producto_id]
-                    cantidad_max = float(fila["unidades_saldo"])
-                    cantidad = st.number_input(
-                        "Cantidad a ingresar", min_value=0.0, max_value=cantidad_max, value=cantidad_max
-                    )
-                    fecha_vencimiento = st.date_input(
-                        "Fecha de vencimiento del producto",
-                        value=datetime.date.today() + datetime.timedelta(days=30),
-                        key="cf_venc",
-                    )
-                    if st.button("Registrar ingreso a cuarto frío"):
-                        entrada_id = db.siguiente_id("cuarto_frio_entradas", "CF", fecha)
-                        db.append_row("cuarto_frio_entradas", {
-                            "entrada_id": entrada_id,
-                            "fecha": fecha.isoformat(),
-                            "lote_producto_id": lote_producto_id,
-                            "presentacion_id": fila["presentacion_id"],
-                            "cantidad": cantidad,
-                            "costo_unitario": fila["costo_unitario"],
-                            "fecha_vencimiento": fecha_vencimiento.isoformat(),
-                            "saldo": cantidad,
-                            "usuario": username,
-                        })
-                        db.update_row("pasteurizacion_envasado", "lote_producto_id", lote_producto_id, {
-                            "unidades_saldo": cantidad_max - cantidad,
-                        })
-                        st.success(f"Ingreso {entrada_id} registrado en cuarto frío.")
-                        st.rerun()
 
     with tab_despacho:
         entradas = db.get_df("cuarto_frio_entradas")

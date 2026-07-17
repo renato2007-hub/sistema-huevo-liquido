@@ -132,6 +132,21 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         )
         costo_liner_unitario = float(liners.set_index("liner_id").loc[liner_id, "costo_unitario"])
 
+    # Vencimiento según tipo de producto: Clara pasteurizada 20 días,
+    # Huevo entero y Yema pasteurizados 15 días.
+    tipo_producto_lote = str(fila_lote.get("tipo_producto", ""))
+    dias_vencimiento = 20 if "clara" in tipo_producto_lote.lower() else 15
+    fecha_vencimiento = st.date_input(
+        "Fecha de vencimiento del producto",
+        value=fecha + datetime.timedelta(days=dias_vencimiento),
+        key=f"past_venc_{lote_semielaborado_id}_{fecha}",
+        help=(
+            f"Sugerido: {dias_vencimiento} días para {tipo_producto_lote or 'este producto'} "
+            f"(Clara: 20 días — Huevo y Yema: 15 días). Puedes ajustarla si hace falta. "
+            f"El lote ingresa automáticamente a cuarto frío con esta fecha."
+        ),
+    )
+
     observaciones = st.text_area("Observaciones", "", key="past_obs")
 
     if st.button("Guardar lote de envasado"):
@@ -179,7 +194,9 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
             "costo_liners": costo_liners,
             "costo_total": costo_total,
             "costo_unitario": costo_unitario,
-            "unidades_saldo": unidades_reales,
+            # El lote ingresa completo y de inmediato a cuarto frío, por eso
+            # el saldo "pendiente de ingresar" queda en 0 desde el inicio.
+            "unidades_saldo": 0,
             "turno": turno_id,
             "usuario": username,
             "observaciones": observaciones,
@@ -295,10 +312,30 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
                 "observaciones": lote_producto_id,
             })
 
+        # ── Ingreso automático a cuarto frío ──────────────────────────────
+        entrada_id = db.siguiente_id("cuarto_frio_entradas", "CF", fecha)
+        db.append_row("cuarto_frio_entradas", {
+            "entrada_id": entrada_id,
+            "fecha": fecha.isoformat(),
+            "lote_producto_id": lote_producto_id,
+            "presentacion_id": presentacion_id,
+            "cantidad": unidades_reales,
+            "costo_unitario": costo_unitario,
+            "fecha_vencimiento": fecha_vencimiento.isoformat(),
+            "saldo": unidades_reales,
+            "usuario": username,
+        })
+
         if ve_costos(rol):
-            st.success(f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f}")
+            st.success(
+                f"Lote {lote_producto_id} guardado — costo unitario {costo_unitario:,.2f} — "
+                f"ingresado automáticamente a cuarto frío ({entrada_id})."
+            )
         else:
-            st.success(f"Lote {lote_producto_id} guardado.")
+            st.success(
+                f"Lote {lote_producto_id} guardado e ingresado automáticamente "
+                f"a cuarto frío ({entrada_id})."
+            )
 
 
 
@@ -308,6 +345,17 @@ def render(db, username, rol):
 
     semielaborados = db.get_df("produccion_semielaborados")
     presentaciones = db.get_df("presentaciones")
+
+    # Saldo en cuarto frío por lote de producto: como los lotes nuevos ingresan
+    # automáticamente a cuarto frío (unidades_saldo = 0), el saldo real disponible
+    # de un lote es: unidades_saldo (legado, aún no ingresado) + saldo en cuarto frío.
+    cf_entradas = db.get_df("cuarto_frio_entradas")
+    if cf_entradas.empty or "lote_producto_id" not in cf_entradas.columns:
+        saldo_cf_por_lote = {}
+    else:
+        cf_entradas["saldo"] = pd.to_numeric(cf_entradas["saldo"], errors="coerce").fillna(0)
+        saldo_cf_por_lote = cf_entradas.groupby("lote_producto_id")["saldo"].sum().to_dict()
+
     turnos = db.get_df("turnos")
     tapas = db.get_df("tapas")
     etiquetas = db.get_df("etiquetas")
@@ -323,6 +371,8 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de producto terminado.")
         else:
             df["unidades_saldo"] = pd.to_numeric(df["unidades_saldo"], errors="coerce").fillna(0)
+            df["saldo_cf"] = df["lote_producto_id"].map(saldo_cf_por_lote).fillna(0)
+            df["unidades_saldo"] = df["unidades_saldo"] + df["saldo_cf"]
             disponible_df = df[df["unidades_saldo"] > 0].copy()
             disponible_df["estado"] = disponible_df["pasteurizado"].astype(str).str.upper().isin(
                 ["TRUE", "1", "SI", "SÍ"]
@@ -513,6 +563,10 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes registrados.")
         else:
             df_hist["unidades_saldo"] = pd.to_numeric(df_hist["unidades_saldo"], errors="coerce").fillna(0)
+            df_hist["unidades_saldo"] = (
+                df_hist["unidades_saldo"]
+                + df_hist["lote_producto_id"].map(saldo_cf_por_lote).fillna(0)
+            )
             df_hist["unidades_reales"] = pd.to_numeric(df_hist["unidades_reales"], errors="coerce").fillna(0)
             df_hist["estado"] = df_hist["pasteurizado"].astype(str).str.upper().isin(
                 ["TRUE", "1", "SI", "SÍ"]
