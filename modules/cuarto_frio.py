@@ -15,16 +15,17 @@ def render(db, username, rol):
     st.title("❄️ Cuarto frío")
 
     if es_despachador(rol):
-        # Despachador: solo ve despacho, inventario, stock a granel y cargas
-        tab_despacho, tab_inventario, tab_granel_cf, tab_vehiculos = st.tabs([
-            "🚚 Despacho a cliente", "📦 Inventario actual",
-            "🫙 Stock a granel", "🚛 Cargas por vehículo",
+        # Despachador: solo ve inventario, stock a granel, despacho y cargas
+        tab_inventario, tab_granel_cf, tab_despacho, tab_vehiculos = st.tabs([
+            "📦 Inventario actual", "🫙 Stock a granel",
+            "🚚 :red[**Despacho a cliente**]", "🚛 Cargas por vehículo",
         ])
         tab_verificacion = None
     else:
-        tab_despacho, tab_inventario, tab_granel_cf, tab_vehiculos, tab_verificacion = st.tabs(
-            ["Despacho a cliente", "Inventario actual",
-             "🫙 Stock a granel", "🚚 Cargas por vehículo", "✅ Verificación de cargas"]
+        tab_inventario, tab_granel_cf, tab_despacho, tab_vehiculos, tab_verificacion = st.tabs(
+            ["📦 Inventario actual", "🫙 Stock a granel",
+             "🚚 :red[**Despacho a cliente**]", "🚛 Cargas por vehículo",
+             "✅ Verificación de cargas"]
         )
 
     pasteurizado = db.get_df("pasteurizacion_envasado")
