@@ -652,6 +652,127 @@ def render(db, username, rol):
                     )
                     st.dataframe(resumen_cliente, use_container_width=True)
 
+                # ── Descargar hoja de despacho (PDF) ──
+                # Resolver nombres de despachadores desde el catalogo personal
+                personal_desp = db.get_df("personal")
+                mapa_desp = (
+                    dict(zip(personal_desp["personal_id"], personal_desp["nombre"]))
+                    if not personal_desp.empty and "personal_id" in personal_desp.columns
+                    else {}
+                )
+                if "despachador" in vista.columns:
+                    despachadores_ids = [
+                        d for d in vista["despachador"].dropna().astype(str).unique() if d
+                    ]
+                    despachadores_nombres = sorted({
+                        mapa_desp.get(d, d) for d in despachadores_ids
+                    })
+                else:
+                    despachadores_nombres = []
+
+                # Saldo remanente por lote y presentacion (lo que queda AHORA en
+                # cuarto frio para los lotes que se estan despachando en esta hoja)
+                lotes_despachados = (
+                    set(vista["lote_producto_id"].dropna().astype(str))
+                    if "lote_producto_id" in vista.columns else set()
+                )
+                saldo_remanente = []
+                if lotes_despachados and not entradas_ref.empty:
+                    ent_rem = entradas_ref[
+                        entradas_ref["lote_producto_id"].astype(str).isin(lotes_despachados)
+                    ].copy()
+                    ent_rem["saldo"] = pd.to_numeric(ent_rem["saldo"], errors="coerce").fillna(0)
+                    if not presentaciones.empty:
+                        ent_rem = ent_rem.merge(
+                            presentaciones[["presentacion_id", "nombre", "kg_nominal"]].rename(
+                                columns={"nombre": "presentacion_nombre"}
+                            ),
+                            on="presentacion_id", how="left",
+                        )
+                        ent_rem["kg_nominal"] = pd.to_numeric(
+                            ent_rem["kg_nominal"], errors="coerce"
+                        ).fillna(0)
+                    else:
+                        ent_rem["presentacion_nombre"] = ent_rem["presentacion_id"]
+                        ent_rem["kg_nominal"] = 0
+                    if not pasteurizado.empty:
+                        ent_rem = ent_rem.merge(
+                            pasteurizado[["lote_producto_id", "lote_semielaborado_id"]].rename(
+                                columns={"lote_semielaborado_id": "lote_origen"}
+                            ),
+                            on="lote_producto_id", how="left",
+                        )
+                    else:
+                        ent_rem["lote_origen"] = ""
+                    ent_rem = ent_rem[ent_rem["saldo"] > 0]
+                    if not ent_rem.empty:
+                        ent_rem["kg"] = ent_rem["saldo"] * ent_rem["kg_nominal"]
+                        agg = ent_rem.groupby(
+                            ["lote_origen", "presentacion_nombre"], dropna=False
+                        ).agg(saldo_unidades=("saldo", "sum"), saldo_kg=("kg", "sum")).reset_index()
+                        for _, r in agg.iterrows():
+                            saldo_remanente.append({
+                                "lote_origen": r["lote_origen"] or "",
+                                "presentacion": r["presentacion_nombre"] or "",
+                                "saldo_unidades": float(r["saldo_unidades"]),
+                                "saldo_kg": float(r["saldo_kg"]),
+                            })
+
+                # Armar las lineas ordenadas por cliente/lote/presentacion
+                vista_pdf = vista.copy()
+                orden_cols = [c for c in ["cliente_nombre", "lote_origen", "presentacion_nombre"] if c in vista_pdf.columns]
+                if orden_cols:
+                    vista_pdf = vista_pdf.sort_values(orden_cols)
+                lineas_pdf = []
+                for _, r in vista_pdf.iterrows():
+                    lineas_pdf.append({
+                        "cliente": r.get("cliente_nombre", "") or "—",
+                        "lote_origen": str(r.get("lote_origen", "") or ""),
+                        "presentacion": r.get("presentacion_nombre", "") or "—",
+                        "cantidad": float(r.get("cantidad", 0) or 0),
+                        "kg": float(r.get("kg", 0) or 0),
+                        "pedido_ref": str(r.get("pedido_ref", "") or ""),
+                        "observaciones": str(r.get("observaciones", "") or ""),
+                    })
+
+                # Etiqueta del vehiculo para el encabezado
+                if filtro_vehiculo == "Todos":
+                    etiqueta_vehiculo = "Todos los vehículos"
+                else:
+                    fv = vehiculos.set_index("vehiculo_id").loc[filtro_vehiculo]
+                    etiqueta_vehiculo = f"{fv['placa']} — {fv['descripcion']}"
+
+                etiqueta_fecha = (
+                    "Todas las fechas" if ver_todas_fechas else filtro_fecha.isoformat()
+                )
+
+                from utils.pdf_hoja_despacho import generar_pdf_hoja_despacho
+                pdf_bytes = generar_pdf_hoja_despacho({
+                    "fecha": etiqueta_fecha,
+                    "vehiculo": etiqueta_vehiculo,
+                    "despachadores": despachadores_nombres,
+                    "lineas": lineas_pdf,
+                    "saldo_remanente": saldo_remanente,
+                })
+                # Nombre de archivo: hoja_despacho_PLACA_FECHA.pdf
+                if filtro_vehiculo == "Todos":
+                    placa_archivo = "todos"
+                else:
+                    placa_archivo = str(
+                        vehiculos.set_index("vehiculo_id").loc[filtro_vehiculo, "placa"]
+                    ).replace(" ", "").replace("/", "-")
+                fecha_archivo = (
+                    "todas" if ver_todas_fechas else filtro_fecha.isoformat()
+                )
+                st.download_button(
+                    "📄 Descargar hoja de despacho (PDF)",
+                    data=pdf_bytes,
+                    file_name=f"hoja_despacho_{placa_archivo}_{fecha_archivo}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"btn_pdf_desp_{placa_archivo}_{fecha_archivo}",
+                )
+
     # ======================== VERIFICACION DE CARGAS ========================
     if tab_verificacion is not None:
         with tab_verificacion:
