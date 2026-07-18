@@ -320,23 +320,28 @@ def render(db, username, rol):
             st.write("")
             col_bar, col_dona = st.columns([3, 2])
 
-            # Barras por presentación
+            # Barras apiladas: cada barra es una presentación, los segmentos
+            # dentro son los productos (colores). Así, de un vistazo, el largo
+            # muestra el total por presentación y los segmentos muestran cuánto
+            # de cada producto.
             with col_bar:
-                st.markdown("**Unidades por presentación**")
-                # Para colorear por tipo de producto, unir con inv_kg
-                pres_g = inv_kg.groupby("presentacion_nombre").agg(
-                    saldo=("saldo","sum"), etiqueta=("etiqueta","first")
-                ).reset_index()
-                pres_g = pres_g[pres_g["saldo"] > 0].sort_values("saldo", ascending=True)
+                st.markdown("**Unidades por presentación y producto**")
+                pres_prod = (
+                    inv_kg.groupby(["presentacion_nombre", "etiqueta"])["saldo"].sum().reset_index()
+                )
+                pres_prod = pres_prod[pres_prod["saldo"] > 0]
+
                 COLORES_PRODUCTO = {
-                    "huevo pasteurizado":      "#C68B54",  # café claro
-                    "huevo sin pasteurizar":   "#A0522D",  # café oscuro
-                    "clara pasteurizada":      "#90EE90",  # verde claro
-                    "clara sin pasteurizar":   "#2e7d32",  # verde oscuro
-                    "yema pasteurizada":       "#FFA500",  # anaranjado
-                    "yema sin pasteurizar":    "#FF6B35",  # anaranjado oscuro
+                    # Huevo entero -> café claro (pasteurizado o no)
+                    "huevo pasteurizado":    "#c9a26a",
+                    "huevo sin pasteurizar": "#c9a26a",
+                    # Yema -> anaranjado (pasteurizada o no)
+                    "yema pasteurizada":     "#e8802a",
+                    "yema sin pasteurizar":  "#e8802a",
+                    # Clara -> verde para pasteurizada, verde oscuro sin pasteurizar
+                    "clara pasteurizada":    "#4caf50",
+                    "clara sin pasteurizar": "#1b5e20",
                 }
-                COLS = ["#1565c0","#2e7d32","#f9a825","#6a1b9a","#D9740C","#00695c","#c62828"]
 
                 def _color_etiq(etiq):
                     et = str(etiq).lower()
@@ -344,23 +349,63 @@ def render(db, username, rol):
                         if key in et:
                             return color
                     return "#90a4ae"
-                fig_bar = go.Figure(go.Bar(
-                    x=pres_g["saldo"].tolist(),
-                    y=pres_g["presentacion_nombre"].tolist(),
-                    orientation="h",
-                    marker_color=[_color_etiq(e) for e in pres_g.get("etiqueta", pres_g["presentacion_nombre"])],
-                    text=pres_g["saldo"].apply(lambda v: f"{int(v)}").tolist(),
-                    textposition="outside",
-                    hovertemplate="%{y}: %{x} unidades<extra></extra>",
-                ))
-                fig_bar.update_layout(
-                    height=max(220, len(pres_g) * 52),
-                    margin=dict(l=10, r=60, t=10, b=20),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
+
+                if pres_prod.empty:
+                    st.info("Sin unidades en cuarto frío.")
+                else:
+                    # ordenar presentaciones por total (menor arriba, mayor abajo)
+                    orden_pres = (
+                        pres_prod.groupby("presentacion_nombre")["saldo"].sum()
+                        .sort_values(ascending=True).index.tolist()
+                    )
+
+                    fig_bar = go.Figure()
+                    # una traza (segmento) por cada etiqueta de producto
+                    etiquetas_orden = sorted(pres_prod["etiqueta"].unique())
+                    for etiq in etiquetas_orden:
+                        sub = pres_prod[pres_prod["etiqueta"] == etiq].set_index("presentacion_nombre")["saldo"]
+                        valores = [float(sub.get(p, 0)) for p in orden_pres]
+                        fig_bar.add_trace(go.Bar(
+                            y=orden_pres,
+                            x=valores,
+                            name=etiq,
+                            orientation="h",
+                            marker_color=_color_etiq(etiq),
+                            text=[f"{int(v)}" if v > 0 else "" for v in valores],
+                            textposition="inside",
+                            insidetextanchor="middle",
+                            textfont=dict(color="white", size=11),
+                            hovertemplate=f"<b>{etiq}</b><br>%{{y}}: %{{x}} unidades<extra></extra>",
+                        ))
+
+                    # anotación con el total al final de cada barra
+                    totales_pres = (
+                        pres_prod.groupby("presentacion_nombre")["saldo"].sum().to_dict()
+                    )
+                    anotaciones = [
+                        dict(
+                            x=totales_pres[p], y=p,
+                            text=f"<b>{int(totales_pres[p])}</b>",
+                            showarrow=False, xanchor="left", xshift=6,
+                            font=dict(size=12, color="#333"),
+                        )
+                        for p in orden_pres
+                    ]
+
+                    fig_bar.update_layout(
+                        barmode="stack",
+                        height=max(240, len(orden_pres) * 60),
+                        margin=dict(l=10, r=70, t=10, b=20),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+                        legend=dict(
+                            orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="left", x=0, title_text="",
+                        ),
+                        annotations=anotaciones,
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True)
 
             # Dona por tipo de producto en kg
             with col_dona:
