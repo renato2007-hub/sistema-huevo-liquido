@@ -670,18 +670,16 @@ def render(db, username, rol):
                 else:
                     despachadores_nombres = []
 
-                # Saldo remanente por lote y presentacion (lo que queda AHORA en
-                # cuarto frio para los lotes que se estan despachando en esta hoja)
-                lotes_despachados = (
-                    set(vista["lote_producto_id"].dropna().astype(str))
-                    if "lote_producto_id" in vista.columns else set()
-                )
+                # Saldo remanente en cuarto frio: TODO lo que queda ahora en
+                # inventario (todos los productos y presentaciones), no solo los
+                # lotes que salieron en esta hoja. Se replica la logica de la
+                # pestana "Inventario actual" para garantizar consistencia.
                 saldo_remanente = []
-                if lotes_despachados and not entradas_ref.empty:
-                    ent_rem = entradas_ref[
-                        entradas_ref["lote_producto_id"].astype(str).isin(lotes_despachados)
-                    ].copy()
+                if not entradas_ref.empty:
+                    ent_rem = entradas_ref.copy()
                     ent_rem["saldo"] = pd.to_numeric(ent_rem["saldo"], errors="coerce").fillna(0)
+                    ent_rem = ent_rem[ent_rem["saldo"] > 0].copy()
+                    # presentacion_nombre + kg_nominal
                     if not presentaciones.empty:
                         ent_rem = ent_rem.merge(
                             presentaciones[["presentacion_id", "nombre", "kg_nominal"]].rename(
@@ -689,12 +687,16 @@ def render(db, username, rol):
                             ),
                             on="presentacion_id", how="left",
                         )
+                        ent_rem["presentacion_nombre"] = ent_rem["presentacion_nombre"].fillna(
+                            ent_rem["presentacion_id"]
+                        )
                         ent_rem["kg_nominal"] = pd.to_numeric(
                             ent_rem["kg_nominal"], errors="coerce"
                         ).fillna(0)
                     else:
                         ent_rem["presentacion_nombre"] = ent_rem["presentacion_id"]
                         ent_rem["kg_nominal"] = 0
+                    # lote_origen (semielaborado que dio origen al producto)
                     if not pasteurizado.empty:
                         ent_rem = ent_rem.merge(
                             pasteurizado[["lote_producto_id", "lote_semielaborado_id"]].rename(
@@ -702,20 +704,39 @@ def render(db, username, rol):
                             ),
                             on="lote_producto_id", how="left",
                         )
+                        # fallback: si no se encontró el semielaborado, mostrar el lote_producto_id
+                        ent_rem["lote_origen"] = ent_rem["lote_origen"].fillna(
+                            ent_rem["lote_producto_id"]
+                        )
                     else:
-                        ent_rem["lote_origen"] = ""
-                    ent_rem = ent_rem[ent_rem["saldo"] > 0]
+                        ent_rem["lote_origen"] = ent_rem["lote_producto_id"]
+                    # tipo_producto (huevo/clara/yema) — mismo merge que Inventario actual
+                    if not produccion_semi.empty:
+                        ent_rem = ent_rem.merge(
+                            produccion_semi[["lote_semielaborado_id", "tipo_producto"]].rename(
+                                columns={"lote_semielaborado_id": "lote_origen"}
+                            ),
+                            on="lote_origen", how="left",
+                        )
+                    else:
+                        ent_rem["tipo_producto"] = ""
+                    ent_rem["tipo_producto"] = ent_rem["tipo_producto"].fillna("Sin clasificar")
                     if not ent_rem.empty:
                         ent_rem["kg"] = ent_rem["saldo"] * ent_rem["kg_nominal"]
                         agg = ent_rem.groupby(
-                            ["lote_origen", "presentacion_nombre"], dropna=False
+                            ["tipo_producto", "lote_origen", "presentacion_nombre"],
+                            dropna=False,
                         ).agg(saldo_unidades=("saldo", "sum"), saldo_kg=("kg", "sum")).reset_index()
+                        agg = agg.sort_values(["tipo_producto", "lote_origen", "presentacion_nombre"])
                         for _, r in agg.iterrows():
+                            def _sane(v, d=""):
+                                return d if v is None or (isinstance(v, float) and pd.isna(v)) else str(v)
                             saldo_remanente.append({
-                                "lote_origen": r["lote_origen"] or "",
-                                "presentacion": r["presentacion_nombre"] or "",
-                                "saldo_unidades": float(r["saldo_unidades"]),
-                                "saldo_kg": float(r["saldo_kg"]),
+                                "tipo_producto": _sane(r.get("tipo_producto"), "Sin clasificar"),
+                                "lote_origen": _sane(r.get("lote_origen"), "—"),
+                                "presentacion": _sane(r.get("presentacion_nombre"), "—"),
+                                "saldo_unidades": float(r["saldo_unidades"] or 0),
+                                "saldo_kg": float(r["saldo_kg"] or 0),
                             })
 
                 # Armar las lineas ordenadas por cliente/lote/presentacion
