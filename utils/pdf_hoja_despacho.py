@@ -126,79 +126,80 @@ def generar_pdf_hoja_despacho(datos: dict) -> bytes:
         buffer.seek(0)
         return buffer.getvalue()
 
-    # ── tabla principal de cargas ──
+    # ── tabla principal de cargas (con fila TOTAL) ──
     el.append(Paragraph("Cargas del vehículo", ESTILOS["Heading3"]))
     filas = []
+    total_unid = 0.0
+    total_kg = 0.0
     for l in lineas:
+        cant = float(l.get("cantidad", 0) or 0)
+        kg = float(l.get("kg", 0) or 0)
+        total_unid += cant
+        total_kg += kg
         filas.append([
             l.get("cliente", "—"),
             l.get("lote_origen", "—") or "—",
             l.get("presentacion", "—"),
-            _fmt_num(l.get("cantidad", 0)),
-            _fmt_num(l.get("kg", 0), 1),
+            _fmt_num(cant),
+            _fmt_num(kg, 1),
             l.get("pedido_ref", "") or "—",
             l.get("observaciones", "") or "",
         ])
-    el.append(_tabla_encabezado(
+    # fila de total
+    filas.append(["TOTAL", "", "", _fmt_num(total_unid), _fmt_num(total_kg, 1), "", ""])
+    tabla_cargas = _tabla_encabezado(
         filas,
         ["Cliente", "Lote", "Presentación", "Unid.", "Kg", "Pedido", "Observaciones"],
         anchos_cm=[3.3, 2.0, 2.6, 1.3, 1.5, 1.7, 4.5],
-    ))
-    el.append(Spacer(1, 0.3 * cm))
-
-    # ── subtotales por cliente ──
-    subtotales = {}
-    for l in lineas:
-        c = l.get("cliente", "—")
-        s = subtotales.setdefault(c, {"unid": 0.0, "kg": 0.0})
-        s["unid"] += float(l.get("cantidad", 0) or 0)
-        s["kg"] += float(l.get("kg", 0) or 0)
-    filas_st = [[c, _fmt_num(v["unid"]), _fmt_num(v["kg"], 1)] for c, v in subtotales.items()]
-    total_unid = sum(v["unid"] for v in subtotales.values())
-    total_kg = sum(v["kg"] for v in subtotales.values())
-    filas_st.append(["TOTAL", _fmt_num(total_unid), _fmt_num(total_kg, 1)])
-    el.append(Paragraph("Subtotales por cliente", ESTILOS["Heading4"]))
-    tabla_st = _tabla_encabezado(
-        filas_st,
-        ["Cliente", "Unidades", "Kg"],
-        anchos_cm=[9.5, 3.5, 3.9],
     )
-    # resaltar fila TOTAL
-    tabla_st.setStyle(TableStyle([
-        ("BACKGROUND", (0, len(filas_st)), (-1, len(filas_st)), colors.HexColor("#fff3e0")),
-        ("FONTNAME", (0, len(filas_st)), (-1, len(filas_st)), "Helvetica-Bold"),
+    # resaltar la fila TOTAL (ultima fila)
+    tabla_cargas.setStyle(TableStyle([
+        ("BACKGROUND", (0, len(filas)), (-1, len(filas)), colors.HexColor("#fff3e0")),
+        ("FONTNAME", (0, len(filas)), (-1, len(filas)), "Helvetica-Bold"),
+        ("SPAN", (0, len(filas)), (2, len(filas))),
     ]))
-    el.append(tabla_st)
+    el.append(tabla_cargas)
     el.append(Spacer(1, 0.4 * cm))
 
-    # ── saldo remanente en cuarto frio ──
+    # ── saldo remanente en cuarto frio (inventario completo despues de esta carga) ──
     el.append(Paragraph(
-        "Saldo remanente en cuarto frío (por lote y presentación)",
+        "Inventario en cuarto frío después de esta carga",
         ESTILOS["Heading3"],
     ))
     el.append(Paragraph(
-        "<i>Confirma este saldo <b>antes</b> de que el camión salga del cuarto frío. "
-        "Si no cuadra con lo físico, no despaches — reporta la diferencia al supervisor.</i>",
+        "<i>Confirma este inventario <b>antes</b> de que el camión salga del cuarto frío. "
+        "Si no cuadra con el conteo físico, no despaches — reporta la diferencia al supervisor.</i>",
         ESTILOS["Normal"],
     ))
     el.append(Spacer(1, 0.15 * cm))
     if saldo_rem:
         filas_sr = [
-            [r.get("lote_origen", "—") or "—",
+            [r.get("tipo_producto", "") or "—",
+             r.get("lote_origen", "—") or "—",
              r.get("presentacion", "—"),
              _fmt_num(r.get("saldo_unidades", 0)),
              _fmt_num(r.get("saldo_kg", 0), 1)]
             for r in saldo_rem
         ]
-        el.append(_tabla_encabezado(
+        # fila de total del inventario
+        tot_u = sum(float(r.get("saldo_unidades", 0) or 0) for r in saldo_rem)
+        tot_k = sum(float(r.get("saldo_kg", 0) or 0) for r in saldo_rem)
+        filas_sr.append(["TOTAL", "", "", _fmt_num(tot_u), _fmt_num(tot_k, 1)])
+        tabla_sr = _tabla_encabezado(
             filas_sr,
-            ["Lote", "Presentación", "Saldo unid.", "Saldo kg"],
-            anchos_cm=[3.5, 6.5, 3.0, 3.9],
+            ["Producto", "Lote", "Presentación", "Saldo unid.", "Saldo kg"],
+            anchos_cm=[2.8, 2.5, 5.0, 2.8, 3.8],
             color_encabezado="#1565c0",
-        ))
+        )
+        tabla_sr.setStyle(TableStyle([
+            ("BACKGROUND", (0, len(filas_sr)), (-1, len(filas_sr)), colors.HexColor("#e3f2fd")),
+            ("FONTNAME", (0, len(filas_sr)), (-1, len(filas_sr)), "Helvetica-Bold"),
+            ("SPAN", (0, len(filas_sr)), (2, len(filas_sr))),
+        ]))
+        el.append(tabla_sr)
     else:
         el.append(Paragraph(
-            "No queda saldo en cuarto frío para los lotes despachados.",
+            "El cuarto frío quedó vacío después de esta carga.",
             ESTILOS["Normal"],
         ))
     el.append(Spacer(1, 0.6 * cm))
