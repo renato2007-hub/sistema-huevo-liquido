@@ -21,6 +21,15 @@ def _extraer_lote_hermano(observaciones: str):
     return m.group(1) if m else None
 
 
+def _extraer_recipiente_retorno(observaciones: str):
+    """Busca 'Retorno desde recipiente GR-XXX' en las observaciones (lo que
+    guarda cuarto_frio.py cuando un recipiente a granel vuelve a produccion
+    como lote nuevo, sin consumo de MP propio). Devuelve el codigo del
+    recipiente, o None si el lote no nacio de un retorno."""
+    m = re.search(r"[Rr]etorno desde recipiente ([^\s).,;]+)", str(observaciones))
+    return m.group(1) if m else None
+
+
 def _val(fila, columna, default=""):
     if fila is None or columna not in fila or pd.isna(fila[columna]):
         return default
@@ -89,6 +98,93 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
     personal_cat = tablas["personal"]
     usuarios_cat = tablas["usuarios"]
     pedidos_df = tablas.get("pedidos", pd.DataFrame())
+    granel = tablas.get("stock_a_granel", pd.DataFrame())
+    movimientos_insumos = tablas.get("movimientos_envases_insumos", pd.DataFrame())
+    catalogo_insumos = tablas.get(
+        "envases_insumos",
+        tablas.get("catalogo_envases_insumos", tablas.get("insumos", pd.DataFrame())),
+    )
+
+    def _lote_origen_de_recipiente(recipiente_id):
+        """Resuelve recipiente GR -> lote_origen usando stock_a_granel."""
+        if granel.empty or "lote_origen" not in granel.columns or not recipiente_id:
+            return None
+        col_rec = next(
+            (c for c in ("recipiente_id", "codigo_recipiente", "recipiente", "codigo")
+             if c in granel.columns),
+            None,
+        )
+        if not col_rec:
+            return None
+        fg = granel[granel[col_rec].astype(str) == str(recipiente_id)]
+        if fg.empty:
+            return None
+        origen = fg.iloc[0]["lote_origen"]
+        if origen is None or (isinstance(origen, float) and pd.isna(origen)):
+            return None
+        origen = str(origen).strip()
+        return origen or None
+
+    def _origen_granel_de(lote_semi_id):
+        """Si el lote nacio de un retorno desde granel, devuelve un dict con
+        el recipiente y el lote de origen; si no, None."""
+        if produccion.empty:
+            return None
+        fila_p = produccion[produccion["lote_semielaborado_id"] == lote_semi_id]
+        if fila_p.empty:
+            return None
+        recipiente = _extraer_recipiente_retorno(fila_p.iloc[0].get("observaciones", ""))
+        if not recipiente:
+            return None
+        return {
+            "recipiente": recipiente,
+            "lote_origen": _lote_origen_de_recipiente(recipiente) or "no encontrado en stock_a_granel",
+        }
+
+    def _insumos_de_lote_producto(lote_producto_id):
+        """Movimientos de envases/insumos descontados por este envasado
+        (vinculados via observaciones = lote_producto_id)."""
+        if movimientos_insumos.empty or "observaciones" not in movimientos_insumos.columns:
+            return []
+        rel = movimientos_insumos[
+            movimientos_insumos["observaciones"].astype(str) == str(lote_producto_id)
+        ]
+        if rel.empty:
+            return []
+        col_item = next(
+            (c for c in ("item_id", "envase_insumo_id", "insumo_id", "articulo_id")
+             if c in rel.columns),
+            None,
+        )
+        col_cant = next((c for c in ("cantidad", "unidades") if c in rel.columns), None)
+        col_mov = next((c for c in ("tipo_movimiento", "tipo", "movimiento") if c in rel.columns), None)
+        lista = []
+        for _, mfila in rel.iterrows():
+            item = str(mfila.get(col_item, "") or "") if col_item else ""
+            nombre, tipo_item = item, ""
+            if not catalogo_insumos.empty and item:
+                col_cat_id = next(
+                    (c for c in (col_item, "item_id", "envase_insumo_id", "insumo_id")
+                     if c and c in catalogo_insumos.columns),
+                    None,
+                )
+                if col_cat_id:
+                    fci = catalogo_insumos[catalogo_insumos[col_cat_id].astype(str) == item]
+                    if not fci.empty:
+                        nombre = str(fci.iloc[0].get("nombre", item) or item)
+                        col_cat_tipo = next(
+                            (c for c in ("tipo", "categoria") if c in catalogo_insumos.columns),
+                            None,
+                        )
+                        if col_cat_tipo:
+                            tipo_item = str(fci.iloc[0].get(col_cat_tipo, "") or "")
+            lista.append({
+                "nombre": nombre,
+                "tipo": tipo_item,
+                "cantidad": float(pd.to_numeric(mfila.get(col_cant, 0), errors="coerce") or 0) if col_cant else 0.0,
+                "movimiento": str(mfila.get(col_mov, "") or "") if col_mov else "",
+            })
+        return lista
 
     def _nombre_turno(turno_id):
         if turnos.empty or not turno_id:
@@ -96,22 +192,40 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
         ft = turnos[turnos["turno_id"] == turno_id]
         return ft.iloc[0]["nombre"] if not ft.empty else str(turno_id)
 
-    def recepciones_de(lote_semi_id):
-        if consumo_mp.empty:
+    def recepciones_de(lote_semi_id, _visitados=None):
+        # _visitados evita un bucle infinito si los datos tuvieran una cadena
+        # circular de retornos (no deberia pasar, pero mejor no colgarse)
+        if _visitados is None:
+            _visitados = set()
+        if lote_semi_id in _visitados:
             return []
-        filas = consumo_mp[consumo_mp["lote_semielaborado_id"] == lote_semi_id]
-        recs = list(filas["recepcion_id"].unique())
-        if recs:
-            return recs
-        # puede ser un lote "hermano" (co-producto clara/yema) sin consumo propio
+        _visitados.add(lote_semi_id)
+
+        if not consumo_mp.empty:
+            filas = consumo_mp[consumo_mp["lote_semielaborado_id"] == lote_semi_id]
+            recs = list(filas["recepcion_id"].unique())
+            if recs:
+                return recs
         if produccion.empty:
             return []
         fila_p = produccion[produccion["lote_semielaborado_id"] == lote_semi_id]
         if fila_p.empty:
             return []
-        hermano = _extraer_lote_hermano(fila_p.iloc[0].get("observaciones", ""))
+        observaciones = fila_p.iloc[0].get("observaciones", "")
+        # caso 1: lote "hermano" (co-producto clara/yema) sin consumo propio
+        hermano = _extraer_lote_hermano(observaciones)
         if hermano and not consumo_mp.empty:
-            return list(consumo_mp[consumo_mp["lote_semielaborado_id"] == hermano]["recepcion_id"].unique())
+            recs = list(consumo_mp[consumo_mp["lote_semielaborado_id"] == hermano]["recepcion_id"].unique())
+            if recs:
+                return recs
+        # caso 2: lote creado por retorno desde recipiente a granel -- saltar
+        # al lote de origen del recipiente (recursivo, por si el origen es a
+        # su vez otro retorno o un co-producto)
+        recipiente = _extraer_recipiente_retorno(observaciones)
+        if recipiente:
+            lote_origen = _lote_origen_de_recipiente(recipiente)
+            if lote_origen and lote_origen != lote_semi_id:
+                return recepciones_de(lote_origen, _visitados)
         return []
 
     # 1. determinar la(s) recepcion(es) raiz segun donde empezo la consulta
@@ -164,6 +278,26 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 hermano = _extraer_lote_hermano(fp.iloc[0].get("observaciones", ""))
                 if hermano:
                     lotes_semi.add(hermano)
+
+        # agregar lotes creados por "Retorno desde recipiente GR-..." cuyo
+        # lote de origen (via stock_a_granel.lote_origen) pertenece a esta
+        # recepcion. Se itera hasta punto fijo por si hay retornos encadenados
+        # (lote A -> granel -> lote B -> granel -> lote C).
+        if not produccion.empty:
+            cambio = True
+            while cambio:
+                cambio = False
+                for _, rowp in produccion.iterrows():
+                    lid_ret = rowp["lote_semielaborado_id"]
+                    if lid_ret in lotes_semi:
+                        continue
+                    recipiente = _extraer_recipiente_retorno(rowp.get("observaciones", ""))
+                    if not recipiente:
+                        continue
+                    lote_origen = _lote_origen_de_recipiente(recipiente)
+                    if lote_origen and lote_origen in lotes_semi:
+                        lotes_semi.add(lid_ret)
+                        cambio = True
 
         # Si la consulta es por un lote específico, mostrar solo ese lote y su
         # co-producto directo — no todos los lotes de la misma recepción.
@@ -260,6 +394,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 "turno": _nombre_turno(fp.get("turno", "")),
                 "cubetas_de_este_lote": cubetas_de_este_lote,
                 "lote_hermano": lote_hermano,
+                "origen_granel": _origen_granel_de(lid),
                 "kg_real": _val(fp, "kg_real", 0),
                 "costo_unitario_kg": _val(fp, "costo_unitario_kg", 0),
                 "personal": personal_lista,
@@ -289,6 +424,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                     "unidades": unidades_reales,
                     "kg_nominal": kg_nominal,
                     "kg_empacado": unidades_reales * kg_nominal,
+                    "insumos": _insumos_de_lote_producto(fpast["lote_producto_id"]),
                     "entradas_cf": [],
                 }
 

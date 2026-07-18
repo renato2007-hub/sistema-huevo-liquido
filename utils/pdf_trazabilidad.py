@@ -115,7 +115,13 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                 ESTILOS["Heading3"],
             ))
             cubetas_mostrar = nodo_prod["cubetas_de_este_lote"]
-            if isinstance(cubetas_mostrar, (int, float)) and cubetas_mostrar == 0 and nodo_prod.get("lote_hermano"):
+            if nodo_prod.get("origen_granel"):
+                og = nodo_prod["origen_granel"]
+                cubetas_texto = (
+                    f"Sin consumo directo — retorno desde recipiente a granel "
+                    f"{og['recipiente']} (lote de origen: {og['lote_origen']})"
+                )
+            elif isinstance(cubetas_mostrar, (int, float)) and cubetas_mostrar == 0 and nodo_prod.get("lote_hermano"):
                 cubetas_texto = f"Comparte el consumo de huevo con el lote {nodo_prod['lote_hermano']} (mismo quiebre)"
             else:
                 cubetas_texto = f"{cubetas_mostrar:.2f}" if isinstance(cubetas_mostrar, float) else cubetas_mostrar
@@ -198,6 +204,15 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                 ]))
                 el.append(KeepTogether(bloque2))
                 el.append(Spacer(1, 0.15 * cm))
+
+                insumos = nodo_past.get("insumos", [])
+                if insumos:
+                    el.append(Paragraph("Envases e insumos usados en este envasado:", ESTILOS["Normal"]))
+                    el.append(_tabla_encabezado(
+                        [[i["nombre"], i.get("tipo") or "—", f"{i['cantidad']:g}"] for i in insumos],
+                        ["Insumo / envase", "Tipo", "Cantidad"],
+                    ))
+                    el.append(Spacer(1, 0.15 * cm))
 
                 for nodo_entrada in nodo_past["entradas_cf"]:
                     el.append(Paragraph(f"Ingreso a cuarto frío: {nodo_entrada['entrada_id']} ({nodo_entrada['fecha']})", ESTILOS["Normal"]))
