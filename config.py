@@ -10,7 +10,7 @@ SHEET_SCHEMAS = {
     # ---------- Catalogos ----------
     "usuarios": ["username", "password_hash", "nombre", "rol", "activo"],
     "galpones": ["galpon_id", "nombre", "ubicacion", "activo"],
-    "proveedores": ["proveedor_id", "nombre", "contacto", "calificacion", "activo"],
+    "proveedores": ["proveedor_id", "nombre", "contacto", "calificacion", "activo", "prefijo", "tipo", "ubicacion"],
     "categorias_huevo": [
         "categoria_id", "nombre", "kg_promedio_cubeta",
         "pct_clara", "pct_yema", "pct_cascara", "notas",
@@ -91,7 +91,7 @@ SHEET_SCHEMAS = {
     "recepciones_mp": [
         "recepcion_id", "fecha", "origen_tipo", "origen_id", "categoria_id",
         "cubetas", "costo_cubeta", "costo_total", "cubetas_saldo",
-        "fecha_vencimiento", "usuario", "observaciones",
+        "fecha_vencimiento", "usuario", "observaciones", "estado",
     ],
 
     # ---------- Bodega de envases e insumos ----------
