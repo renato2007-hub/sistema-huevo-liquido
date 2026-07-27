@@ -26,6 +26,14 @@ def _valor_default_bool(valor_actual):
     return str(valor_actual).strip().upper() not in ("FALSE", "0", "NO", "")
 
 
+import re
+
+
+def _prefijo_valido(prefijo):
+    """Prefijo de proveedor: 2-4 letras mayusculas (sin numeros ni simbolos)."""
+    return bool(re.fullmatch(r"[A-Z]{2,4}", str(prefijo or "").strip()))
+
+
 def _seccion_simple(db, nombre_sheet, titulo, campos):
     """campos: lista de (nombre_columna, tipo) donde tipo es 'texto', 'numero',
     'bool', 'fecha', o una lista/tupla de opciones fijas (selectbox).
@@ -61,7 +69,20 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
                     f"Ya existe un registro con {id_col} = '{valores[id_col]}'. "
                     f"Usa la pestaña 'Editar / eliminar' si quieres modificarlo."
                 )
+            elif nombre_sheet == "proveedores" and not _prefijo_valido(valores.get("prefijo")):
+                st.error(
+                    "El prefijo debe ser 2-4 letras MAYÚSCULAS (ej. PC, PSU, AVI). "
+                    "Sin números ni espacios."
+                )
+            elif nombre_sheet == "proveedores" and not df.empty and "prefijo" in df.columns \
+                    and str(valores["prefijo"]).strip().upper() in df["prefijo"].astype(str).str.upper().values:
+                st.error(
+                    f"Ya existe un proveedor con prefijo '{valores['prefijo']}'. "
+                    f"Cada prefijo debe ser único porque genera los códigos de lote."
+                )
             else:
+                if nombre_sheet == "proveedores":
+                    valores["prefijo"] = str(valores["prefijo"]).strip().upper()
                 db.append_row(nombre_sheet, valores)
                 st.success("Registro agregado.")
                 st.rerun()
@@ -127,6 +148,22 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
             eliminar = col_b.form_submit_button("🗑️ Eliminar")
 
         if guardar_cambios:
+            if nombre_sheet == "proveedores":
+                if not _prefijo_valido(nuevos_valores.get("prefijo")):
+                    st.error(
+                        "El prefijo debe ser 2-4 letras MAYÚSCULAS (ej. PC, PSU, AVI). "
+                        "Sin números ni espacios."
+                    )
+                    return
+                nuevo_pref = str(nuevos_valores["prefijo"]).strip().upper()
+                otros = df[df[id_col].astype(str) != str(id_seleccionado)]
+                if "prefijo" in otros.columns and nuevo_pref in otros["prefijo"].astype(str).str.upper().values:
+                    st.error(
+                        f"Ya existe otro proveedor con prefijo '{nuevo_pref}'. "
+                        f"Cada prefijo debe ser único."
+                    )
+                    return
+                nuevos_valores["prefijo"] = nuevo_pref
             db.update_row(nombre_sheet, id_col, id_seleccionado, nuevos_valores)
             st.success(f"'{id_seleccionado}' actualizado.")
             st.rerun()
@@ -156,19 +193,35 @@ def render(db, username, rol):
     seccion = st.selectbox(
         "Catálogo a administrar",
         [
-            "Galpones", "Proveedores", "Categorías de huevo (rendimientos)",
+            "Proveedores", "Galpones (legado)", "Categorías de huevo (rendimientos)",
             "Insumos", "Materiales de limpieza", "Presentaciones de envase", "Tapas (PET)", "Etiquetas", "Cartones", "Liners de aluminio", "Personal", "Clientes",
             "Vehículos", "Áreas de limpieza", "Turnos", "Feriados", "Usuarios",
         ],
     )
 
-    if seccion == "Galpones":
-        _seccion_simple(db, "galpones", "Galpones propios", [
+    if seccion == "Galpones (legado)":
+        st.caption(
+            "⚠️ **Los galpones propios (PC y PSU) ahora se manejan como proveedores "
+            "internos** — ve a 'Proveedores' para administrarlos. Esta sección se "
+            "conserva solo como referencia histórica; no crees galpones nuevos aquí."
+        )
+        _seccion_simple(db, "galpones", "Galpones propios (legado)", [
             ("galpon_id", "texto"), ("nombre", "texto"), ("ubicacion", "texto"), ("activo", "bool"),
         ])
     elif seccion == "Proveedores":
-        _seccion_simple(db, "proveedores", "Proveedores calificados", [
-            ("proveedor_id", "texto"), ("nombre", "texto"), ("contacto", "texto"),
+        st.caption(
+            "Los proveedores **internos** son las plantas propias de Ovomas "
+            "(Planta Central=PC, Planta Sucursal=PSU). Los **externos** son "
+            "avícolas u otros suministradores. Cada proveedor tiene un **prefijo** "
+            "(2-4 letras) que se usa para generar el código de lote al recibir "
+            "cubetas — por ejemplo, proveedor con prefijo 'PC' que entrega el "
+            "27/07/26 genera el lote **PC270726**. El prefijo debe ser único."
+        )
+        _seccion_simple(db, "proveedores", "Proveedores (internos y externos)", [
+            ("proveedor_id", "texto"), ("nombre", "texto"),
+            ("prefijo", "texto"),
+            ("tipo", ["interno", "externo"]),
+            ("ubicacion", "texto"), ("contacto", "texto"),
             ("calificacion", "texto"), ("activo", "bool"),
         ])
     elif seccion == "Categorías de huevo (rendimientos)":
