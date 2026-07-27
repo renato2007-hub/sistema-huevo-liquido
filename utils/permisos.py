@@ -33,7 +33,7 @@ MODULOS_PERMITIDOS = {
     "admin": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
         "Solicitud MP e Insumos", "Recepción de pedidos",
-        "Plan de producción", "Personal y turnos", "Catálogos y configuración",
+        "Plan de producción", "Personal y turnos", "Catálogos y configuración", "🔧 Migración MP",
     },
     "gerencia": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",

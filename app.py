@@ -148,6 +148,7 @@ if not es_despachador(rol):
     _categoria("📊&nbsp;&nbsp;GESTIÓN", "#1565C0")
     _boton_modulo("Dashboard", "📊")
     _boton_modulo("Catálogos y configuración", "⚙️")
+    _boton_modulo("🔧 Migración MP", "🔧")
 
 st.sidebar.markdown(
     """
@@ -238,5 +239,7 @@ elif modulo == "Solicitud MP e Insumos":
     _mod("solicitud_compra").render(db, username, rol)
 elif modulo == "Recepción de pedidos":
     _mod("pedidos").render(db, username, rol)
+elif modulo == "🔧 Migración MP":
+    _mod("migracion_mp").render(db, username, rol)
 elif modulo == "Catálogos y configuración":
     _mod("catalogos").render(db, username, rol)
