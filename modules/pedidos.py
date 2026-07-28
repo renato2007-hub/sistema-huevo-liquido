@@ -12,6 +12,7 @@ import datetime
 import streamlit as st
 import pandas as pd
 from utils.permisos import puede_editar_pedidos
+from utils.bitacora import log_cambio, log_cambios_multiples
 
 MEDIOS_RECEPCION = ["Correo", "WhatsApp", "Mensaje de texto", "Llamada", "Otro"]
 
@@ -432,6 +433,12 @@ def render(db, username, rol):
                                 "estado": "cancelado",
                                 "observaciones": (obs_prev + " | " + marca).strip(" |"),
                             })
+                            log_cambio(
+                                db, username,
+                                modulo="Recepcion de pedidos", tabla="pedidos",
+                                id_registro=pedido_can, accion="cancelacion",
+                                motivo=motivo_can.strip(),
+                            )
                             st.success(f"❌ Pedido {pedido_can} cancelado.")
                             st.rerun()
 
@@ -519,6 +526,26 @@ def render(db, username, rol):
                         "producido": producido_e,
                         "observaciones": observaciones_e,
                     })
+                    log_cambios_multiples(
+                        db, username,
+                        modulo="Recepcion de pedidos", tabla="pedidos",
+                        id_registro=pedido_sel,
+                        cambios={
+                            "cliente_id": (fila["cliente_id"], cliente_id_e),
+                            "medio_recepcion": (fila["medio_recepcion"], medio_e),
+                            "ciudad": (fila["ciudad"], ciudad_e),
+                            "pedido_cliente_ref": (fila.get("pedido_cliente_ref", ""), pedido_cliente_ref_e),
+                            "fecha_pedido": (fila["fecha_pedido"], fecha_pedido_e.isoformat()),
+                            "tipo_producto": (fila["tipo_producto"], tipo_producto_e),
+                            "presentacion_id": (fila["presentacion_id"], presentacion_id_e),
+                            "unidades_solicitadas": (fila.get("unidades_solicitadas", 0), unidades_e),
+                            "cantidad_kg": (fila["cantidad_kg"], cantidad_kg_e),
+                            "fecha_produccion": (fila.get("fecha_produccion", ""), fecha_produccion_e.isoformat()),
+                            "fecha_entrega": (fila["fecha_entrega"], fecha_entrega_e.isoformat()),
+                            "producido": (bool(fila["producido_bool"]), producido_e),
+                        },
+                        motivo="Edicion desde formulario",
+                    )
                     st.success(f"Pedido {pedido_sel} actualizado.")
                     st.rerun()
 
@@ -530,5 +557,11 @@ def render(db, username, rol):
                         st.error("Marca la casilla de confirmación antes de eliminar.")
                     else:
                         db.delete_row("pedidos", "pedido_id", pedido_sel)
+                        log_cambio(
+                            db, username,
+                            modulo="Recepcion de pedidos", tabla="pedidos",
+                            id_registro=pedido_sel, accion="eliminacion",
+                            motivo="Eliminado desde formulario editar",
+                        )
                         st.success(f"Pedido {pedido_sel} eliminado.")
                         st.rerun()

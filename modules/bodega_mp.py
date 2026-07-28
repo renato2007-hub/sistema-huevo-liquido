@@ -16,6 +16,7 @@ import re
 import streamlit as st
 import pandas as pd
 from utils.permisos import ve_costos
+from utils.bitacora import log_cambio, log_cambios_multiples
 
 
 CAUSAS_MERMA_HUEVO = ["Caída", "Rotura en bodega", "Daño de transporte/proveedor", "Otro"]
@@ -502,6 +503,17 @@ def render(db, username, rol):
                                 "costo_total": round(nuevas_cub * nuevo_costo, 2),
                                 "observaciones": (obs_prev + " | " + marca_edit).strip(" |"),
                             })
+                            log_cambios_multiples(
+                                db, username,
+                                modulo="Bodega de materia prima", tabla="recepciones_mp",
+                                id_registro=rec_sel,
+                                cambios={
+                                    "cubetas": (float(fila_r["cubetas"]), nuevas_cub),
+                                    "cubetas_saldo": (float(fila_r["cubetas_saldo"]), nuevo_saldo),
+                                    "costo_cubeta": (float(fila_r["costo_cubeta"]), nuevo_costo),
+                                },
+                                motivo=motivo.strip(),
+                            )
                             st.success(f"✅ Recepción {rec_sel} corregida.")
                             st.rerun()
 
@@ -543,6 +555,12 @@ def render(db, username, rol):
                                     "estado": "eliminado",
                                     "observaciones": (obs_prev + " | " + marca_elim).strip(" |"),
                                 })
+                                log_cambio(
+                                    db, username,
+                                    modulo="Bodega de materia prima", tabla="recepciones_mp",
+                                    id_registro=rec_sel, accion="eliminacion",
+                                    motivo=motivo_elim.strip(),
+                                )
                                 st.success(
                                     f"✅ Recepción {rec_sel} eliminada (borrado lógico). "
                                     f"Ya no aparece en el inventario."

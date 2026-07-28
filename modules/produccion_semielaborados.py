@@ -9,6 +9,7 @@ import pandas as pd
 from utils.costing import costo_ponderado, sugerir_codigo_lote
 from utils.horas_trabajo import calcular_horas_sesion
 from utils.permisos import ve_costos, es_admin
+from utils.bitacora import log_cambio
 
 
 def render(db, username, rol):
@@ -1096,6 +1097,14 @@ def render(db, username, rol):
                         # revertir cascara (subproducto) generada por este lote
                         db.delete_rows_where("produccion_cascara", "lote_semielaborado_origen", lote_sel)
                         db.delete_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel)
+
+                        log_cambio(
+                            db, username,
+                            modulo="Produccion de semielaborados",
+                            tabla="produccion_semielaborados",
+                            id_registro=lote_sel, accion="eliminacion",
+                            motivo="Eliminado con reversion completa (cubetas, insumos, personal, cascara)",
+                        )
 
                         st.success(
                             f"Producción {lote_sel} eliminada y todo revertido — ya puedes "
