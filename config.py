@@ -130,7 +130,11 @@ SHEET_SCHEMAS = {
         "costo_huevo", "costo_insumos", "costo_mano_obra", "costo_total",
         "costo_unitario_kg", "kg_saldo", "balance_masa_pct", "turno", "usuario", "observaciones", "tanque_id",
     ],
-
+    # ---------- Cascara (subproducto para planta de biomateriales) ----------
+    "produccion_cascara": [
+        "cascara_id", "fecha", "lote_semielaborado_origen",
+        "kg", "kg_saldo", "estado", "usuario", "observaciones",
+    ],
     # ---------- Pasteurizacion y envasado ----------
     "pasteurizacion_envasado": [
         "lote_producto_id", "fecha", "lote_semielaborado_id", "presentacion_id",

@@ -6,7 +6,7 @@ y el control teorico vs. real que sostiene el costeo de toda la cadena.
 import datetime
 import streamlit as st
 import pandas as pd
-from utils.costing import sugerir_lotes_fefo, costo_ponderado, rendimiento_teorico, sugerir_codigo_lote
+from utils.costing import costo_ponderado, sugerir_codigo_lote
 from utils.horas_trabajo import calcular_horas_sesion
 from utils.permisos import ve_costos, es_admin
 
@@ -178,149 +178,225 @@ def render(db, username, rol):
             elif codigo_lote in ids_este_turno:
                 st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno — si quieres continuar en otro turno, cambia el turno arriba.")
 
-        recepciones_con_saldo = recepciones[
-            pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0) > 0
-        ] if not recepciones.empty else pd.DataFrame()
+        # Solo recepciones activas (nueva columna 'estado' en la parte 1)
+        if "estado" in recepciones.columns:
+            recepciones_activas = recepciones[
+                recepciones["estado"].fillna("activo").astype(str).str.strip().str.lower().isin(["", "activo"])
+            ]
+        else:
+            recepciones_activas = recepciones
+
+        recepciones_con_saldo = recepciones_activas[
+            pd.to_numeric(recepciones_activas["cubetas_saldo"], errors="coerce").fillna(0) > 0
+        ] if not recepciones_activas.empty else pd.DataFrame()
 
         if recepciones_con_saldo.empty:
             st.warning("No hay huevo disponible en bodega de materia prima para producir.")
             return
 
-        if not categorias.empty:
-            mapa_cat_nombre = dict(zip(categorias["categoria_id"], categorias["nombre"]))
-        else:
-            mapa_cat_nombre = {}
-
-        # Resumen de disponibilidad en bodega (informativo, sin selector de categoría)
-        recepciones_con_saldo["cubetas_saldo_num"] = pd.to_numeric(recepciones_con_saldo["cubetas_saldo"], errors="coerce").fillna(0)
+        # Total disponible en bodega — el operador NO elige de qué lotes,
+        # el sistema descuenta FIFO estricto por fecha de recepcion al guardar.
+        recepciones_con_saldo = recepciones_con_saldo.copy()
+        recepciones_con_saldo["cubetas_saldo_num"] = pd.to_numeric(
+            recepciones_con_saldo["cubetas_saldo"], errors="coerce"
+        ).fillna(0)
         total_cubetas_bodega = int(recepciones_con_saldo["cubetas_saldo_num"].sum())
-        detalle_lotes = " · ".join(
-            f"{r['recepcion_id']} ({mapa_cat_nombre.get(r['categoria_id'], r['categoria_id'])}, {int(r['cubetas_saldo_num'])} cub.)"
-            for _, r in recepciones_con_saldo.sort_values("fecha_vencimiento").iterrows()
-        )
-        st.info(f"📦 **{total_cubetas_bodega} cubetas disponibles** en bodega: {detalle_lotes}")
-
-        cubetas_necesarias = st.number_input("Cubetas a procesar (total)", min_value=1, step=1)
-
-        # Tabla con selector de lote por fila — el usuario elige qué lotes mezclar
-        opciones_lote = [
-            f"{r['recepcion_id']} — {mapa_cat_nombre.get(r['categoria_id'], r['categoria_id'])} — saldo: {int(r['cubetas_saldo_num'])} cub."
-            for _, r in recepciones_con_saldo.sort_values("fecha_vencimiento").iterrows()
-        ]
-        mapa_opcion_a_recepcion = {
-            f"{r['recepcion_id']} — {mapa_cat_nombre.get(r['categoria_id'], r['categoria_id'])} — saldo: {int(r['cubetas_saldo_num'])} cub.": r["recepcion_id"]
-            for _, r in recepciones_con_saldo.iterrows()
-        }
-        mapa_recepcion_a_costo = dict(zip(recepciones_con_saldo["recepcion_id"], pd.to_numeric(recepciones_con_saldo["costo_cubeta"], errors="coerce").fillna(0)))
-        mapa_recepcion_a_categoria = dict(zip(recepciones_con_saldo["recepcion_id"], recepciones_con_saldo["categoria_id"]))
-
-        # Pre-poblar: si hay plan de MP para esta fecha, usarlo; sino FEFO normal
-        plan_mp_df = db.get_df("plan_mp_asignado")
-        plan_fecha = pd.DataFrame()
-        if not plan_mp_df.empty:
-            plan_fecha = plan_mp_df[plan_mp_df["fecha"].astype(str) == fecha.isoformat()].copy()
-            if not plan_fecha.empty:
-                plan_fecha["cubetas_asignadas"] = pd.to_numeric(plan_fecha["cubetas_asignadas"], errors="coerce").fillna(0)
-                plan_fecha = plan_fecha[plan_fecha["cubetas_asignadas"] > 0]
-
-        if not plan_fecha.empty:
-            st.info(f"📅 Plan de producción del día: cargando lotes asignados por el jefe de planta.")
-            filas_sugeridas = []
-            for _, prow in plan_fecha.iterrows():
-                rec_id = prow["recepcion_id"]
-                cub    = float(prow["cubetas_asignadas"])
-                rec_match = recepciones_con_saldo[recepciones_con_saldo["recepcion_id"] == rec_id]
-                if rec_match.empty:
-                    continue
-                saldo = float(rec_match.iloc[0]["cubetas_saldo_num"])
-                cat   = rec_match.iloc[0]["categoria_id"]
-                opcion = f"{rec_id} — {mapa_cat_nombre.get(cat, cat)} — saldo: {int(saldo)} cub."
-                filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": min(cub, saldo)})
-        else:
-            # FEFO normal por vencimiento
-            recepciones_sorted = recepciones_con_saldo.sort_values("fecha_vencimiento")
-            filas_sugeridas = []
-            restante = cubetas_necesarias
-            for _, lote in recepciones_sorted.iterrows():
-                if restante <= 0:
-                    break
-                saldo = float(lote["cubetas_saldo_num"])
-                tomar = min(saldo, restante)
-                opcion = f"{lote['recepcion_id']} — {mapa_cat_nombre.get(lote['categoria_id'], lote['categoria_id'])} — saldo: {int(saldo)} cub."
-                filas_sugeridas.append({"lote": opcion, "cubetas_a_tomar": tomar})
-                restante -= tomar
-
-        st.markdown("**Lotes a usar — elige el lote y la cantidad de cubetas de cada uno**")
-        st.caption("Puedes mezclar lotes de distintas categorías. Agrega o quita filas según necesites.")
-        df_lotes_input = st.data_editor(
-            pd.DataFrame(filas_sugeridas) if filas_sugeridas else pd.DataFrame({"lote": pd.Series(dtype="object"), "cubetas_a_tomar": pd.Series(dtype="float")}),
-            num_rows="dynamic", use_container_width=True,
-            column_config={
-                "lote": st.column_config.SelectboxColumn("Lote de MP", options=opciones_lote, width="large"),
-                "cubetas_a_tomar": st.column_config.NumberColumn("Cubetas a tomar", min_value=0, step=1),
-            },
-            key=f"editor_lotes_libre_{int(cubetas_necesarias)}",
+        st.info(
+            f"📦 **{total_cubetas_bodega} cubetas disponibles** en bodega "
+            f"(la bodega funciona como un pool — se descontarán FIFO por fecha "
+            f"de recepción cuando guardes)."
         )
 
-        # Construir la tabla interna (recepcion_id + cantidad + costo) a partir de lo que eligió el usuario
-        filas_validas = []
-        for _, fila in df_lotes_input.iterrows():
-            opcion_sel = fila.get("lote", "")
-            cant = float(fila.get("cubetas_a_tomar") or 0)
-            if not opcion_sel or cant <= 0:
-                continue
-            rec_id = mapa_opcion_a_recepcion.get(opcion_sel, "")
-            if not rec_id:
-                continue
-            filas_validas.append({
-                "recepcion_id": rec_id,
-                "cantidad_a_tomar": cant,
-                "costo_cubeta": mapa_recepcion_a_costo.get(rec_id, 0),
-            })
-        df_lotes_editado = pd.DataFrame(filas_validas) if filas_validas else pd.DataFrame(columns=["recepcion_id", "cantidad_a_tomar", "costo_cubeta"])
-
-        # categoria_id: usar la del primer lote seleccionado (para rendimientos teóricos)
-        categoria_id = ""
-        if filas_validas:
-            categoria_id = mapa_recepcion_a_categoria.get(filas_validas[0]["recepcion_id"], "")
-        if not categoria_id and not recepciones_con_saldo.empty:
-            recepciones_sorted_tmp = recepciones_con_saldo.sort_values("fecha_vencimiento")
-            categoria_id = recepciones_sorted_tmp.iloc[0]["categoria_id"] if not recepciones_sorted_tmp.empty else ""
-
-        total_tomado = float(pd.to_numeric(df_lotes_editado["cantidad_a_tomar"], errors="coerce").fillna(0).sum()) if not df_lotes_editado.empty else 0.0
-        st.info(f"📦 Vas a consumir **{total_tomado:.0f} cubetas** de bodega de materia prima — revisa que sea correcto antes de guardar.")
-        if total_tomado < cubetas_necesarias:
-            st.warning(
-                f"Las cantidades de los lotes suman {total_tomado:.0f} cubetas, "
-                f"pero se necesitan {cubetas_necesarias}. Ajusta antes de guardar."
+        cubetas_necesarias = st.number_input(
+            "Cubetas a procesar (total)", min_value=1, step=1, key="prod_cubetas",
+        )
+        if cubetas_necesarias > total_cubetas_bodega:
+            st.error(
+                f"⚠️ Pediste {cubetas_necesarias} cubetas pero en bodega solo hay "
+                f"{total_cubetas_bodega}. Ajusta la cantidad."
             )
 
-        st.caption("ℹ️ El registro de personal y horas se hace en **👥 Personal y turnos** — se enlaza por fecha y turno.")
+        # ================== FACTORES DE RENDIMIENTO EDITABLES ==================
+        # Defaults por producto (kg de liquido por cubeta y gramos de cascara
+        # por huevo). El operador los ajusta segun el tamano/lote del huevo.
+        DEFAULTS_RENDIMIENTO = {
+            "Huevo entero": 1.5,
+            "Clara":        1.05,
+            "Yema":         0.54,
+        }
+        DEFAULT_GR_CASCARA = 7.0
+        HUEVOS_POR_CUBETA = 30  # fijo
+
+        st.markdown("**Factores de rendimiento** — ajústalos según el tamaño del huevo recibido.")
+        st.caption(
+            "El *peso del huevo estimado* de abajo te sirve de referencia — "
+            "si te sale muy distinto al peso real que sabes, revisa el rendimiento "
+            "o los gramos de cáscara."
+        )
+
+        if tipo_producto == "Huevo entero":
+            col_f1, col_f2 = st.columns(2)
+            factor_liquido = col_f1.number_input(
+                "Rendimiento líquido (kg/cubeta)", min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Huevo entero"], key="fac_liq_he",
+            )
+            gr_cascara = col_f2.number_input(
+                "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
+                value=DEFAULT_GR_CASCARA, key="fac_cas_he",
+            )
+            # peso huevo = (kg_liquido * 1000 / 30) + gr_cascara
+            peso_huevo_g = (factor_liquido * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
+            factor_clara = 0.0
+            factor_yema = 0.0
+            factor_liquido_total = factor_liquido
+        elif tipo_producto == "Clara":
+            col_f1, col_f2, col_f3 = st.columns(3)
+            factor_liquido = col_f1.number_input(
+                "Rendimiento clara (kg/cubeta)", min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Clara"], key="fac_liq_cl",
+            )
+            factor_yema_ref = col_f2.number_input(
+                "Rendimiento yema co-producto (kg/cubeta) — solo referencia",
+                min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Yema"], key="fac_yema_ref_cl",
+                help="No se guarda — solo se usa para calcular el peso del huevo estimado.",
+            )
+            gr_cascara = col_f3.number_input(
+                "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
+                value=DEFAULT_GR_CASCARA, key="fac_cas_cl",
+            )
+            peso_huevo_g = ((factor_liquido + factor_yema_ref) * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
+            factor_clara = factor_liquido
+            factor_yema = 0.0
+            factor_liquido_total = factor_liquido
+        elif tipo_producto == "Yema":
+            col_f1, col_f2, col_f3 = st.columns(3)
+            factor_liquido = col_f1.number_input(
+                "Rendimiento yema (kg/cubeta)", min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Yema"], key="fac_liq_ye",
+            )
+            factor_clara_ref = col_f2.number_input(
+                "Rendimiento clara co-producto (kg/cubeta) — solo referencia",
+                min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Clara"], key="fac_clara_ref_ye",
+                help="No se guarda — solo se usa para calcular el peso del huevo estimado.",
+            )
+            gr_cascara = col_f3.number_input(
+                "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
+                value=DEFAULT_GR_CASCARA, key="fac_cas_ye",
+            )
+            peso_huevo_g = ((factor_liquido + factor_clara_ref) * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
+            factor_clara = 0.0
+            factor_yema = factor_liquido
+            factor_liquido_total = factor_liquido
+        else:  # Clara y yema
+            col_f1, col_f2, col_f3 = st.columns(3)
+            factor_clara = col_f1.number_input(
+                "Rendimiento clara (kg/cubeta)", min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Clara"], key="fac_cl_cy",
+            )
+            factor_yema = col_f2.number_input(
+                "Rendimiento yema (kg/cubeta)", min_value=0.0, step=0.01,
+                value=DEFAULTS_RENDIMIENTO["Yema"], key="fac_ye_cy",
+            )
+            gr_cascara = col_f3.number_input(
+                "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
+                value=DEFAULT_GR_CASCARA, key="fac_cas_cy",
+            )
+            peso_huevo_g = ((factor_clara + factor_yema) * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
+            factor_liquido_total = factor_clara + factor_yema
+            factor_liquido = factor_liquido_total
+
+        # Indicador visual del peso del huevo estimado (sanity check)
+        col_p1, col_p2, col_p3 = st.columns(3)
+        col_p1.metric("🥚 Peso del huevo estimado", f"{peso_huevo_g:.1f} g")
+        col_p2.metric("Kg líquido estimado", f"{cubetas_necesarias * factor_liquido_total:.1f} kg")
+        col_p3.metric(
+            "Kg cáscara estimada",
+            f"{cubetas_necesarias * HUEVOS_POR_CUBETA * gr_cascara / 1000:.1f} kg",
+        )
+
+        # Aviso si el peso del huevo estimado se sale de un rango razonable (45-75 g)
+        if peso_huevo_g > 0 and (peso_huevo_g < 45 or peso_huevo_g > 75):
+            st.warning(
+                f"⚠️ El peso del huevo estimado ({peso_huevo_g:.1f} g) está fuera del "
+                f"rango típico (45-75 g). Revisa los factores — algo puede estar mal."
+            )
+
+        st.caption(
+            "ℹ️ El registro de personal y horas se hace en **👥 Personal y turnos** — "
+            "se enlaza por fecha y turno."
+        )
         filas_personal_horas = []
         costo_mano_obra_total = 0.0
         agua_litros = 0.0
 
-        if not categorias.empty and categoria_id in categorias["categoria_id"].values:
-            categoria_row = categorias.set_index("categoria_id").loc[categoria_id]
-            teorico = rendimiento_teorico(total_tomado, categoria_row)
-        else:
-            teorico = {"kg_teorico_bruto": total_tomado * 1.724, "kg_liquido_teorico": total_tomado * 1.43,
-                       "clara_teorica_kg": 0, "yema_teorica_kg": 0, "cascara_teorica_kg": 0}
-            st.caption("ℹ️ Esta categoría no tiene rendimientos configurados — los valores teóricos son estimados.")
-        st.markdown("**Valores teóricos calculados** (según cubetas y categoría seleccionadas)")
+        # ================== VALORES TEORICOS (basados en factores) ==================
+        # Reemplaza el calculo por categoria: ahora se basa en los factores editables.
+        # Se mantiene el diccionario 'teorico' para compatibilidad con el resto del codigo.
+        cubetas_para_teorico = float(cubetas_necesarias)
+        kg_liquido_teorico = cubetas_para_teorico * factor_liquido_total
+        kg_cascara_teorico = cubetas_para_teorico * HUEVOS_POR_CUBETA * gr_cascara / 1000
+        teorico = {
+            "kg_teorico_bruto":    kg_liquido_teorico + kg_cascara_teorico,
+            "kg_liquido_teorico":  kg_liquido_teorico,
+            "clara_teorica_kg":    cubetas_para_teorico * factor_clara,
+            "yema_teorica_kg":     cubetas_para_teorico * factor_yema,
+            "cascara_teorica_kg":  kg_cascara_teorico,
+        }
+        # categoria_id se deja vacio para producciones nuevas — la trazabilidad
+        # ahora va por lote y proveedor, no por categoria del huevo.
+        categoria_id = ""
+
+        st.markdown("**Valores teóricos calculados** (según cubetas y factores)")
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Bruto teórico (kg)", f"{teorico['kg_teorico_bruto']:.2f}", help="Peso del huevo entero, con cáscara")
-        col2.metric("Líquido teórico (kg)", f"{teorico['kg_liquido_teorico']:.2f}", help="Sin cáscara — compara esto contra lo real")
+        col1.metric("Bruto teórico (kg)", f"{teorico['kg_teorico_bruto']:.2f}", help="Líquido + cáscara")
+        col2.metric("Líquido teórico (kg)", f"{teorico['kg_liquido_teorico']:.2f}", help="Sin cáscara — compara contra lo real")
         col3.metric("Clara teórica (kg)", f"{teorico['clara_teorica_kg']:.2f}")
         col4.metric("Yema teórica (kg)", f"{teorico['yema_teorica_kg']:.2f}")
         col5.metric("Cáscara teórica (kg)", f"{teorico['cascara_teorica_kg']:.2f}")
 
         st.markdown("**Valores reales obtenidos** (pesar al final del proceso — compara contra el *líquido* teórico de arriba)")
-        st.caption("Llena siempre los 4 valores — se usan para calcular eficiencia de separación y balance de masa.")
-        kg_real_input = st.number_input("Kg reales obtenidos (huevo entero o suma líquida)", min_value=0.0, step=0.1)
-        clara_real_kg = st.number_input("Clara real (kg)", min_value=0.0, step=0.1)
-        yema_real_kg = st.number_input("Yema real (kg)", min_value=0.0, step=0.1)
-        cascara_real_kg = st.number_input("Cáscara real (kg)", min_value=0.0, step=0.1)
+        st.caption(
+            "Los campos vienen **pre-llenados con el valor teórico** según los "
+            "factores de arriba. Confírmalos o ajústalos con lo que marque la balanza."
+        )
+        # Pre-llenados según el tipo de producto y los factores editables
+        if tipo_producto == "Huevo entero":
+            default_liquido = teorico["kg_liquido_teorico"]
+            default_clara = 0.0
+            default_yema = 0.0
+        elif tipo_producto == "Clara":
+            default_liquido = teorico["clara_teorica_kg"]
+            default_clara = teorico["clara_teorica_kg"]
+            default_yema = 0.0
+        elif tipo_producto == "Yema":
+            default_liquido = teorico["yema_teorica_kg"]
+            default_clara = 0.0
+            default_yema = teorico["yema_teorica_kg"]
+        else:  # Clara y yema
+            default_liquido = 0.0
+            default_clara = teorico["clara_teorica_kg"]
+            default_yema = teorico["yema_teorica_kg"]
+        default_cascara = teorico["cascara_teorica_kg"]
+
+        kg_real_input = st.number_input(
+            "Kg reales obtenidos (huevo entero o suma líquida)",
+            min_value=0.0, step=0.1, value=float(round(default_liquido, 2)),
+            key="prod_kg_real_input",
+        )
+        clara_real_kg = st.number_input(
+            "Clara real (kg)", min_value=0.0, step=0.1,
+            value=float(round(default_clara, 2)), key="prod_clara_real",
+        )
+        yema_real_kg = st.number_input(
+            "Yema real (kg)", min_value=0.0, step=0.1,
+            value=float(round(default_yema, 2)), key="prod_yema_real",
+        )
+        cascara_real_kg = st.number_input(
+            "Cáscara real (kg)", min_value=0.0, step=0.1,
+            value=float(round(default_cascara, 2)), key="prod_cascara_real",
+        )
 
         # kg_real para el SALDO DEL TANQUE depende del tipo de producto que se va a almacenar:
         # - Huevo entero → lo que se pesó como líquido total
@@ -365,8 +441,16 @@ def render(db, username, rol):
         observaciones = st.text_area("Observaciones", "", key="prod_obs")
 
         if st.button("Guardar producción"):
+            # En el flujo nuevo, cubetas_necesarias es lo que se va a consumir
+            total_tomado = float(cubetas_necesarias)
             if total_tomado <= 0:
-                st.error("Define al menos un lote de huevo con cantidad mayor a cero.")
+                st.error("Ingresa una cantidad de cubetas mayor a cero.")
+                return
+            if total_tomado > total_cubetas_bodega:
+                st.error(
+                    f"No hay suficientes cubetas en bodega ({total_cubetas_bodega} disponibles, "
+                    f"{total_tomado:.0f} pedidas). Ajusta antes de guardar."
+                )
                 return
 
             if tipo_producto == "Clara y yema":
@@ -390,21 +474,45 @@ def render(db, username, rol):
                     st.error(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno ({turno_id}). No se puede duplicar en el mismo turno — si es otra producción, usa otro código o cambia el turno.")
                     return
 
-            detalle_lotes = [
-                d for d in df_lotes_editado.to_dict("records")
-                if pd.notna(d.get("cantidad_a_tomar")) and float(d.get("cantidad_a_tomar", 0)) > 0
-            ]
-            costo_unit_huevo = costo_ponderado([
-                {"cantidad_a_tomar": float(d["cantidad_a_tomar"]), "costo_cubeta": float(d["costo_cubeta"])}
-                for d in detalle_lotes
-            ])
-            costo_huevo_total = costo_unit_huevo * total_tomado
+            # ================== FIFO ESTRICTO POR FECHA ==================
+            # Descuenta las cubetas de las recepciones activas, la mas antigua
+            # primero. Genera un registro en consumo_mp_produccion por cada
+            # tramo consumido, preservando la trazabilidad por proveedor.
+            recepciones_fifo = recepciones_con_saldo.copy()
+            recepciones_fifo["fecha_dt"] = pd.to_datetime(recepciones_fifo["fecha"], errors="coerce")
+            recepciones_fifo = recepciones_fifo.sort_values("fecha_dt", na_position="last")
+
+            detalle_lotes = []
+            restante = total_tomado
+            for _, lote in recepciones_fifo.iterrows():
+                if restante <= 0:
+                    break
+                saldo = float(lote["cubetas_saldo_num"])
+                if saldo <= 0:
+                    continue
+                tomar = min(saldo, restante)
+                detalle_lotes.append({
+                    "recepcion_id": lote["recepcion_id"],
+                    "cantidad_a_tomar": tomar,
+                    "costo_cubeta": float(pd.to_numeric(lote.get("costo_cubeta", 0), errors="coerce") or 0),
+                })
+                restante -= tomar
+
+            if restante > 0.01:
+                st.error(
+                    f"No hay suficientes cubetas en bodega para completar el consumo. "
+                    f"Faltaron {restante:.0f} cubetas. Ajusta antes de guardar."
+                )
+                return
+
+            costo_huevo_total = sum(
+                d["cantidad_a_tomar"] * d["costo_cubeta"] for d in detalle_lotes
+            )
+            costo_unit_huevo = costo_huevo_total / total_tomado if total_tomado > 0 else 0
 
             costo_insumos_total = 0.0
             detalle_insumos = []
-
             costo_mano_obra_total = 0.0
-            detalle_personal = []
             detalle_personal = []
 
             costo_total = costo_huevo_total + costo_insumos_total + costo_mano_obra_total
@@ -531,6 +639,21 @@ def render(db, username, rol):
                     "observaciones": f"{observaciones} (co-producto junto con lote clara {codigo_clara})".strip(),
                 })
 
+                # Registro de cascara (subproducto): se crea UNA sola vez, asociada
+                # al lote de clara (que es el lote_referencia en el caso clara+yema).
+                if cascara_real_kg > 0:
+                    cascara_id = db.siguiente_id("produccion_cascara", "CASC", fecha)
+                    db.append_row("produccion_cascara", {
+                        "cascara_id": cascara_id,
+                        "fecha": fecha.isoformat(),
+                        "lote_semielaborado_origen": codigo_clara,
+                        "kg": cascara_real_kg,
+                        "kg_saldo": cascara_real_kg,
+                        "estado": "en bodega",
+                        "usuario": username,
+                        "observaciones": f"Del quiebre {codigo_clara} + {codigo_yema}",
+                    })
+
                 if ve_costos(rol):
                     st.success(
                         f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados — "
@@ -587,6 +710,24 @@ def render(db, username, rol):
                         "kg_saldo": kg_coproducto,
                         "balance_masa_pct": 0,
                         "observaciones": f"Co-producto de lote {codigo_lote}",
+                    })
+
+                # Registro de cascara (subproducto): se crea UNA sola vez, asociada
+                # al lote principal (NO al co-producto), para evitar doble conteo.
+                if cascara_real_kg > 0:
+                    cascara_id = db.siguiente_id("produccion_cascara", "CASC", fecha)
+                    obs_cascara = f"Del lote {codigo_lote}"
+                    if tipo_coproducto and codigo_coproducto:
+                        obs_cascara += f" (co-producto {codigo_coproducto})"
+                    db.append_row("produccion_cascara", {
+                        "cascara_id": cascara_id,
+                        "fecha": fecha.isoformat(),
+                        "lote_semielaborado_origen": codigo_lote,
+                        "kg": cascara_real_kg,
+                        "kg_saldo": cascara_real_kg,
+                        "estado": "en bodega",
+                        "usuario": username,
+                        "observaciones": obs_cascara,
                     })
 
                 msg_lotes = codigo_lote
@@ -920,6 +1061,8 @@ def render(db, username, rol):
                             db.delete_row("movimientos_envases_insumos", "movimiento_id", mid)
                         db.delete_rows_where("produccion_insumos", "lote_semielaborado_id", lote_sel)
                         db.delete_rows_where("produccion_personal", "lote_semielaborado_id", lote_sel)
+                        # revertir cascara (subproducto) generada por este lote
+                        db.delete_rows_where("produccion_cascara", "lote_semielaborado_origen", lote_sel)
                         db.delete_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel)
 
                         st.success(
