@@ -414,12 +414,17 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
             saneamiento = []
             if not limpieza.empty:
                 mismo_dia = limpieza[limpieza["fecha"].astype(str) == str(_val(fp, "fecha"))]
+                # Excluir saneamiento de areas que no tienen que ver con la
+                # produccion de semielaborados (bodegas de MP, envases, insumos).
+                KEYWORDS_EXCLUIR = ("bodega", "materia prima", "mp ", " mp", "envases", "insumos")
                 for _, sfila in mismo_dia.iterrows():
                     area_nombre = sfila.get("area_id", "")
                     if not areas.empty:
                         fa = areas[areas["area_id"] == sfila.get("area_id")]
                         if not fa.empty:
                             area_nombre = fa.iloc[0]["nombre"]
+                    if any(kw in str(area_nombre).lower() for kw in KEYWORDS_EXCLUIR):
+                        continue
                     saneamiento.append({
                         "area": area_nombre,
                         "tipo": _val(sfila, "tipo_limpieza"),
