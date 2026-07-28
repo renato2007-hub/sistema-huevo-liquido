@@ -96,12 +96,15 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
     for nodo_rec in arbol:
         bloque = []
         bloque.append(Paragraph(f"RECEPCIÓN DE MATERIA PRIMA: {nodo_rec['recepcion_id']}", ESTILOS["Heading2"]))
-        bloque.append(_tabla_pares([
+        filas_rec = [
             ("Origen", nodo_rec["origen"]),
             ("Fecha de recepción", nodo_rec["fecha"]),
             ("Cubetas recibidas", nodo_rec["cubetas"]),
-            ("Categoría de huevo", nodo_rec["categoria"]),
-        ]))
+        ]
+        # Categoria solo se muestra si hay dato (las nuevas recepciones no la tienen)
+        if str(nodo_rec.get("categoria", "") or "").strip():
+            filas_rec.append(("Categoría de huevo", nodo_rec["categoria"]))
+        bloque.append(_tabla_pares(filas_rec))
         el.append(KeepTogether(bloque))
         el.append(Spacer(1, 0.3 * cm))
 
@@ -149,6 +152,28 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                 el.append(_tabla_encabezado(
                     [[s["area"], s["tipo"], s.get("turno", "—"), "Sí" if s["verificado"] else "No"] for s in nodo_prod["saneamiento"]],
                     ["Área", "Tipo", "Turno", "Verificado"],
+                ))
+                el.append(Spacer(1, 0.2 * cm))
+
+            # ---- CASCARA (subproducto para biomateriales) ----
+            cascara_lista = nodo_prod.get("cascara", [])
+            if cascara_lista:
+                el.append(Paragraph(
+                    "Cáscara generada (subproducto → planta de biomateriales):",
+                    ESTILOS["Normal"],
+                ))
+                filas_cas = []
+                for c in cascara_lista:
+                    kg_enviado = sum(e["kg"] for e in c.get("envios", []))
+                    destinos = ", ".join(sorted({e["destino"] for e in c.get("envios", []) if e["destino"]})) or "—"
+                    filas_cas.append([
+                        c["cascara_id"], c["fecha"],
+                        f"{c['kg_producida']:.1f}", f"{kg_enviado:.1f}",
+                        f"{c['kg_saldo']:.1f}", destinos,
+                    ])
+                el.append(_tabla_encabezado(
+                    filas_cas,
+                    ["Lote cáscara", "Fecha", "Kg producidos", "Kg enviados", "Kg saldo", "Destino"],
                 ))
                 el.append(Spacer(1, 0.2 * cm))
 

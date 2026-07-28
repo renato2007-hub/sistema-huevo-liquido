@@ -15,6 +15,7 @@ NOMBRES_TABLAS = [
     "presentaciones", "cuarto_frio_entradas", "cuarto_frio_salidas",
     "clientes", "vehiculos", "galpones", "proveedores", "categorias_huevo",
     "turnos", "produccion_personal", "personal", "usuarios", "pedidos",
+    "produccion_cascara", "salidas_cascara",
 ]
 
 

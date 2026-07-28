@@ -39,14 +39,28 @@ def _val(fila, columna, default=""):
 def _nombre_origen(recepcion_fila, galpones, proveedores):
     origen_tipo = _val(recepcion_fila, "origen_tipo")
     origen_id = _val(recepcion_fila, "origen_id")
-    catalogo = galpones if origen_tipo == "Galpón propio" else proveedores
-    col_id = "galpon_id" if origen_tipo == "Galpón propio" else "proveedor_id"
+    # Si origen_tipo dice "Proveedor" (nuevo flujo) o esta vacio, buscar en proveedores
+    if origen_tipo == "Galpón propio":
+        catalogo = galpones
+        col_id = "galpon_id"
+    else:
+        catalogo = proveedores
+        col_id = "proveedor_id"
     if catalogo.empty or col_id not in catalogo.columns:
-        return f"{origen_tipo} ({origen_id})"
+        return f"{origen_tipo or 'Proveedor'} ({origen_id})"
     fila = catalogo[catalogo[col_id].astype(str) == str(origen_id)]
     if fila.empty:
-        return f"{origen_tipo} ({origen_id})"
-    return f"{origen_tipo}: {fila.iloc[0]['nombre']}"
+        return f"{origen_tipo or 'Proveedor'} ({origen_id})"
+    nombre = fila.iloc[0]["nombre"]
+    partes = [str(nombre)]
+    # Agregar prefijo y tipo (interno/externo) si estan disponibles
+    prefijo = str(fila.iloc[0].get("prefijo", "") or "").strip()
+    tipo = str(fila.iloc[0].get("tipo", "") or "").strip()
+    if prefijo:
+        partes.append(f"prefijo {prefijo}")
+    if tipo:
+        partes.append(tipo)
+    return " — ".join(partes)
 
 
 def _buscar_pedido(pedidos_df, pedido_id):
@@ -104,6 +118,51 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
         "envases_insumos",
         tablas.get("catalogo_envases_insumos", tablas.get("insumos", pd.DataFrame())),
     )
+    prod_cascara = tablas.get("produccion_cascara", pd.DataFrame())
+    salidas_cascara = tablas.get("salidas_cascara", pd.DataFrame())
+
+    def _cascara_de_lote(lote_semi_id):
+        """Devuelve los registros de cascara generada por este lote (o su
+        hermano, si el hermano fue el 'lote de referencia' del quiebre), y
+        las salidas a biomateriales que se hayan hecho de cada uno."""
+        if prod_cascara.empty or "lote_semielaborado_origen" not in prod_cascara.columns:
+            return []
+        rel = prod_cascara[
+            prod_cascara["lote_semielaborado_origen"].astype(str) == str(lote_semi_id)
+        ]
+        # Si este lote no tiene cascara propia, revisar si su hermano (co-producto) la tiene
+        if rel.empty and not produccion.empty:
+            fp = produccion[produccion["lote_semielaborado_id"] == lote_semi_id]
+            if not fp.empty:
+                hermano = _extraer_lote_hermano(fp.iloc[0].get("observaciones", ""))
+                if hermano:
+                    rel = prod_cascara[
+                        prod_cascara["lote_semielaborado_origen"].astype(str) == str(hermano)
+                    ]
+        lista = []
+        for _, cfila in rel.iterrows():
+            cid = cfila.get("cascara_id", "")
+            kg = float(pd.to_numeric(cfila.get("kg", 0), errors="coerce") or 0)
+            kg_saldo = float(pd.to_numeric(cfila.get("kg_saldo", 0), errors="coerce") or 0)
+            envios = []
+            if not salidas_cascara.empty and "cascara_id_origen" in salidas_cascara.columns:
+                rel_env = salidas_cascara[
+                    salidas_cascara["cascara_id_origen"].astype(str) == str(cid)
+                ]
+                for _, sfila in rel_env.iterrows():
+                    envios.append({
+                        "fecha": str(sfila.get("fecha", "") or ""),
+                        "kg": float(pd.to_numeric(sfila.get("kg", 0), errors="coerce") or 0),
+                        "destino": str(sfila.get("destino", "") or ""),
+                    })
+            lista.append({
+                "cascara_id": cid,
+                "fecha": str(cfila.get("fecha", "") or ""),
+                "kg_producida": kg,
+                "kg_saldo": kg_saldo,
+                "envios": envios,
+            })
+        return lista
 
     def _lote_origen_de_recipiente(recipiente_id):
         """Resuelve recipiente GR -> lote_origen usando stock_a_granel."""
@@ -399,6 +458,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 "costo_unitario_kg": _val(fp, "costo_unitario_kg", 0),
                 "personal": personal_lista,
                 "saneamiento": saneamiento,
+                "cascara": _cascara_de_lote(lid),
                 "pasteurizaciones": [],
             }
 
