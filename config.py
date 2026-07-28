@@ -135,6 +135,10 @@ SHEET_SCHEMAS = {
         "cascara_id", "fecha", "lote_semielaborado_origen",
         "kg", "kg_saldo", "estado", "usuario", "observaciones",
     ],
+    "salidas_cascara": [
+        "salida_id", "fecha", "cascara_id_origen", "kg",
+        "destino", "usuario", "observaciones",
+    ],
     # ---------- Pasteurizacion y envasado ----------
     "pasteurizacion_envasado": [
         "lote_producto_id", "fecha", "lote_semielaborado_id", "presentacion_id",

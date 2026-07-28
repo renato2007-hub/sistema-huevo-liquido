@@ -135,6 +135,7 @@ if not es_despachador(rol):
     _boton_modulo("Producción de semielaborados", "⚗️")
     _boton_modulo("Pasteurización y envasado", "🧪")
     _boton_modulo("Cuarto frío", "❄️")
+    _boton_modulo("Cáscara (subproducto)", "♻️")
 
     _categoria("🔧&nbsp;&nbsp;RECURSOS", "#2E7D32")
     _boton_modulo("Personal y turnos", "👥")
@@ -241,5 +242,8 @@ elif modulo == "Recepción de pedidos":
     _mod("pedidos").render(db, username, rol)
 elif modulo == "🔧 Migración MP":
     _mod("migracion_mp").render(db, username, rol)
+elif modulo == "Cáscara (subproducto)":
+    _mod("cascara").render(db, username, rol)
 elif modulo == "Catálogos y configuración":
     _mod("catalogos").render(db, username, rol)
+

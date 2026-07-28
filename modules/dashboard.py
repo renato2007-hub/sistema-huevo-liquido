@@ -683,7 +683,16 @@ def render(db, username, rol):
 
     # ======================== TAB: RESIDUOS Y MERMAS ========================
     with tabs[4]:
-        cascara_total        = prod_costos["cascara_real_kg"].sum() if not prod_costos.empty else 0.0
+        # --- Cascara: producida en el periodo, enviada, saldo actual ---
+        prod_cascara_df = db.get_df("produccion_cascara")
+        prod_cascara_f = _filtrar_por_fecha(prod_cascara_df, desde, hasta)
+        cascara_producida_periodo = _num(prod_cascara_f, "kg").sum() if not prod_cascara_f.empty else 0.0
+        cascara_saldo_actual = _num(prod_cascara_df, "kg_saldo").sum() if not prod_cascara_df.empty else 0.0
+
+        salidas_cascara_df = db.get_df("salidas_cascara")
+        salidas_cascara_f = _filtrar_por_fecha(salidas_cascara_df, desde, hasta)
+        cascara_enviada_periodo = _num(salidas_cascara_f, "kg").sum() if not salidas_cascara_f.empty else 0.0
+
         huevos_danados_total = _num(mermas_mp_f, "huevos_danados").sum()
         costo_mermas_mp      = _num(mermas_mp_f, "costo_estimado").sum()
         mermas_semi          = db.get_df("mermas_semielaborado")
@@ -691,16 +700,23 @@ def render(db, username, rol):
         kg_semi_desechado    = _num(mermas_semi_f, "kg_desechado").sum()
         costo_semi_desechado = _num(mermas_semi_f, "costo_estimado").sum()
 
-        m1,m2,m3,m4 = st.columns(4)
-        _kpi_card(m1,"🥚","Cáscara generada",f"{cascara_total:,.1f} kg")
-        _kpi_card(m2,"💔","Huevos dañados en bodega",f"{huevos_danados_total:,.0f}")
-        _kpi_card(m3,"🧪","Clara/yema desechada",f"{kg_semi_desechado:,.1f} kg")
-        if ve_costos(rol):
-            _kpi_card(m4,"💲","Costo perdido (huevo + semi)",f"${(costo_mermas_mp+costo_semi_desechado):,.2f}")
+        st.markdown("##### ♻️ Cáscara (subproducto para biomateriales)")
+        c1, c2, c3 = st.columns(3)
+        _kpi_card(c1, "🥚", "Producida en el período", f"{cascara_producida_periodo:,.1f} kg")
+        _kpi_card(c2, "🚚", "Enviada a biomateriales", f"{cascara_enviada_periodo:,.1f} kg")
+        _kpi_card(c3, "📦", "En bodega (saldo actual)", f"{cascara_saldo_actual:,.1f} kg")
 
         if kg_total_periodo > 0:
-            pct_cascara = cascara_total / kg_total_periodo * 100
-            st.caption(f"La cáscara representa el **{pct_cascara:.1f}%** del peso total producido.")
+            pct_cascara = cascara_producida_periodo / kg_total_periodo * 100
+            st.caption(f"La cáscara representa el **{pct_cascara:.1f}%** del peso de líquido producido.")
+
+        st.write("")
+        st.markdown("##### 💔 Otras mermas")
+        m1, m2, m3 = st.columns(3)
+        _kpi_card(m1, "💔", "Huevos dañados en bodega", f"{huevos_danados_total:,.0f}")
+        _kpi_card(m2, "🧪", "Clara/yema desechada", f"{kg_semi_desechado:,.1f} kg")
+        if ve_costos(rol):
+            _kpi_card(m3, "💲", "Costo perdido (huevo + semi)", f"${(costo_mermas_mp+costo_semi_desechado):,.2f}")
 
         st.write("")
         col_r1, col_r2 = st.columns(2)

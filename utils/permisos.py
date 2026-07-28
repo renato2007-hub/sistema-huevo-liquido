@@ -27,6 +27,7 @@ _MODULOS_OPERATIVOS = {
     "Pasteurización y envasado",
     "Cuarto frío",
     "Limpieza y desinfección", "Energía",
+    "Cáscara (subproducto)",
 }
 
 MODULOS_PERMITIDOS = {
