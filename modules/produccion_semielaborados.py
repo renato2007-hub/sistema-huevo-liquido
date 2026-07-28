@@ -244,8 +244,8 @@ def render(db, username, rol):
                 "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
                 value=DEFAULT_GR_CASCARA, key="fac_cas_he",
             )
-            # peso huevo = (kg_liquido * 1000 / 30) + gr_cascara
             peso_huevo_g = (factor_liquido * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
+            # huevo entero no separa: los teoricos de clara y yema son 0
             factor_clara = 0.0
             factor_yema = 0.0
             factor_liquido_total = factor_liquido
@@ -256,19 +256,21 @@ def render(db, username, rol):
                 value=DEFAULTS_RENDIMIENTO["Clara"], key="fac_liq_cl",
             )
             factor_yema_ref = col_f2.number_input(
-                "Rendimiento yema co-producto (kg/cubeta) — solo referencia",
+                "Rendimiento yema co-producto (kg/cubeta)",
                 min_value=0.0, step=0.01,
                 value=DEFAULTS_RENDIMIENTO["Yema"], key="fac_yema_ref_cl",
-                help="No se guarda — solo se usa para calcular el peso del huevo estimado.",
+                help="Se usa para calcular el peso del huevo estimado y el teorico de yema.",
             )
             gr_cascara = col_f3.number_input(
                 "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
                 value=DEFAULT_GR_CASCARA, key="fac_cas_cl",
             )
             peso_huevo_g = ((factor_liquido + factor_yema_ref) * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
+            # el huevo se separa completo: teoricos de ambos componentes visibles
             factor_clara = factor_liquido
-            factor_yema = 0.0
-            factor_liquido_total = factor_liquido
+            factor_yema = factor_yema_ref
+            # el "liquido total" del huevo = clara + yema (para el balance de masa)
+            factor_liquido_total = factor_clara + factor_yema
         elif tipo_producto == "Yema":
             col_f1, col_f2, col_f3 = st.columns(3)
             factor_liquido = col_f1.number_input(
@@ -276,19 +278,19 @@ def render(db, username, rol):
                 value=DEFAULTS_RENDIMIENTO["Yema"], key="fac_liq_ye",
             )
             factor_clara_ref = col_f2.number_input(
-                "Rendimiento clara co-producto (kg/cubeta) — solo referencia",
+                "Rendimiento clara co-producto (kg/cubeta)",
                 min_value=0.0, step=0.01,
                 value=DEFAULTS_RENDIMIENTO["Clara"], key="fac_clara_ref_ye",
-                help="No se guarda — solo se usa para calcular el peso del huevo estimado.",
+                help="Se usa para calcular el peso del huevo estimado y el teorico de clara.",
             )
             gr_cascara = col_f3.number_input(
                 "Peso de cáscara (g/huevo)", min_value=0.0, step=0.1,
                 value=DEFAULT_GR_CASCARA, key="fac_cas_ye",
             )
             peso_huevo_g = ((factor_liquido + factor_clara_ref) * 1000 / HUEVOS_POR_CUBETA) + gr_cascara
-            factor_clara = 0.0
+            factor_clara = factor_clara_ref
             factor_yema = factor_liquido
-            factor_liquido_total = factor_liquido
+            factor_liquido_total = factor_clara + factor_yema
         else:  # Clara y yema
             col_f1, col_f2, col_f3 = st.columns(3)
             factor_clara = col_f1.number_input(
@@ -361,7 +363,10 @@ def render(db, username, rol):
             "Los campos vienen **pre-llenados con el valor teórico** según los "
             "factores de arriba. Confírmalos o ajústalos con lo que marque la balanza."
         )
-        # Pre-llenados según el tipo de producto y los factores editables
+        # Pre-llenados según el tipo de producto y los factores editables.
+        # Para Clara/Yema, el co-producto tambien viene pre-llenado con su
+        # teorico (usando el rendimiento de referencia), para que el operador
+        # solo confirme o ajuste con la balanza.
         if tipo_producto == "Huevo entero":
             default_liquido = teorico["kg_liquido_teorico"]
             default_clara = 0.0
@@ -369,10 +374,10 @@ def render(db, username, rol):
         elif tipo_producto == "Clara":
             default_liquido = teorico["clara_teorica_kg"]
             default_clara = teorico["clara_teorica_kg"]
-            default_yema = 0.0
+            default_yema = teorico["yema_teorica_kg"]  # co-producto pre-llenado
         elif tipo_producto == "Yema":
             default_liquido = teorico["yema_teorica_kg"]
-            default_clara = 0.0
+            default_clara = teorico["clara_teorica_kg"]  # co-producto pre-llenado
             default_yema = teorico["yema_teorica_kg"]
         else:  # Clara y yema
             default_liquido = 0.0
