@@ -114,6 +114,33 @@ def render(db, username, rol):
                     f"bien seguir, pero si fue un error de digitación, revisa antes de guardar "
                     f"(pestaña '✏️ Corregir / eliminar' para borrar duplicados)."
                 )
+            # Pedidos vinculados a esta orden
+            pedidos_df_aviso = db.get_df("pedidos")
+            if not pedidos_df_aviso.empty and "orden_produccion_vinculada" in pedidos_df_aviso.columns:
+                vinc = pedidos_df_aviso[
+                    (pedidos_df_aviso["orden_produccion_vinculada"].astype(str) == str(orden_produccion))
+                    & (pedidos_df_aviso.get("estado", pd.Series("")).astype(str).str.lower() != "cancelado")
+                    & (~pedidos_df_aviso["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"]))
+                ]
+                if not vinc.empty:
+                    clientes_df_aviso = db.get_df("clientes")
+                    mapa_cli = dict(zip(clientes_df_aviso["cliente_id"], clientes_df_aviso["nombre"])) if not clientes_df_aviso.empty else {}
+                    total_kg_vinc = float(pd.to_numeric(vinc["cantidad_kg"], errors="coerce").fillna(0).sum())
+                    with st.container(border=True):
+                        st.markdown(f"##### 📋 Esta orden tiene **{len(vinc)}** pedido(s) vinculado(s):")
+                        for _, pv in vinc.iterrows():
+                            es_urg = str(pv.get("urgente", "")).upper() in ("TRUE", "1", "SI", "SÍ")
+                            kg_v = float(pd.to_numeric(pv.get("cantidad_kg", 0), errors="coerce") or 0)
+                            marca_urg = "⚡ **URGENTE** " if es_urg else ""
+                            st.markdown(
+                                f"- {marca_urg}`{pv['pedido_id']}` — "
+                                f"{mapa_cli.get(pv['cliente_id'], pv['cliente_id'])} — "
+                                f"**{kg_v:.1f} kg** {pv.get('tipo_producto', '')}"
+                            )
+                        st.info(
+                            f"💡 Total kg de pedidos vinculados: **{total_kg_vinc:.1f} kg**. "
+                            f"Ajusta las cubetas más abajo si necesitas incluir esa producción extra."
+                        )
         tipo_producto = st.selectbox("Producto a obtener", ["Huevo entero", "Clara", "Yema", "Clara y yema"])
 
         producciones_existentes = db.get_df("produccion_semielaborados")

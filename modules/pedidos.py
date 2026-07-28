@@ -110,6 +110,24 @@ def render(db, username, rol):
 
         observaciones = st.text_area("Observaciones generales", "", key="pedido_obs")
 
+        # Vincular a orden de produccion en curso (para pedidos extra/urgentes)
+        produccion_reciente = db.get_df("produccion_semielaborados")
+        ordenes_recientes = []
+        if not produccion_reciente.empty and "orden_produccion" in produccion_reciente.columns:
+            hoy_d = datetime.date.today()
+            desde_d = (hoy_d - datetime.timedelta(days=2)).isoformat()
+            prod_rec = produccion_reciente[
+                (produccion_reciente["fecha"].astype(str) >= desde_d)
+                & (produccion_reciente["orden_produccion"].astype(str).str.strip() != "")
+            ]
+            ordenes_recientes = sorted(set(prod_rec["orden_produccion"].astype(str).tolist()))
+        opciones_orden = ["(no vincular)"] + ordenes_recientes
+        orden_vinculada = st.selectbox(
+            "Vincular a orden de producción en curso (opcional)",
+            opciones_orden, index=0, key="pedido_orden_vinc",
+            help="Úsalo si este pedido es extra y se va a producir sumándose a una orden ya en curso. El jefe de planta verá el aviso al producir.",
+        )
+
         if st.button("💾 Guardar pedido completo", type="primary", use_container_width=True):
             if not items_acum:
                 st.error("Agrega al menos un producto antes de guardar.")
@@ -133,6 +151,7 @@ def render(db, username, rol):
                     "producido": False,
                     "estado": "pendiente",
                     "urgente": False,
+                    "orden_produccion_vinculada": orden_vinculada if orden_vinculada != "(no vincular)" else "",
                     "usuario": username,
                     "observaciones": observaciones,
                 })
