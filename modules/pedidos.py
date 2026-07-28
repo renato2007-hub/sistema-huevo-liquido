@@ -131,6 +131,8 @@ def render(db, username, rol):
                     "fecha_produccion": "",
                     "fecha_entrega": fecha_entrega.isoformat(),
                     "producido": False,
+                    "estado": "pendiente",
+                    "urgente": False,
                     "usuario": username,
                     "observaciones": observaciones,
                 })
@@ -173,17 +175,36 @@ def render(db, username, rol):
             df["presentacion_nombre"] = df["presentacion_id"]
         df["producido_bool"] = df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
         df["cantidad_kg"] = pd.to_numeric(df["cantidad_kg"], errors="coerce").fillna(0)
+        # Estado registrado (nuevo campo). Los pedidos historicos sin estado
+        # se tratan como "pendiente" por default.
+        if "estado" in df.columns:
+            df["estado_reg"] = (
+                df["estado"].fillna("pendiente").astype(str).str.strip().str.lower()
+                .replace({"": "pendiente", "nan": "pendiente", "none": "pendiente"})
+            )
+        else:
+            df["estado_reg"] = "pendiente"
+        # Bandera de urgente
+        if "urgente" in df.columns:
+            df["urgente_bool"] = df["urgente"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+        else:
+            df["urgente_bool"] = False
         hoy_str = datetime.date.today().isoformat()
-        df["atrasado"] = (~df["producido_bool"]) & (df["fecha_entrega"].astype(str) < hoy_str)
+        df["atrasado"] = (~df["producido_bool"]) & (df["estado_reg"] != "cancelado") & (df["fecha_entrega"].astype(str) < hoy_str)
 
         def _estado(row):
+            if row["estado_reg"] == "cancelado":
+                return "❌ Cancelado"
             if row["producido_bool"]:
                 return "✅ Producido"
             if row["atrasado"]:
                 return "🔴 Atrasado"
-            return "🟡 Pendiente"
+            base = "🟡 Pendiente"
+            if row["urgente_bool"]:
+                return "⚡ URGENTE " + base
+            return base
 
-        df["estado"] = df.apply(_estado, axis=1)
+        df["estado_display"] = df.apply(_estado, axis=1)
         return df
 
     columnas_mostrar = [
@@ -198,7 +219,7 @@ def render(db, username, rol):
         if df.empty:
             st.info("No hay pedidos registrados todavía.")
         else:
-            pendientes = df[~df["producido_bool"]].sort_values("fecha_entrega")
+            pendientes = df[(~df["producido_bool"]) & (df["estado_reg"] != "cancelado")].sort_values("fecha_entrega")
             if pendientes.empty:
                 st.success("🎉 No hay pedidos pendientes — todo lo registrado ya está marcado como producido.")
             else:
@@ -234,7 +255,7 @@ def render(db, username, rol):
         else:
             hoy_d = datetime.date.today()
             c1, c2 = st.columns(2)
-            filtro_estado = c1.selectbox("Estado", ["Todos", "Pendientes", "Producidos"])
+            filtro_estado = c1.selectbox("Estado", ["Todos", "Pendientes", "Producidos", "Cancelados"])
             filtro_cliente = c2.selectbox(
                 "Cliente", ["Todos"] + sorted(df["cliente_nombre"].dropna().unique().tolist()),
             )
@@ -249,10 +270,15 @@ def render(db, username, rol):
                 hasta_f = c5.date_input("Hasta", value=hoy_d, key="filtro_hasta")
 
             df_mostrar = df.copy()
+            # Excluir cancelados por default (se ven en filtro dedicado)
+            if filtro_estado != "Cancelados":
+                df_mostrar = df_mostrar[df_mostrar["estado_reg"] != "cancelado"]
             if filtro_estado == "Pendientes":
                 df_mostrar = df_mostrar[~df_mostrar["producido_bool"]]
             elif filtro_estado == "Producidos":
                 df_mostrar = df_mostrar[df_mostrar["producido_bool"]]
+            elif filtro_estado == "Cancelados":
+                df_mostrar = df_mostrar[df_mostrar["estado_reg"] == "cancelado"]
             if filtro_cliente != "Todos":
                 df_mostrar = df_mostrar[df_mostrar["cliente_nombre"] == filtro_cliente]
             if filtro_tipo_fecha == "Fecha de pedido" and desde_f and hasta_f:
@@ -271,7 +297,7 @@ def render(db, username, rol):
             if not atrasados_total.empty:
                 st.error(f"⚠️ {len(atrasados_total)} pedido(s) con fecha de entrega ya vencida sin producir.")
             st.dataframe(
-                df_mostrar.rename(columns={"estado": "Estado"})[["Estado"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
+                df_mostrar.rename(columns={"estado_display": "Estado"})[["Estado"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
                 use_container_width=True, hide_index=True,
             )
 
@@ -320,6 +346,75 @@ def render(db, username, rol):
                         db.update_row("pedidos", "pedido_id", pedido_rev, {"producido": False})
                         st.success(f"✅ Pedido {pedido_rev} revertido a Pendiente.")
                         st.rerun()
+
+            # ---------- Acciones rápidas: urgente + cancelar ----------
+            st.divider()
+            st.markdown("##### ⚡ Acciones rápidas")
+            no_cancelados = df[df["estado_reg"] != "cancelado"]
+            if no_cancelados.empty:
+                st.info("No hay pedidos activos.")
+            else:
+                col_ur, col_ca = st.columns(2)
+
+                with col_ur:
+                    st.markdown("**⚡ Marcar / desmarcar urgente**")
+                    st.caption("Los pedidos urgentes aparecen resaltados con ⚡ en el estado y se priorizan en el orden.")
+                    pedido_urg = st.selectbox(
+                        "Pedido", no_cancelados["pedido_id"],
+                        format_func=lambda x: (
+                            f"{'⚡ ' if bool(no_cancelados.set_index('pedido_id').loc[x, 'urgente_bool']) else ''}"
+                            f"{x} — {no_cancelados.set_index('pedido_id').loc[x, 'cliente_nombre']} "
+                            f"({no_cancelados.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
+                        ),
+                        key="urg_sel",
+                    )
+                    ya_urg = bool(no_cancelados.set_index("pedido_id").loc[pedido_urg, "urgente_bool"])
+                    if ya_urg:
+                        if st.button("⚪ Desmarcar como urgente", key="btn_desurg"):
+                            db.update_row("pedidos", "pedido_id", pedido_urg, {"urgente": False})
+                            st.success(f"Pedido {pedido_urg} ya no es urgente.")
+                            st.rerun()
+                    else:
+                        if st.button("⚡ Marcar como URGENTE", type="primary", key="btn_urg"):
+                            db.update_row("pedidos", "pedido_id", pedido_urg, {"urgente": True})
+                            st.success(f"⚡ Pedido {pedido_urg} marcado como urgente.")
+                            st.rerun()
+
+                with col_ca:
+                    st.markdown("**❌ Cancelar pedido**")
+                    st.caption("El pedido se marca como cancelado (no se borra). Si ya fue producido/despachado, deberás ajustar inventario manualmente.")
+                    pedido_can = st.selectbox(
+                        "Pedido", no_cancelados["pedido_id"],
+                        format_func=lambda x: (
+                            f"{x} — {no_cancelados.set_index('pedido_id').loc[x, 'cliente_nombre']} "
+                            f"({no_cancelados.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg) — "
+                            f"{no_cancelados.set_index('pedido_id').loc[x, 'estado_display']}"
+                        ),
+                        key="can_sel",
+                    )
+                    fila_can = no_cancelados.set_index("pedido_id").loc[pedido_can]
+                    if bool(fila_can["producido_bool"]):
+                        st.error(
+                            f"⚠️ Este pedido ya está **producido**. Si el cliente canceló después "
+                            f"de que salió del cuarto frío, tendrás que ajustar inventario a mano "
+                            f"(devolver producto a cuarto frío o registrar como merma)."
+                        )
+                    motivo_can = st.text_input("Motivo de la cancelación (obligatorio)", "", key="can_motivo")
+                    if st.button("❌ Cancelar este pedido", key="btn_can"):
+                        if not motivo_can.strip():
+                            st.error("Escribe el motivo de la cancelación.")
+                        else:
+                            obs_prev = str(fila_can.get("observaciones", "") or "")
+                            marca = (
+                                f"CANCELADO {datetime.date.today().isoformat()} por "
+                                f"{username}. Motivo: {motivo_can.strip()}"
+                            )
+                            db.update_row("pedidos", "pedido_id", pedido_can, {
+                                "estado": "cancelado",
+                                "observaciones": (obs_prev + " | " + marca).strip(" |"),
+                            })
+                            st.success(f"❌ Pedido {pedido_can} cancelado.")
+                            st.rerun()
 
     # ======================== EDITAR / ELIMINAR (solo admin y gerencia) ========================
     if puede_editar_pedidos(rol):

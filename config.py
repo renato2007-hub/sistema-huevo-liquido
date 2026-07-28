@@ -65,7 +65,7 @@ SHEET_SCHEMAS = {
         "pedido_id", "pedido_cliente_ref", "cliente_id", "medio_recepcion", "ciudad",
         "tipo_producto", "presentacion_id", "unidades_solicitadas", "cantidad_kg",
         "fecha_pedido", "fecha_produccion", "fecha_entrega",
-        "producido", "usuario", "observaciones",
+        "producido", "usuario", "observaciones", "estado", "urgente",
     ],
     "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "genero", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
