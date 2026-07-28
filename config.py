@@ -170,6 +170,11 @@ SHEET_SCHEMAS = {
     "limpieza_insumos": [
         "detalle_id", "limpieza_id", "insumo_id", "cantidad", "costo_calculado",
     ],
+    # ---------- Bitácora de cambios (auditoría) ----------
+    "bitacora_cambios": [
+        "bitacora_id", "fecha_hora", "usuario", "modulo", "tabla",
+        "id_registro", "accion", "campo", "valor_antes", "valor_despues", "motivo",
+    ],
 }
 
 MODULOS = [

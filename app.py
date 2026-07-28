@@ -150,6 +150,7 @@ if not es_despachador(rol):
     _boton_modulo("Dashboard", "📊")
     _boton_modulo("Catálogos y configuración", "⚙️")
     _boton_modulo("🔧 Migración MP", "🔧")
+    _boton_modulo("Bitácora", "📜")
 
 st.sidebar.markdown(
     """
@@ -246,4 +247,6 @@ elif modulo == "Cáscara (subproducto)":
     _mod("cascara").render(db, username, rol)
 elif modulo == "Catálogos y configuración":
     _mod("catalogos").render(db, username, rol)
+elif modulo == "Bitácora":
+    _mod("bitacora").render(db, username, rol)
 

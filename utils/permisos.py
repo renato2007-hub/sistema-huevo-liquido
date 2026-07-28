@@ -34,12 +34,12 @@ MODULOS_PERMITIDOS = {
     "admin": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
         "Solicitud MP e Insumos", "Recepción de pedidos",
-        "Plan de producción", "Personal y turnos", "Catálogos y configuración", "🔧 Migración MP",
+        "Plan de producción", "Personal y turnos", "Catálogos y configuración", "🔧 Migración MP", "Bitácora"
     },
     "gerencia": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
         "Solicitud MP e Insumos", "Recepción de pedidos",
-        "Plan de producción", "Personal y turnos",
+        "Plan de producción", "Personal y turnos", "Bitácora"
     },
     "jefe_planta": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
