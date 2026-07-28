@@ -139,6 +139,16 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
 def render(db, username, rol):
     st.title("📅 Plan de producción diario")
 
+    tab_plan, tab_hist = st.tabs(["🗓️ Planificar", "📚 Historial de planes"])
+
+    with tab_plan:
+        _render_planificar(db, username, rol)
+
+    with tab_hist:
+        _render_historial(db, username, rol)
+
+
+def _render_planificar(db, username, rol):
     pedidos_df    = db.get_df("pedidos")
     clientes_df   = db.get_df("clientes")
     presentac_df  = db.get_df("presentaciones")
@@ -417,3 +427,144 @@ def render(db, username, rol):
         use_container_width=True,
         type="primary",
     )
+
+
+def _render_historial(db, username, rol):
+    """Historial de planes de produccion (agrupado por fecha) con opcion
+    de eliminacion. Un 'plan' es el conjunto de filas de plan_mp_asignado
+    con la misma fecha, mas los pedidos con esa fecha_produccion."""
+    from utils.bitacora import log_cambio
+
+    st.caption(
+        "Aquí ves los planes de producción por fecha, con la cantidad de "
+        "asignaciones de materia prima y pedidos vinculados. Puedes eliminar "
+        "un plan para limpiar la lista o si fue un error de planificación — "
+        "los pedidos de esa fecha volverán a estar sin planificar."
+    )
+
+    plan_mp = db.get_df("plan_mp_asignado")
+    pedidos = db.get_df("pedidos")
+
+    if plan_mp.empty:
+        st.info("No hay planes de producción registrados todavía.")
+        return
+
+    plan_mp = plan_mp.copy()
+    plan_mp["cubetas_asignadas"] = pd.to_numeric(plan_mp["cubetas_asignadas"], errors="coerce").fillna(0)
+
+    # Filtros
+    c1, c2 = st.columns(2)
+    hoy = datetime.date.today()
+    desde = c1.date_input(
+        "Desde", value=hoy - datetime.timedelta(days=30), key="hp_desde",
+    )
+    hasta = c2.date_input("Hasta", value=hoy, key="hp_hasta")
+
+    plan_f = plan_mp[
+        (plan_mp["fecha"].astype(str) >= desde.isoformat())
+        & (plan_mp["fecha"].astype(str) <= hasta.isoformat())
+    ]
+
+    if plan_f.empty:
+        st.info("No hay planes en ese rango de fechas.")
+        return
+
+    # Resumen por fecha
+    resumen = plan_f.groupby("fecha").agg(
+        asignaciones_mp=("plan_mp_id", "count"),
+        cubetas_planificadas=("cubetas_asignadas", "sum"),
+    ).reset_index()
+
+    # Contar pedidos por fecha
+    if not pedidos.empty and "fecha_produccion" in pedidos.columns:
+        pedidos_c = pedidos.copy()
+        pedidos_c["producido_bool"] = pedidos_c["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+        agrupa_ped = pedidos_c[
+            pedidos_c["fecha_produccion"].astype(str).isin(resumen["fecha"].astype(str))
+        ].groupby("fecha_produccion").agg(
+            pedidos_planificados=("pedido_id", "count"),
+            pedidos_producidos=("producido_bool", "sum"),
+        ).reset_index().rename(columns={"fecha_produccion": "fecha"})
+        resumen = resumen.merge(agrupa_ped, on="fecha", how="left")
+    resumen["pedidos_planificados"] = resumen.get("pedidos_planificados", 0).fillna(0).astype(int)
+    resumen["pedidos_producidos"] = resumen.get("pedidos_producidos", 0).fillna(0).astype(int)
+    resumen = resumen.sort_values("fecha", ascending=False)
+
+    st.dataframe(
+        resumen.rename(columns={
+            "fecha": "Fecha", "asignaciones_mp": "N° asignaciones MP",
+            "cubetas_planificadas": "Cubetas planificadas",
+            "pedidos_planificados": "Pedidos planificados",
+            "pedidos_producidos": "Pedidos ya producidos",
+        }),
+        use_container_width=True, hide_index=True,
+    )
+    c1, c2 = st.columns(2)
+    c1.metric("Planes en el rango", len(resumen))
+    c2.metric("Total cubetas planificadas", f"{int(resumen['cubetas_planificadas'].sum()):,}")
+
+    st.divider()
+    st.markdown("### 🗑️ Eliminar plan de un día")
+    st.caption(
+        "**Bloqueado si hay pedidos de esa fecha ya producidos** (para no "
+        "romper la trazabilidad). Si necesitas revertir un plan ya ejecutado, "
+        "primero revierte las producciones asociadas."
+    )
+
+    fechas_disponibles = resumen["fecha"].tolist()
+    fecha_elim = st.selectbox(
+        "Plan a eliminar (por fecha)",
+        fechas_disponibles,
+        format_func=lambda f: (
+            f"{f} — {int(resumen.set_index('fecha').loc[f, 'asignaciones_mp'])} asig., "
+            f"{int(resumen.set_index('fecha').loc[f, 'cubetas_planificadas'])} cub., "
+            f"{int(resumen.set_index('fecha').loc[f, 'pedidos_planificados'])} ped."
+        ),
+        key="hp_fecha_elim",
+    )
+    producidos = int(resumen.set_index("fecha").loc[fecha_elim, "pedidos_producidos"])
+    if producidos > 0:
+        st.error(
+            f"🔒 Este plan tiene {producidos} pedido(s) ya producido(s). "
+            f"No se puede eliminar mientras haya producciones asociadas."
+        )
+    else:
+        with st.form(f"form_elim_plan_{fecha_elim}"):
+            confirm = st.text_input(
+                f"Escribe **{fecha_elim}** para confirmar", key="hp_confirm",
+            )
+            motivo = st.text_area("Motivo de la eliminación (obligatorio)", "", key="hp_motivo")
+            submitted = st.form_submit_button("🗑️ Eliminar plan del día", type="secondary")
+            if submitted:
+                if confirm.strip() != str(fecha_elim):
+                    st.error(f"La confirmación no coincide. Escribe exactamente: {fecha_elim}")
+                elif not motivo.strip():
+                    st.error("Escribe el motivo de la eliminación.")
+                else:
+                    # Eliminar filas del plan_mp_asignado
+                    n_elim = 0
+                    for _, fila in plan_f[plan_f["fecha"].astype(str) == str(fecha_elim)].iterrows():
+                        if db.delete_row("plan_mp_asignado", "plan_mp_id", fila["plan_mp_id"]):
+                            n_elim += 1
+                    # Limpiar fecha_produccion de los pedidos vinculados
+                    n_ped = 0
+                    if not pedidos.empty and "fecha_produccion" in pedidos.columns:
+                        pedidos_vinc = pedidos[pedidos["fecha_produccion"].astype(str) == str(fecha_elim)]
+                        for _, pv in pedidos_vinc.iterrows():
+                            db.update_row("pedidos", "pedido_id", pv["pedido_id"], {"fecha_produccion": ""})
+                            n_ped += 1
+                    # Bitacora
+                    log_cambio(
+                        db, username,
+                        modulo="Plan de produccion", tabla="plan_mp_asignado",
+                        id_registro=str(fecha_elim), accion="eliminacion",
+                        motivo=(
+                            f"Plan del dia {fecha_elim}: {n_elim} asignaciones eliminadas, "
+                            f"{n_ped} pedidos volvieron a sin planificar. Motivo: {motivo.strip()}"
+                        ),
+                    )
+                    st.success(
+                        f"✅ Plan del {fecha_elim} eliminado — {n_elim} asignaciones borradas "
+                        f"y {n_ped} pedidos volvieron a estar sin planificar."
+                    )
+                    st.rerun()
