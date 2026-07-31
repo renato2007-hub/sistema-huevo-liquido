@@ -67,6 +67,11 @@ SHEET_SCHEMAS = {
         "fecha_pedido", "fecha_produccion", "fecha_entrega",
         "producido", "usuario", "observaciones", "estado", "urgente",
     ],
+    "pedidos_lineas": [
+        "linea_id", "pedido_id", "tipo_producto", "presentacion_id",
+        "unidades", "cantidad_kg", "fecha_produccion", "fecha_entrega",
+        "producido", "orden_produccion_vinculada", "observaciones",
+    ],
     "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "genero", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
@@ -189,3 +194,4 @@ MODULOS = [
     "Trazabilidad",
     "Catálogos y configuración",
 ]
+
