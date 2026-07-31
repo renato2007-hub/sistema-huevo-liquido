@@ -74,13 +74,13 @@ def render(db, username, rol):
         )
         unid_sel     = cc.number_input("Unidades", min_value=0, step=1, key="ped_unid")
         kg_nominal_l = float(presentaciones.set_index("presentacion_id").loc[pres_sel, "kg_nominal"])
-        kg_sel       = cd.number_input("Kg", min_value=0.0,
-                                        value=round(unid_sel * kg_nominal_l, 2) if unid_sel > 0 else 0.0,
-                                        step=0.5, key="ped_kg")
+        # kg se calcula automaticamente: unidades * kg_nominal de la presentacion
+        kg_sel       = round(unid_sel * kg_nominal_l, 2)
+        cd.metric("Kg (auto)", f"{kg_sel:.1f}", help=f"{unid_sel} × {kg_nominal_l:g} kg por unidad")
 
         if st.button("➕ Agregar producto al pedido", use_container_width=True):
-            if kg_sel <= 0 and unid_sel <= 0:
-                st.error("Ingresa al menos unidades o kg.")
+            if unid_sel <= 0:
+                st.error("Ingresa el número de unidades.")
             else:
                 pres_nombre = presentaciones.set_index("presentacion_id").loc[pres_sel, "nombre"]
                 st.session_state[clave_items].append({
@@ -88,7 +88,7 @@ def render(db, username, rol):
                     "presentacion_id": pres_sel,
                     "presentacion_nombre": pres_nombre,
                     "unidades_solicitadas": unid_sel,
-                    "cantidad_kg": kg_sel if kg_sel > 0 else round(unid_sel * kg_nominal_l, 2),
+                    "cantidad_kg": kg_sel,
                 })
                 st.rerun()
 
