@@ -113,13 +113,14 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
 
     el.append(Paragraph("Detalle por pedido", ESTILOS["Heading2"]))
     det = [[_p(h, negrita=True) for h in
-            ["Pedido", "Cliente", "Producto", "Presentación", "Kg", "Unidades", "Entrega"]]]
+            ["Pedido", "Cliente", "Producto", "Presentación", "Kg", "Unid.", "Entrega", "Observaciones"]]]
     for row in detalle:
         det.append([
             _p(row["pedido_id"], pequeño=True), _p(row["cliente"], pequeño=True),
             _p(row["tipo_producto"], pequeño=True), _p(row["presentacion"], pequeño=True),
             _p(f"{row['kg']:.1f}", pequeño=True), _p(str(row["unidades"]), pequeño=True),
             _p(row["fecha_entrega"], pequeño=True),
+            _p(row.get("observaciones", "") or "", pequeño=True),
         ])
     td = Table(det, repeatRows=1)
     td.setStyle(TableStyle([
@@ -150,6 +151,7 @@ def render(db, username, rol):
 
 def _render_planificar(db, username, rol):
     pedidos_df    = db.get_df("pedidos")
+    pedidos_lineas_df = db.get_df("pedidos_lineas")
     clientes_df   = db.get_df("clientes")
     presentac_df  = db.get_df("presentaciones")
     recepciones   = db.get_df("recepciones_mp")
@@ -161,23 +163,37 @@ def _render_planificar(db, username, rol):
     hoy = datetime.date.today()
     fecha_sel = st.date_input("📅 Fecha de producción a planificar", value=hoy)
 
-    if pedidos_df.empty:
-        st.info("No hay pedidos registrados todavía.")
+    if pedidos_lineas_df.empty:
+        st.info("No hay líneas de pedido registradas todavía.")
         return
 
-    pedidos_df["producido_bool"] = pedidos_df["producido"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
-    pedidos_fecha = pedidos_df[
-        (pedidos_df["fecha_produccion"].astype(str) == fecha_sel.isoformat()) &
-        (~pedidos_df["producido_bool"])
+    # Trabajamos con LINEAS de pedido (cada linea tiene su propia fecha_produccion).
+    # Se hace JOIN con la cabecera pedidos para traer cliente_id, estado, urgente.
+    pedidos_lineas_df = pedidos_lineas_df.copy()
+    pedidos_lineas_df["producido_bool"] = pedidos_lineas_df["producido"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
+    cols_cab = [c for c in ["pedido_id", "cliente_id", "estado", "urgente", "pedido_cliente_ref"] if c in pedidos_df.columns]
+    if cols_cab and not pedidos_df.empty:
+        pedidos_lineas_df = pedidos_lineas_df.merge(pedidos_df[cols_cab], on="pedido_id", how="left")
+    if "estado" in pedidos_lineas_df.columns:
+        estado_norm = pedidos_lineas_df["estado"].fillna("pendiente").astype(str).str.strip().str.lower()
+        pedidos_lineas_df = pedidos_lineas_df[estado_norm != "cancelado"]
+
+    pedidos_fecha = pedidos_lineas_df[
+        (pedidos_lineas_df["fecha_produccion"].astype(str) == fecha_sel.isoformat()) &
+        (~pedidos_lineas_df["producido_bool"])
     ].copy()
 
     if pedidos_fecha.empty:
-        st.info(f"No hay pedidos con fecha de producción asignada para el {fecha_sel.strftime('%d/%m/%Y')}.")
+        st.info(f"No hay líneas de pedido con fecha de producción asignada para el {fecha_sel.strftime('%d/%m/%Y')}.")
         st.caption("Asigna fechas de producción en Recepción de pedidos → Todos los pedidos.")
         return
 
     pedidos_fecha["cantidad_kg"] = pd.to_numeric(pedidos_fecha["cantidad_kg"], errors="coerce").fillna(0)
-    pedidos_fecha["unidades_solicitadas"] = pd.to_numeric(pedidos_fecha["unidades_solicitadas"], errors="coerce").fillna(0)
+    # La columna se llama 'unidades' en pedidos_lineas; crear alias unidades_solicitadas para compatibilidad
+    if "unidades" in pedidos_fecha.columns:
+        pedidos_fecha["unidades_solicitadas"] = pd.to_numeric(pedidos_fecha["unidades"], errors="coerce").fillna(0)
+    else:
+        pedidos_fecha["unidades_solicitadas"] = 0
 
     # Resolver nombres de cliente y presentación
     mapa_cli = dict(zip(clientes_df["cliente_id"], clientes_df["nombre"])) if not clientes_df.empty else {}
@@ -376,9 +392,13 @@ def _render_planificar(db, username, rol):
 
     # Detalle por pedido
     with st.expander("📋 Ver detalle de todos los pedidos de este día", expanded=True):
+        # Merge observaciones de linea con observaciones del pedido para mostrar ambos
+        if "observaciones" not in pedidos_fecha.columns:
+            pedidos_fecha["observaciones"] = ""
         detalle_df = pedidos_fecha[[
             "pedido_id", "cliente_nombre", "tipo_producto",
             "presentacion_nombre", "cantidad_kg", "unidades_solicitadas", "fecha_entrega",
+            "observaciones",
         ]].rename(columns={
             "pedido_id": "Pedido",
             "cliente_nombre": "Cliente",
@@ -387,6 +407,7 @@ def _render_planificar(db, username, rol):
             "cantidad_kg": "Kg",
             "unidades_solicitadas": "Unidades",
             "fecha_entrega": "Fecha entrega",
+            "observaciones": "Observaciones",
         }).sort_values(["Producto", "Cliente"])
         st.dataframe(detalle_df, use_container_width=True, hide_index=True)
 
@@ -411,6 +432,7 @@ def _render_planificar(db, username, rol):
             "kg": row["cantidad_kg"],
             "unidades": int(row["unidades_solicitadas"]),
             "fecha_entrega": str(row["fecha_entrega"]),
+            "observaciones": str(row.get("observaciones", "") or ""),
         }
         for _, row in pedidos_fecha.iterrows()
     ]
