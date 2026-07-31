@@ -19,11 +19,15 @@ MEDIOS_RECEPCION = ["Correo", "WhatsApp", "Mensaje de texto", "Llamada", "Otro"]
 
 def render(db, username, rol):
     st.title("🧾 Recepción de pedidos")
-    nombres_tabs = ["➕ Registrar pedido", "🟡 Pendientes de producir", "📋 Todos los pedidos"]
+    nombres_tabs = ["➕ Registrar pedido", "⚡ Extra a pedido existente",
+                    "🟡 Pendientes de producir", "📋 Todos los pedidos"]
     if puede_editar_pedidos(rol):
         nombres_tabs.append("✏️ Editar / eliminar")
     tabs_pedidos = st.tabs(nombres_tabs)
-    tab_nuevo, tab_pendientes, tab_todos = tabs_pedidos[0], tabs_pedidos[1], tabs_pedidos[2]
+    tab_nuevo = tabs_pedidos[0]
+    tab_extra = tabs_pedidos[1]
+    tab_pendientes = tabs_pedidos[2]
+    tab_todos = tabs_pedidos[3]
 
     clientes = db.get_df("clientes")
     presentaciones = db.get_df("presentaciones")
@@ -176,6 +180,158 @@ def render(db, username, rol):
                 st.session_state[clave_items] = []
                 st.success(f"✅ Pedido {pedido_id} guardado con {len(items_acum)} línea(s) — cada una se planifica por separado.")
                 st.rerun()
+
+    # ======================== EXTRA A PEDIDO EXISTENTE ========================
+    with tab_extra:
+        st.caption(
+            "Cuando un cliente llama pidiendo agregar una cantidad extra a un "
+            "pedido ya registrado, úsalo aquí: se crea una **línea nueva** en "
+            "el pedido existente que se planifica por separado. Ideal para "
+            "pedidos de última hora que se suman a una orden en curso."
+        )
+        pedidos_cab_extra = db.get_df("pedidos")
+        if pedidos_cab_extra.empty:
+            st.info("No hay pedidos existentes. Crea uno desde 'Registrar pedido' primero.")
+        else:
+            # Filtrar pedidos activos (no cancelados)
+            if "estado" in pedidos_cab_extra.columns:
+                estado_norm = pedidos_cab_extra["estado"].fillna("pendiente").astype(str).str.strip().str.lower()
+                pedidos_activos_extra = pedidos_cab_extra[estado_norm != "cancelado"].copy()
+            else:
+                pedidos_activos_extra = pedidos_cab_extra.copy()
+            if pedidos_activos_extra.empty:
+                st.info("No hay pedidos activos.")
+            elif clientes.empty or presentaciones.empty:
+                st.warning("Necesitas clientes y presentaciones configurados en Catálogos.")
+            else:
+                # Traer nombres de cliente para el selector
+                mapa_cli_extra = dict(zip(clientes["cliente_id"], clientes["nombre"])) if not clientes.empty else {}
+                pedidos_activos_extra["cli_nombre"] = pedidos_activos_extra["cliente_id"].map(mapa_cli_extra).fillna(pedidos_activos_extra["cliente_id"])
+                pedidos_activos_extra = pedidos_activos_extra.sort_values("fecha_pedido", ascending=False)
+
+                pedido_extra_id = st.selectbox(
+                    "Pedido a extender",
+                    pedidos_activos_extra["pedido_id"],
+                    format_func=lambda x: (
+                        f"{x} — {pedidos_activos_extra.set_index('pedido_id').loc[x, 'cli_nombre']} "
+                        f"(entrega: {pedidos_activos_extra.set_index('pedido_id').loc[x, 'fecha_entrega']})"
+                    ),
+                    key="extra_ped_sel",
+                )
+                fila_pedido = pedidos_activos_extra.set_index("pedido_id").loc[pedido_extra_id]
+
+                # Mostrar resumen breve del pedido
+                st.info(
+                    f"📋 **{fila_pedido['cli_nombre']}** — Fecha pedido: {fila_pedido['fecha_pedido']} — "
+                    f"Entrega original: **{fila_pedido['fecha_entrega']}**"
+                )
+
+                # Formulario de la línea extra
+                c1, c2 = st.columns(2)
+                tipo_extra = c1.selectbox(
+                    "Tipo de producto",
+                    ["Huevo entero pasteurizado", "Clara pasteurizada", "Clara sin pasteurizar", "Yema pasteurizada"],
+                    key="extra_tipo",
+                )
+                pres_extra = c2.selectbox(
+                    "Presentación", presentaciones["presentacion_id"],
+                    format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
+                    key="extra_pres",
+                )
+                c3, c4 = st.columns(2)
+                unid_extra = c3.number_input("Unidades", min_value=0, step=1, key="extra_unid")
+                kg_nom_extra = float(presentaciones.set_index("presentacion_id").loc[pres_extra, "kg_nominal"])
+                kg_extra = round(unid_extra * kg_nom_extra, 2)
+                c4.metric("Kg (auto)", f"{kg_extra:.1f}", help=f"{unid_extra} × {kg_nom_extra:g} kg por unidad")
+
+                c5, c6 = st.columns(2)
+                try:
+                    fecha_entrega_default = datetime.date.fromisoformat(str(fila_pedido["fecha_entrega"]))
+                except (ValueError, TypeError):
+                    fecha_entrega_default = datetime.date.today()
+                fecha_entrega_extra = c5.date_input(
+                    "Fecha de entrega", value=fecha_entrega_default, key="extra_fe",
+                )
+                fecha_produccion_extra = c6.date_input(
+                    "Fecha de producción (opcional)", value=datetime.date.today(), key="extra_fp",
+                )
+                sin_fp = st.checkbox("Sin asignar fecha de producción todavía", value=False, key="extra_sinfp")
+
+                # Vincular a orden en curso
+                produccion_reciente_e = db.get_df("produccion_semielaborados")
+                ordenes_recientes_e = []
+                if not produccion_reciente_e.empty and "orden_produccion" in produccion_reciente_e.columns:
+                    hoy_d = datetime.date.today()
+                    desde_d = (hoy_d - datetime.timedelta(days=2)).isoformat()
+                    prod_rec_e = produccion_reciente_e[
+                        (produccion_reciente_e["fecha"].astype(str) >= desde_d)
+                        & (produccion_reciente_e["orden_produccion"].astype(str).str.strip() != "")
+                    ]
+                    ordenes_recientes_e = sorted(set(prod_rec_e["orden_produccion"].astype(str).tolist()))
+                opciones_orden_e = ["(no vincular)"] + ordenes_recientes_e
+                orden_vinc_extra = st.selectbox(
+                    "Vincular a orden de producción en curso (opcional)",
+                    opciones_orden_e, index=0, key="extra_orden_vinc",
+                    help="Si esta línea extra va a producirse sumándose a una orden ya en curso, aparecerá en el aviso del jefe de planta.",
+                )
+                obs_extra = st.text_input("Observaciones (opcional)", "", key="extra_obs")
+                marcar_urg = st.checkbox("⚡ Marcar el pedido como URGENTE al agregar esta línea", value=False, key="extra_urg")
+
+                if st.button("➕ Agregar línea extra al pedido", type="primary", use_container_width=True):
+                    if unid_extra <= 0:
+                        st.error("Ingresa el número de unidades.")
+                    else:
+                        linea_id_new = db.siguiente_id("pedidos_lineas", "PL", datetime.date.today())
+                        db.append_row("pedidos_lineas", {
+                            "linea_id": linea_id_new,
+                            "pedido_id": pedido_extra_id,
+                            "tipo_producto": tipo_extra,
+                            "presentacion_id": pres_extra,
+                            "unidades": unid_extra,
+                            "cantidad_kg": kg_extra,
+                            "fecha_produccion": "" if sin_fp else fecha_produccion_extra.isoformat(),
+                            "fecha_entrega": fecha_entrega_extra.isoformat(),
+                            "producido": False,
+                            "orden_produccion_vinculada": orden_vinc_extra if orden_vinc_extra != "(no vincular)" else "",
+                            "observaciones": obs_extra,
+                        })
+                        # Actualizar cabecera: sumar kg y unidades, marcar urgente si corresponde
+                        kg_prev = float(pd.to_numeric(fila_pedido.get("cantidad_kg", 0), errors="coerce") or 0)
+                        unid_prev = float(pd.to_numeric(fila_pedido.get("unidades_solicitadas", 0), errors="coerce") or 0)
+                        cambios_cab = {
+                            "cantidad_kg": kg_prev + kg_extra,
+                            "unidades_solicitadas": unid_prev + unid_extra,
+                            # Refrescar el resumen textual de productos incluidos
+                            "tipo_producto": _refrescar_resumen_productos(db, pedido_extra_id, tipo_extra),
+                        }
+                        if marcar_urg:
+                            cambios_cab["urgente"] = True
+                        # Anotar en observaciones que hubo extra
+                        obs_cab_prev = str(fila_pedido.get("observaciones", "") or "")
+                        marca_extra = (
+                            f"EXTRA {datetime.date.today().isoformat()} por {username}: "
+                            f"+{unid_extra} un. de {tipo_extra} ({kg_extra:.1f} kg)"
+                        )
+                        cambios_cab["observaciones"] = (obs_cab_prev + " | " + marca_extra).strip(" |")
+                        db.update_row("pedidos", "pedido_id", pedido_extra_id, cambios_cab)
+                        st.success(
+                            f"✅ Línea extra agregada al pedido {pedido_extra_id}: "
+                            f"{unid_extra} un. de {tipo_extra} ({kg_extra:.1f} kg)."
+                            + (" ⚡ Pedido marcado urgente." if marcar_urg else "")
+                        )
+                        st.rerun()
+
+    def _refrescar_resumen_productos(db, pedido_id, nuevo_tipo):
+        """Devuelve el string 'tipo_producto' de la cabecera con todos los
+        tipos de producto que ahora tiene el pedido (incluido el nuevo)."""
+        lineas_actuales = db.get_df("pedidos_lineas")
+        if lineas_actuales.empty:
+            return nuevo_tipo
+        tipos_actuales = set(
+            lineas_actuales[lineas_actuales["pedido_id"] == pedido_id]["tipo_producto"].astype(str).tolist()
+        )
+        tipos_actuales.add(nuevo_tipo)
+        return ", ".join(sorted(tipos_actuales))
 
     # ======================== helper: lineas con todos los datos ========================
     def _cargar_lineas():
@@ -472,7 +628,7 @@ def render(db, username, rol):
 
     # ======================== EDITAR / ELIMINAR (solo admin y gerencia) ========================
     if puede_editar_pedidos(rol):
-        with tabs_pedidos[3]:
+        with tabs_pedidos[4]:
             st.caption("Solo administrador y gerencia. Puedes editar campos de una línea o eliminar el pedido completo.")
 
             lineas = _cargar_lineas()
