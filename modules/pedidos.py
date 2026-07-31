@@ -134,16 +134,16 @@ def render(db, username, rol):
                 st.error("Agrega al menos un producto antes de guardar.")
             else:
                 pedido_id = db.siguiente_id("pedidos", "PED", fecha_pedido)
-                # Guardar el pedido cabecera (resumen con primer producto para compatibilidad)
-                primer = items_acum[0]
+                # Cabecera del pedido: solo datos del cliente y del pedido en si.
+                # Los productos con sus fechas van en pedidos_lineas.
                 db.append_row("pedidos", {
                     "pedido_id": pedido_id,
                     "pedido_cliente_ref": pedido_cliente_ref,
                     "cliente_id": cliente_id,
                     "medio_recepcion": medio_recepcion,
                     "ciudad": ciudad,
-                    "tipo_producto": ", ".join(set(i["tipo_producto"] for i in items_acum)),
-                    "presentacion_id": primer["presentacion_id"],
+                    "tipo_producto": ", ".join(sorted(set(i["tipo_producto"] for i in items_acum))),
+                    "presentacion_id": "",
                     "unidades_solicitadas": sum(i["unidades_solicitadas"] for i in items_acum),
                     "cantidad_kg": sum(i["cantidad_kg"] for i in items_acum),
                     "fecha_pedido": fecha_pedido.isoformat(),
@@ -152,279 +152,307 @@ def render(db, username, rol):
                     "producido": False,
                     "estado": "pendiente",
                     "urgente": False,
-                    "orden_produccion_vinculada": orden_vinculada if orden_vinculada != "(no vincular)" else "",
+                    "orden_produccion_vinculada": "",
                     "usuario": username,
                     "observaciones": observaciones,
                 })
-                # Guardar cada línea de producto en pedidos_items
+                # Cada producto es una linea independiente (planificable
+                # y marcable como producida por separado).
                 for item in items_acum:
-                    item_id = db.siguiente_id("pedidos_items", "PI", fecha_pedido)
-                    db.append_row("pedidos_items", {
-                        "item_id": item_id,
+                    linea_id = db.siguiente_id("pedidos_lineas", "PL", fecha_pedido)
+                    db.append_row("pedidos_lineas", {
+                        "linea_id": linea_id,
                         "pedido_id": pedido_id,
                         "tipo_producto": item["tipo_producto"],
                         "presentacion_id": item["presentacion_id"],
+                        "unidades": item["unidades_solicitadas"],
                         "cantidad_kg": item["cantidad_kg"],
-                        "unidades_solicitadas": item["unidades_solicitadas"],
+                        "fecha_produccion": "",
+                        "fecha_entrega": fecha_entrega.isoformat(),
+                        "producido": False,
+                        "orden_produccion_vinculada": orden_vinculada if orden_vinculada != "(no vincular)" else "",
                         "observaciones": "",
                     })
                 st.session_state[clave_items] = []
-                st.success(f"✅ Pedido {pedido_id} guardado con {len(items_acum)} producto(s).")
+                st.success(f"✅ Pedido {pedido_id} guardado con {len(items_acum)} línea(s) — cada una se planifica por separado.")
                 st.rerun()
 
-    # ======================== helper para mostrar tablas ========================
-    def _enriquecer(df):
-        if df.empty:
-            return df
-        df = df.copy()
+    # ======================== helper: lineas con todos los datos ========================
+    def _cargar_lineas():
+        """Carga pedidos_lineas y hace JOIN con pedidos (cabecera), clientes
+        y presentaciones. Devuelve un DataFrame de LINEAS enriquecidas."""
+        lineas = db.get_df("pedidos_lineas")
+        pedidos_cab = db.get_df("pedidos")
+        if lineas.empty:
+            return pd.DataFrame()
+        lineas = lineas.copy()
+        lineas["cantidad_kg"] = pd.to_numeric(lineas["cantidad_kg"], errors="coerce").fillna(0)
+        lineas["unidades"] = pd.to_numeric(lineas["unidades"], errors="coerce").fillna(0)
+        lineas["producido_bool"] = lineas["producido"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
+        # JOIN con cabecera (para traer cliente, estado del pedido, urgente, ref cliente)
+        cols_cab = ["pedido_id", "cliente_id", "fecha_pedido", "pedido_cliente_ref",
+                    "medio_recepcion", "ciudad", "estado", "urgente", "observaciones"]
+        cols_cab = [c for c in cols_cab if c in pedidos_cab.columns]
+        pedidos_cab_c = pedidos_cab[cols_cab].copy() if not pedidos_cab.empty else pd.DataFrame(columns=cols_cab)
+        if not pedidos_cab_c.empty:
+            pedidos_cab_c = pedidos_cab_c.rename(columns={"observaciones": "obs_pedido"})
+            lineas = lineas.merge(pedidos_cab_c, on="pedido_id", how="left")
+        # JOIN con clientes
         if not clientes.empty:
-            df = df.merge(
+            lineas = lineas.merge(
                 clientes[["cliente_id", "nombre"]].rename(columns={"nombre": "cliente_nombre"}),
                 on="cliente_id", how="left",
             )
-            df["cliente_nombre"] = df["cliente_nombre"].fillna(df["cliente_id"])
+            lineas["cliente_nombre"] = lineas["cliente_nombre"].fillna(lineas["cliente_id"])
         else:
-            df["cliente_nombre"] = df["cliente_id"]
+            lineas["cliente_nombre"] = lineas["cliente_id"]
+        # JOIN con presentaciones
         if not presentaciones.empty:
-            df = df.merge(
+            lineas = lineas.merge(
                 presentaciones[["presentacion_id", "nombre"]].rename(columns={"nombre": "presentacion_nombre"}),
                 on="presentacion_id", how="left",
             )
-            df["presentacion_nombre"] = df["presentacion_nombre"].fillna(df["presentacion_id"])
+            lineas["presentacion_nombre"] = lineas["presentacion_nombre"].fillna(lineas["presentacion_id"])
         else:
-            df["presentacion_nombre"] = df["presentacion_id"]
-        df["producido_bool"] = df["producido"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
-        df["cantidad_kg"] = pd.to_numeric(df["cantidad_kg"], errors="coerce").fillna(0)
-        # Estado registrado (nuevo campo). Los pedidos historicos sin estado
-        # se tratan como "pendiente" por default.
-        if "estado" in df.columns:
-            df["estado_reg"] = (
-                df["estado"].fillna("pendiente").astype(str).str.strip().str.lower()
+            lineas["presentacion_nombre"] = lineas["presentacion_id"]
+        # Estado del pedido (heredado en la linea)
+        if "estado" in lineas.columns:
+            lineas["estado_pedido"] = (
+                lineas["estado"].fillna("pendiente").astype(str).str.strip().str.lower()
                 .replace({"": "pendiente", "nan": "pendiente", "none": "pendiente"})
             )
         else:
-            df["estado_reg"] = "pendiente"
-        # Bandera de urgente
-        if "urgente" in df.columns:
-            df["urgente_bool"] = df["urgente"].astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
+            lineas["estado_pedido"] = "pendiente"
+        if "urgente" in lineas.columns:
+            lineas["urgente_bool"] = lineas["urgente"].astype(str).str.upper().isin(["TRUE","1","SI","SÍ"])
         else:
-            df["urgente_bool"] = False
+            lineas["urgente_bool"] = False
+        # Atrasada: la linea no producida cuya fecha de entrega ya paso
         hoy_str = datetime.date.today().isoformat()
-        df["atrasado"] = (~df["producido_bool"]) & (df["estado_reg"] != "cancelado") & (df["fecha_entrega"].astype(str) < hoy_str)
+        lineas["atrasada"] = (
+            (~lineas["producido_bool"])
+            & (lineas["estado_pedido"] != "cancelado")
+            & (lineas["fecha_entrega"].astype(str) < hoy_str)
+        )
 
-        def _estado(row):
-            if row["estado_reg"] == "cancelado":
+        def _estado_linea(row):
+            if row["estado_pedido"] == "cancelado":
                 return "❌ Cancelado"
             if row["producido_bool"]:
                 return "✅ Producido"
-            if row["atrasado"]:
-                return "🔴 Atrasado"
-            base = "🟡 Pendiente"
+            if row["atrasada"]:
+                base = "🔴 Atrasado"
+            else:
+                base = "🟡 Pendiente"
             if row["urgente_bool"]:
                 return "⚡ URGENTE " + base
             return base
 
-        df["estado_display"] = df.apply(_estado, axis=1)
-        return df
-
-    columnas_mostrar = [
-        "pedido_id", "pedido_cliente_ref", "cliente_nombre", "ciudad", "medio_recepcion",
-        "tipo_producto", "presentacion_nombre", "unidades_solicitadas", "cantidad_kg",
-        "fecha_pedido", "fecha_produccion", "fecha_entrega", "observaciones",
-    ]
+        lineas["estado_display"] = lineas.apply(_estado_linea, axis=1)
+        # Etiqueta descriptiva para selectboxes: "PED-... — CLIENTE — Producto (X kg, entrega: Y)"
+        def _etq(row):
+            return (
+                f"{row['pedido_id']} — {row['cliente_nombre']} — "
+                f"{row['tipo_producto']} ({row['cantidad_kg']:.1f} kg, entrega: {row['fecha_entrega']})"
+            )
+        lineas["etiqueta"] = lineas.apply(_etq, axis=1)
+        return lineas
 
     # ======================== PENDIENTES DE PRODUCIR ========================
     with tab_pendientes:
-        df = _enriquecer(db.get_df("pedidos"))
-        if df.empty:
-            st.info("No hay pedidos registrados todavía.")
+        lineas = _cargar_lineas()
+        if lineas.empty:
+            st.info("No hay pedidos registrados.")
         else:
-            pendientes = df[(~df["producido_bool"]) & (df["estado_reg"] != "cancelado")].sort_values("fecha_entrega")
+            pendientes = lineas[
+                (~lineas["producido_bool"]) & (lineas["estado_pedido"] != "cancelado")
+            ].sort_values(["urgente_bool", "fecha_entrega"], ascending=[False, True])
             if pendientes.empty:
-                st.success("🎉 No hay pedidos pendientes — todo lo registrado ya está marcado como producido.")
+                st.success("🎉 No hay pedidos pendientes de producir.")
             else:
-                atrasados = pendientes[pendientes["atrasado"]]
-                if not atrasados.empty:
-                    st.error(f"⚠️ {len(atrasados)} pedido(s) con fecha de entrega ya vencida.")
-
-                st.metric("Pedidos pendientes de producir", len(pendientes))
+                st.metric("Kg pendientes de producir", f"{pendientes['cantidad_kg'].sum():,.1f}")
+                cols_pend = ["pedido_id", "cliente_nombre", "tipo_producto",
+                             "presentacion_nombre", "unidades", "cantidad_kg",
+                             "fecha_entrega", "fecha_produccion", "estado_display"]
+                cols_pend = [c for c in cols_pend if c in pendientes.columns]
                 st.dataframe(
-                    pendientes[["estado"] + columnas_mostrar].rename(columns={"estado": "Estado"}),
+                    pendientes[cols_pend].rename(columns={
+                        "pedido_id": "Pedido", "cliente_nombre": "Cliente",
+                        "tipo_producto": "Producto", "presentacion_nombre": "Presentación",
+                        "unidades": "Unidades", "cantidad_kg": "Kg",
+                        "fecha_entrega": "Entrega", "fecha_produccion": "Producción",
+                        "estado_display": "Estado",
+                    }),
                     use_container_width=True, hide_index=True,
                 )
 
-                st.write("")
-                st.markdown("##### ✅ Marcar pedido como producido")
-                pedido_sel = st.selectbox(
-                    "Pedido", pendientes["pedido_id"],
-                    format_func=lambda x: (
-                        f"{x} — {pendientes.set_index('pedido_id').loc[x, 'cliente_nombre']} "
-                        f"({pendientes.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
-                    ),
-                )
-                if st.button("✅ Marcar como producido"):
-                    db.update_row("pedidos", "pedido_id", pedido_sel, {"producido": True})
-                    st.success(f"Pedido {pedido_sel} marcado como producido.")
-                    st.rerun()
-
     # ======================== TODOS LOS PEDIDOS ========================
     with tab_todos:
-        df = _enriquecer(db.get_df("pedidos"))
-        if df.empty:
-            st.info("No hay pedidos registrados todavía.")
+        lineas = _cargar_lineas()
+        if lineas.empty:
+            st.info("No hay pedidos registrados.")
         else:
-            hoy_d = datetime.date.today()
-            c1, c2 = st.columns(2)
-            filtro_estado = c1.selectbox("Estado", ["Todos", "Pendientes", "Producidos", "Cancelados"])
-            filtro_cliente = c2.selectbox(
-                "Cliente", ["Todos"] + sorted(df["cliente_nombre"].dropna().unique().tolist()),
+            # Filtros
+            c1, c2, c3 = st.columns(3)
+            filtro_estado = c1.selectbox("Estado", ["Todos", "Pendientes", "Producidos", "Cancelados"], key="lin_estado")
+            filtro_producto = c2.selectbox(
+                "Producto",
+                ["Todos"] + sorted(lineas["tipo_producto"].dropna().unique().tolist()),
+                key="lin_prod",
             )
-            c3, c4, c5 = st.columns(3)
-            filtro_tipo_fecha = c3.selectbox(
-                "Filtrar por fecha", ["Sin filtro", "Fecha de pedido", "Fecha de entrega"],
-                key="filtro_tipo_fecha",
+            filtro_cliente = c3.selectbox(
+                "Cliente",
+                ["Todos"] + sorted(lineas["cliente_nombre"].dropna().unique().tolist()),
+                key="lin_cli",
             )
-            desde_f = hasta_f = None
-            if filtro_tipo_fecha != "Sin filtro":
-                desde_f = c4.date_input("Desde", value=hoy_d - datetime.timedelta(days=30), key="filtro_desde")
-                hasta_f = c5.date_input("Hasta", value=hoy_d, key="filtro_hasta")
 
-            df_mostrar = df.copy()
-            # Excluir cancelados por default (se ven en filtro dedicado)
+            df_mostrar = lineas.copy()
             if filtro_estado != "Cancelados":
-                df_mostrar = df_mostrar[df_mostrar["estado_reg"] != "cancelado"]
+                df_mostrar = df_mostrar[df_mostrar["estado_pedido"] != "cancelado"]
             if filtro_estado == "Pendientes":
                 df_mostrar = df_mostrar[~df_mostrar["producido_bool"]]
             elif filtro_estado == "Producidos":
                 df_mostrar = df_mostrar[df_mostrar["producido_bool"]]
             elif filtro_estado == "Cancelados":
-                df_mostrar = df_mostrar[df_mostrar["estado_reg"] == "cancelado"]
+                df_mostrar = df_mostrar[df_mostrar["estado_pedido"] == "cancelado"]
+            if filtro_producto != "Todos":
+                df_mostrar = df_mostrar[df_mostrar["tipo_producto"] == filtro_producto]
             if filtro_cliente != "Todos":
                 df_mostrar = df_mostrar[df_mostrar["cliente_nombre"] == filtro_cliente]
-            if filtro_tipo_fecha == "Fecha de pedido" and desde_f and hasta_f:
-                df_mostrar = df_mostrar[
-                    (df_mostrar["fecha_pedido"].astype(str) >= desde_f.isoformat()) &
-                    (df_mostrar["fecha_pedido"].astype(str) <= hasta_f.isoformat())
-                ]
-            elif filtro_tipo_fecha == "Fecha de entrega" and desde_f and hasta_f:
-                df_mostrar = df_mostrar[
-                    (df_mostrar["fecha_entrega"].astype(str) >= desde_f.isoformat()) &
-                    (df_mostrar["fecha_entrega"].astype(str) <= hasta_f.isoformat())
-                ]
 
-            df_mostrar = df_mostrar.copy()
-            atrasados_total = df_mostrar[df_mostrar["atrasado"]]
-            if not atrasados_total.empty:
-                st.error(f"⚠️ {len(atrasados_total)} pedido(s) con fecha de entrega ya vencida sin producir.")
+            cols_show = ["pedido_id", "cliente_nombre", "tipo_producto",
+                         "presentacion_nombre", "unidades", "cantidad_kg",
+                         "fecha_pedido", "fecha_entrega", "fecha_produccion",
+                         "estado_display"]
+            cols_show = [c for c in cols_show if c in df_mostrar.columns]
             st.dataframe(
-                df_mostrar.rename(columns={"estado_display": "Estado"})[["Estado"] + columnas_mostrar].sort_values("fecha_pedido", ascending=False),
+                df_mostrar[cols_show].rename(columns={
+                    "pedido_id": "Pedido", "cliente_nombre": "Cliente",
+                    "tipo_producto": "Producto", "presentacion_nombre": "Presentación",
+                    "unidades": "Unidades", "cantidad_kg": "Kg",
+                    "fecha_pedido": "F. pedido", "fecha_entrega": "F. entrega",
+                    "fecha_produccion": "F. producción", "estado_display": "Estado",
+                }).sort_values("F. pedido", ascending=False),
                 use_container_width=True, hide_index=True,
             )
 
+            # ---------- Acciones por linea ----------
             st.divider()
-            st.markdown("##### 📅 Asignar fecha de producción (Jefe de planta)")
-            st.caption("Selecciona un pedido sin fecha de producción asignada y defínela para planificar el turno.")
-            sin_fecha_prod = df[df["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None", "NaT"])]
-            if sin_fecha_prod.empty:
-                st.success("✅ Todos los pedidos tienen fecha de producción asignada.")
+            st.markdown("##### 🎯 Acciones por línea")
+
+            no_can = lineas[lineas["estado_pedido"] != "cancelado"]
+            if no_can.empty:
+                st.info("No hay líneas activas.")
             else:
-                pedido_fp = st.selectbox(
-                    "Pedido sin fecha de producción",
-                    sin_fecha_prod["pedido_id"],
-                    format_func=lambda x: (
-                        f"{x} — {sin_fecha_prod.set_index('pedido_id').loc[x, 'cliente_id']} "
-                        f"({sin_fecha_prod.set_index('pedido_id').loc[x, 'cantidad_kg']:.0f} kg, "
-                        f"entrega: {sin_fecha_prod.set_index('pedido_id').loc[x, 'fecha_entrega']})"
-                    ),
-                    key="asignar_fp_sel",
-                )
-                nueva_fp = st.date_input("Fecha de producción planeada", value=datetime.date.today(), key="asignar_fp_fecha")
-                if st.button("💾 Asignar fecha de producción"):
-                    db.update_row("pedidos", "pedido_id", pedido_fp, {"fecha_produccion": nueva_fp.isoformat()})
-                    st.success(f"✅ Pedido {pedido_fp} — fecha de producción asignada: {nueva_fp}.")
-                    st.rerun()
+                col_a, col_b = st.columns(2)
 
-            if puede_editar_pedidos(rol):
-                st.divider()
-                st.markdown("##### ↩️ Revertir pedido marcado como producido")
-                st.caption("Solo admin y gerencia pueden revertir — úsalo si marcaste un pedido como producido por error.")
-                producidos = df[df["producido_bool"]]
-                if producidos.empty:
-                    st.info("No hay pedidos marcados como producidos.")
-                else:
-                    pedido_rev = st.selectbox(
-                        "Pedido a revertir",
-                        producidos["pedido_id"],
-                        format_func=lambda x: (
-                            f"{x} — {producidos.set_index('pedido_id').loc[x, 'cliente_nombre']} "
-                            f"({producidos.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
-                        ),
-                        key="revertir_prod_sel",
-                    )
-                    st.warning(f"⚠️ Al revertir, el pedido **{pedido_rev}** volverá a estado Pendiente y aparecerá en el plan de producción.")
-                    if st.button("↩️ Revertir a Pendiente", type="primary"):
-                        db.update_row("pedidos", "pedido_id", pedido_rev, {"producido": False})
-                        st.success(f"✅ Pedido {pedido_rev} revertido a Pendiente.")
-                        st.rerun()
+                # -- Asignar fecha de produccion a una linea --
+                with col_a:
+                    st.markdown("**📅 Asignar fecha de producción**")
+                    lineas_sin_fp = no_can[
+                        no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
+                        & (~no_can["producido_bool"])
+                    ]
+                    if lineas_sin_fp.empty:
+                        st.caption("No hay líneas sin fecha de producción asignada.")
+                    else:
+                        linea_fp = st.selectbox(
+                            "Línea",
+                            lineas_sin_fp["linea_id"],
+                            format_func=lambda x: lineas_sin_fp.set_index("linea_id").loc[x, "etiqueta"],
+                            key="lin_fp_sel",
+                        )
+                        nueva_fp = st.date_input(
+                            "Fecha de producción", value=datetime.date.today(), key="lin_fp_fecha",
+                        )
+                        if st.button("💾 Asignar fecha", key="btn_lin_fp"):
+                            db.update_row("pedidos_lineas", "linea_id", linea_fp,
+                                          {"fecha_produccion": nueva_fp.isoformat()})
+                            st.success(f"✅ Fecha de producción asignada a la línea {linea_fp}.")
+                            st.rerun()
 
-            # ---------- Acciones rápidas: urgente + cancelar ----------
+                # -- Marcar linea como producida --
+                with col_b:
+                    st.markdown("**✅ Marcar línea como producida**")
+                    lineas_no_prod = no_can[~no_can["producido_bool"]]
+                    if lineas_no_prod.empty:
+                        st.caption("Todas las líneas ya están producidas.")
+                    else:
+                        linea_pro = st.selectbox(
+                            "Línea",
+                            lineas_no_prod["linea_id"],
+                            format_func=lambda x: lineas_no_prod.set_index("linea_id").loc[x, "etiqueta"],
+                            key="lin_pro_sel",
+                        )
+                        if st.button("✅ Marcar producida", key="btn_lin_pro"):
+                            db.update_row("pedidos_lineas", "linea_id", linea_pro, {"producido": True})
+                            # Si TODAS las lineas del pedido estan producidas, marcar el pedido tambien
+                            pedido_asoc = lineas_no_prod.set_index("linea_id").loc[linea_pro, "pedido_id"]
+                            todas_lineas_del_pedido = lineas[lineas["pedido_id"] == pedido_asoc]
+                            no_producidas_restantes = todas_lineas_del_pedido[
+                                (todas_lineas_del_pedido["linea_id"] != linea_pro)
+                                & (~todas_lineas_del_pedido["producido_bool"])
+                            ]
+                            if no_producidas_restantes.empty:
+                                db.update_row("pedidos", "pedido_id", pedido_asoc, {"producido": True})
+                                st.success(f"✅ Línea marcada y pedido {pedido_asoc} completado.")
+                            else:
+                                st.success(
+                                    f"✅ Línea marcada — quedan {len(no_producidas_restantes)} "
+                                    f"línea(s) del pedido {pedido_asoc} por producir."
+                                )
+                            st.rerun()
+
+            # -- Acciones a nivel PEDIDO: urgente + cancelar --
             st.divider()
-            st.markdown("##### ⚡ Acciones rápidas")
-            no_cancelados = df[df["estado_reg"] != "cancelado"]
-            if no_cancelados.empty:
+            st.markdown("##### ⚡ Acciones a nivel pedido (afecta todas sus líneas)")
+            pedidos_activos = lineas[lineas["estado_pedido"] != "cancelado"].drop_duplicates("pedido_id")
+            if pedidos_activos.empty:
                 st.info("No hay pedidos activos.")
             else:
-                col_ur, col_ca = st.columns(2)
+                col_u, col_c = st.columns(2)
 
-                with col_ur:
-                    st.markdown("**⚡ Marcar / desmarcar urgente**")
-                    st.caption("Los pedidos urgentes aparecen resaltados con ⚡ en el estado y se priorizan en el orden.")
+                with col_u:
+                    st.markdown("**⚡ Marcar / desmarcar pedido urgente**")
                     pedido_urg = st.selectbox(
-                        "Pedido", no_cancelados["pedido_id"],
+                        "Pedido",
+                        pedidos_activos["pedido_id"].unique(),
                         format_func=lambda x: (
-                            f"{'⚡ ' if bool(no_cancelados.set_index('pedido_id').loc[x, 'urgente_bool']) else ''}"
-                            f"{x} — {no_cancelados.set_index('pedido_id').loc[x, 'cliente_nombre']} "
-                            f"({no_cancelados.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
+                            f"{'⚡ ' if bool(pedidos_activos.set_index('pedido_id').loc[x, 'urgente_bool']) else ''}"
+                            f"{x} — {pedidos_activos.set_index('pedido_id').loc[x, 'cliente_nombre']}"
                         ),
-                        key="urg_sel",
+                        key="urg_ped_sel",
                     )
-                    ya_urg = bool(no_cancelados.set_index("pedido_id").loc[pedido_urg, "urgente_bool"])
+                    ya_urg = bool(pedidos_activos.set_index("pedido_id").loc[pedido_urg, "urgente_bool"])
                     if ya_urg:
-                        if st.button("⚪ Desmarcar como urgente", key="btn_desurg"):
+                        if st.button("⚪ Desmarcar urgente", key="btn_desurg_ped"):
                             db.update_row("pedidos", "pedido_id", pedido_urg, {"urgente": False})
-                            st.success(f"Pedido {pedido_urg} ya no es urgente.")
+                            st.success(f"{pedido_urg} ya no es urgente.")
                             st.rerun()
                     else:
-                        if st.button("⚡ Marcar como URGENTE", type="primary", key="btn_urg"):
+                        if st.button("⚡ Marcar URGENTE", type="primary", key="btn_urg_ped"):
                             db.update_row("pedidos", "pedido_id", pedido_urg, {"urgente": True})
-                            st.success(f"⚡ Pedido {pedido_urg} marcado como urgente.")
+                            st.success(f"⚡ {pedido_urg} marcado urgente.")
                             st.rerun()
 
-                with col_ca:
+                with col_c:
                     st.markdown("**❌ Cancelar pedido**")
-                    st.caption("El pedido se marca como cancelado (no se borra). Si ya fue producido/despachado, deberás ajustar inventario manualmente.")
                     pedido_can = st.selectbox(
-                        "Pedido", no_cancelados["pedido_id"],
+                        "Pedido",
+                        pedidos_activos["pedido_id"].unique(),
                         format_func=lambda x: (
-                            f"{x} — {no_cancelados.set_index('pedido_id').loc[x, 'cliente_nombre']} "
-                            f"({no_cancelados.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg) — "
-                            f"{no_cancelados.set_index('pedido_id').loc[x, 'estado_display']}"
+                            f"{x} — {pedidos_activos.set_index('pedido_id').loc[x, 'cliente_nombre']}"
                         ),
-                        key="can_sel",
+                        key="can_ped_sel",
                     )
-                    fila_can = no_cancelados.set_index("pedido_id").loc[pedido_can]
-                    if bool(fila_can["producido_bool"]):
-                        st.error(
-                            f"⚠️ Este pedido ya está **producido**. Si el cliente canceló después "
-                            f"de que salió del cuarto frío, tendrás que ajustar inventario a mano "
-                            f"(devolver producto a cuarto frío o registrar como merma)."
-                        )
-                    motivo_can = st.text_input("Motivo de la cancelación (obligatorio)", "", key="can_motivo")
-                    if st.button("❌ Cancelar este pedido", key="btn_can"):
+                    motivo_can = st.text_input("Motivo (obligatorio)", "", key="can_motivo")
+                    if st.button("❌ Cancelar", key="btn_can_ped"):
                         if not motivo_can.strip():
-                            st.error("Escribe el motivo de la cancelación.")
+                            st.error("Escribe el motivo.")
                         else:
-                            obs_prev = str(fila_can.get("observaciones", "") or "")
+                            fila = db.get_df("pedidos")
+                            fila = fila[fila["pedido_id"] == pedido_can]
+                            obs_prev = str(fila.iloc[0].get("observaciones", "") or "") if not fila.empty else ""
                             marca = (
                                 f"CANCELADO {datetime.date.today().isoformat()} por "
                                 f"{username}. Motivo: {motivo_can.strip()}"
@@ -439,129 +467,117 @@ def render(db, username, rol):
                                 id_registro=pedido_can, accion="cancelacion",
                                 motivo=motivo_can.strip(),
                             )
-                            st.success(f"❌ Pedido {pedido_can} cancelado.")
+                            st.success(f"❌ Pedido {pedido_can} cancelado (todas sus líneas).")
                             st.rerun()
 
     # ======================== EDITAR / ELIMINAR (solo admin y gerencia) ========================
     if puede_editar_pedidos(rol):
         with tabs_pedidos[3]:
-            st.caption("Disponible solo para administrador y gerencia.")
-            df = _enriquecer(db.get_df("pedidos"))
-            if df.empty:
-                st.info("No hay pedidos registrados todavía.")
+            st.caption("Solo administrador y gerencia. Puedes editar campos de una línea o eliminar el pedido completo.")
+
+            lineas = _cargar_lineas()
+            if lineas.empty:
+                st.info("No hay pedidos registrados.")
             else:
-                pedido_sel = st.selectbox(
-                    "Pedido a editar", df["pedido_id"].sort_values(ascending=False),
-                    format_func=lambda x: (
-                        f"{x} — {df.set_index('pedido_id').loc[x, 'cliente_nombre']} "
-                        f"({df.set_index('pedido_id').loc[x, 'cantidad_kg']:.1f} kg)"
-                    ),
-                    key="editar_pedido_select",
+                # ---- Editar linea ----
+                st.markdown("##### ✏️ Editar línea de pedido")
+                linea_sel = st.selectbox(
+                    "Línea", lineas["linea_id"],
+                    format_func=lambda x: lineas.set_index("linea_id").loc[x, "etiqueta"],
+                    key="ed_lin_sel",
                 )
-                fila = df.set_index("pedido_id").loc[pedido_sel]
-
-                with st.form(f"form_editar_pedido_{pedido_sel}"):
-                    c1, c2, c3 = st.columns(3)
-                    cliente_id_e = c1.selectbox(
-                        "Cliente", clientes["cliente_id"],
-                        index=list(clientes["cliente_id"]).index(fila["cliente_id"]) if fila["cliente_id"] in list(clientes["cliente_id"]) else 0,
-                        format_func=lambda x: clientes.set_index("cliente_id").loc[x, "nombre"],
+                fila_l = lineas.set_index("linea_id").loc[linea_sel]
+                with st.form(f"form_ed_lin_{linea_sel}"):
+                    c1, c2 = st.columns(2)
+                    tipo_e = c1.selectbox(
+                        "Producto",
+                        ["Huevo entero pasteurizado", "Clara pasteurizada", "Clara sin pasteurizar", "Yema pasteurizada"],
+                        index=(["Huevo entero pasteurizado", "Clara pasteurizada", "Clara sin pasteurizar", "Yema pasteurizada"].index(fila_l["tipo_producto"]) if fila_l["tipo_producto"] in ["Huevo entero pasteurizado", "Clara pasteurizada", "Clara sin pasteurizar", "Yema pasteurizada"] else 0),
                     )
-                    medio_e = c2.selectbox(
-                        "Medio de recepción", MEDIOS_RECEPCION,
-                        index=MEDIOS_RECEPCION.index(fila["medio_recepcion"]) if fila["medio_recepcion"] in MEDIOS_RECEPCION else 0,
-                    )
-                    ciudad_e = c3.text_input("Ciudad", str(fila["ciudad"]))
-
-                    c4, c5 = st.columns(2)
-                    pedido_cliente_ref_e = c4.text_input("N° de pedido del cliente", str(fila.get("pedido_cliente_ref", "")))
-                    fecha_pedido_e = c5.date_input("Fecha del pedido", value=pd.to_datetime(fila["fecha_pedido"]).date())
-
-                    opciones_producto = ["Huevo entero", "Clara", "Yema"]
-                    c6, c7, c8, c9 = st.columns(4)
-                    tipo_producto_e = c6.selectbox(
-                        "Producto", opciones_producto,
-                        index=opciones_producto.index(fila["tipo_producto"]) if fila["tipo_producto"] in opciones_producto else 0,
-                    )
-                    presentacion_id_e = c7.selectbox(
-                        "Presentación", presentaciones["presentacion_id"],
-                        index=list(presentaciones["presentacion_id"]).index(fila["presentacion_id"]) if fila["presentacion_id"] in list(presentaciones["presentacion_id"]) else 0,
-                        format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
-                    )
-                    unidades_e = c8.number_input(
-                        "N° de envases", min_value=0, step=1,
-                        value=int(pd.to_numeric(fila.get("unidades_solicitadas", 0), errors="coerce") or 0),
-                    )
-                    cantidad_kg_e = c9.number_input(
-                        "Cantidad (kg)", min_value=0.0, step=0.5, value=float(fila["cantidad_kg"]),
-                    )
-
-                    c10, c11 = st.columns(2)
-                    fp_raw = fila.get("fecha_produccion", "")
+                    pres_ids_e = presentaciones["presentacion_id"].tolist() if not presentaciones.empty else [""]
                     try:
-                        fp_valor = pd.to_datetime(fp_raw).date() if str(fp_raw).strip() not in ("", "nan", "None", "NaT") else datetime.date.today()
-                    except Exception:
-                        fp_valor = datetime.date.today()
-                    fecha_produccion_e = c10.date_input("Fecha de producción planeada", value=fp_valor)
-                    fecha_entrega_e = c11.date_input("Fecha de entrega", value=pd.to_datetime(fila["fecha_entrega"]).date())
-
-                    producido_e = st.checkbox("Producido", value=bool(fila["producido_bool"]))
-                    observaciones_e = st.text_area("Observaciones", str(fila.get("observaciones", "")))
-
-                    guardar = st.form_submit_button("💾 Guardar cambios", type="primary")
-
-                if guardar:
-                    db.update_row("pedidos", "pedido_id", pedido_sel, {
-                        "cliente_id": cliente_id_e,
-                        "medio_recepcion": medio_e,
-                        "ciudad": ciudad_e,
-                        "pedido_cliente_ref": pedido_cliente_ref_e,
-                        "fecha_pedido": fecha_pedido_e.isoformat(),
-                        "tipo_producto": tipo_producto_e,
-                        "presentacion_id": presentacion_id_e,
-                        "unidades_solicitadas": unidades_e,
-                        "cantidad_kg": cantidad_kg_e,
-                        "fecha_produccion": fecha_produccion_e.isoformat(),
-                        "fecha_entrega": fecha_entrega_e.isoformat(),
-                        "producido": producido_e,
-                        "observaciones": observaciones_e,
-                    })
-                    log_cambios_multiples(
-                        db, username,
-                        modulo="Recepcion de pedidos", tabla="pedidos",
-                        id_registro=pedido_sel,
-                        cambios={
-                            "cliente_id": (fila["cliente_id"], cliente_id_e),
-                            "medio_recepcion": (fila["medio_recepcion"], medio_e),
-                            "ciudad": (fila["ciudad"], ciudad_e),
-                            "pedido_cliente_ref": (fila.get("pedido_cliente_ref", ""), pedido_cliente_ref_e),
-                            "fecha_pedido": (fila["fecha_pedido"], fecha_pedido_e.isoformat()),
-                            "tipo_producto": (fila["tipo_producto"], tipo_producto_e),
-                            "presentacion_id": (fila["presentacion_id"], presentacion_id_e),
-                            "unidades_solicitadas": (fila.get("unidades_solicitadas", 0), unidades_e),
-                            "cantidad_kg": (fila["cantidad_kg"], cantidad_kg_e),
-                            "fecha_produccion": (fila.get("fecha_produccion", ""), fecha_produccion_e.isoformat()),
-                            "fecha_entrega": (fila["fecha_entrega"], fecha_entrega_e.isoformat()),
-                            "producido": (bool(fila["producido_bool"]), producido_e),
-                        },
-                        motivo="Edicion desde formulario",
+                        idx_pres = pres_ids_e.index(fila_l["presentacion_id"])
+                    except (ValueError, KeyError):
+                        idx_pres = 0
+                    pres_e = c2.selectbox(
+                        "Presentación", pres_ids_e,
+                        format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"] if not presentaciones.empty and x in presentaciones["presentacion_id"].values else x,
+                        index=idx_pres,
                     )
-                    st.success(f"Pedido {pedido_sel} actualizado.")
-                    st.rerun()
+                    c3, c4 = st.columns(2)
+                    unid_e = c3.number_input("Unidades", min_value=0.0, step=1.0, value=float(fila_l["unidades"]))
+                    kg_e = c4.number_input("Cantidad (kg)", min_value=0.0, step=0.5, value=float(fila_l["cantidad_kg"]))
+                    c5, c6 = st.columns(2)
+                    try:
+                        fe_val = datetime.date.fromisoformat(str(fila_l["fecha_entrega"]))
+                    except (ValueError, TypeError):
+                        fe_val = datetime.date.today()
+                    fe_e = c5.date_input("Fecha de entrega", value=fe_val)
+                    fp_str = str(fila_l.get("fecha_produccion", "") or "").strip()
+                    try:
+                        fp_val = datetime.date.fromisoformat(fp_str) if fp_str else None
+                    except ValueError:
+                        fp_val = None
+                    fp_e = c6.date_input("Fecha de producción (opcional)", value=fp_val if fp_val else datetime.date.today())
+                    fp_sin_asignar = st.checkbox("Dejar fecha de producción sin asignar", value=(fp_val is None))
+                    prod_e = st.checkbox("¿Producida?", value=bool(fila_l["producido_bool"]))
+                    obs_e = st.text_input("Observaciones de la línea", value=str(fila_l.get("observaciones", "") or ""))
+                    guardar_l = st.form_submit_button("💾 Guardar cambios en la línea", type="primary")
+                    if guardar_l:
+                        cambios = {
+                            "tipo_producto": tipo_e,
+                            "presentacion_id": pres_e,
+                            "unidades": unid_e,
+                            "cantidad_kg": kg_e,
+                            "fecha_entrega": fe_e.isoformat(),
+                            "fecha_produccion": "" if fp_sin_asignar else fp_e.isoformat(),
+                            "producido": prod_e,
+                            "observaciones": obs_e,
+                        }
+                        db.update_row("pedidos_lineas", "linea_id", linea_sel, cambios)
+                        log_cambios_multiples(
+                            db, username,
+                            modulo="Recepcion de pedidos", tabla="pedidos_lineas",
+                            id_registro=linea_sel,
+                            cambios={
+                                "tipo_producto": (fila_l["tipo_producto"], tipo_e),
+                                "presentacion_id": (fila_l["presentacion_id"], pres_e),
+                                "unidades": (float(fila_l["unidades"]), unid_e),
+                                "cantidad_kg": (float(fila_l["cantidad_kg"]), kg_e),
+                                "fecha_entrega": (fila_l["fecha_entrega"], fe_e.isoformat()),
+                                "fecha_produccion": (fp_str, "" if fp_sin_asignar else fp_e.isoformat()),
+                                "producido": (bool(fila_l["producido_bool"]), prod_e),
+                            },
+                            motivo="Edicion de linea desde formulario",
+                        )
+                        st.success(f"Línea {linea_sel} actualizada.")
+                        st.rerun()
 
                 st.divider()
-                st.markdown("##### 🗑️ Eliminar pedido")
-                confirmar = st.checkbox(f"Confirmo que quiero eliminar el pedido {pedido_sel}", key=f"confirmar_del_pedido_{pedido_sel}")
-                if st.button("🗑️ Eliminar este pedido"):
-                    if not confirmar:
-                        st.error("Marca la casilla de confirmación antes de eliminar.")
+                st.markdown("##### 🗑️ Eliminar pedido completo (cabecera + todas sus líneas)")
+                pedido_del = st.selectbox(
+                    "Pedido a eliminar",
+                    lineas["pedido_id"].drop_duplicates(),
+                    format_func=lambda x: (
+                        f"{x} — {lineas[lineas['pedido_id']==x]['cliente_nombre'].iloc[0]} — "
+                        f"{len(lineas[lineas['pedido_id']==x])} línea(s)"
+                    ),
+                    key="del_ped_sel",
+                )
+                confirm = st.checkbox(f"Confirmo que quiero eliminar el pedido {pedido_del} y todas sus líneas", key=f"conf_del_{pedido_del}")
+                if st.button("🗑️ Eliminar pedido"):
+                    if not confirm:
+                        st.error("Marca la casilla de confirmación.")
                     else:
-                        db.delete_row("pedidos", "pedido_id", pedido_sel)
+                        # Eliminar todas las lineas
+                        for lid in lineas[lineas["pedido_id"] == pedido_del]["linea_id"]:
+                            db.delete_row("pedidos_lineas", "linea_id", lid)
+                        db.delete_row("pedidos", "pedido_id", pedido_del)
                         log_cambio(
                             db, username,
                             modulo="Recepcion de pedidos", tabla="pedidos",
-                            id_registro=pedido_sel, accion="eliminacion",
-                            motivo="Eliminado desde formulario editar",
+                            id_registro=pedido_del, accion="eliminacion",
+                            motivo=f"Pedido y sus lineas eliminados",
                         )
-                        st.success(f"Pedido {pedido_sel} eliminado.")
+                        st.success(f"Pedido {pedido_del} y todas sus líneas eliminados.")
                         st.rerun()
