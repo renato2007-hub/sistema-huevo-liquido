@@ -308,84 +308,106 @@ def _render_planificar(db, username, rol):
 
     # ── Asignación de lotes de MP ────────────────────────────────────────────
     with st.container(border=True):
-        st.markdown("##### 🥚 Asignación de lotes de huevo para este día")
-        st.caption("Indica qué lotes de MP vas a usar y cuántas cubetas de cada uno — queda registrado y sale en el PDF del plan.")
+        st.markdown("##### 🥚 Asignación de lotes de huevo para este día (FIFO automático)")
+        st.caption(
+            "El sistema selecciona automáticamente los lotes siguiendo **FIFO** "
+            "(el más antiguo primero) según la cantidad total que decidas usar. "
+            "Solo edita la cantidad si necesitas más o menos que la recomendada."
+        )
 
         plan_mp_df = db.get_df("plan_mp_asignado")
         plan_hoy   = plan_mp_df[plan_mp_df["fecha"].astype(str) == fecha_sel.isoformat()] if not plan_mp_df.empty else pd.DataFrame()
 
-        # Recepciones disponibles
+        # Recepciones disponibles (solo activas, con saldo)
         if recepciones.empty:
             st.info("No hay recepciones de MP registradas.")
         else:
-            recepciones["cubetas_saldo"] = pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0)
-            rec_disp = recepciones[recepciones["cubetas_saldo"] > 0].copy()
-            if not categorias.empty:
-                rec_disp = rec_disp.merge(
-                    categorias[["categoria_id","nombre"]].rename(columns={"nombre":"cat_nombre"}),
-                    on="categoria_id", how="left",
-                )
-                rec_disp["cat_nombre"] = rec_disp["cat_nombre"].fillna(rec_disp["categoria_id"])
+            recepciones_a = recepciones.copy()
+            if "estado" in recepciones_a.columns:
+                estado_norm = recepciones_a["estado"].fillna("activo").astype(str).str.strip().str.lower()
+                recepciones_a = recepciones_a[estado_norm.isin(["", "activo"])]
+            recepciones_a["cubetas_saldo"] = pd.to_numeric(recepciones_a["cubetas_saldo"], errors="coerce").fillna(0)
+            recepciones_a["fecha_dt"] = pd.to_datetime(recepciones_a["fecha"], errors="coerce")
+            rec_disp = recepciones_a[recepciones_a["cubetas_saldo"] > 0].sort_values("fecha_dt", na_position="last")
+
+            if rec_disp.empty:
+                st.info("No hay lotes con saldo disponible en bodega.")
             else:
-                rec_disp["cat_nombre"] = rec_disp["categoria_id"]
-
-            opciones_rec = rec_disp["recepcion_id"].tolist()
-            fmt_rec = {
-                r["recepcion_id"]: f"{r['recepcion_id']} — {r['cat_nombre']} — saldo: {int(r['cubetas_saldo'])} cub."
-                for _, r in rec_disp.iterrows()
-            }
-
-            # Mostrar asignaciones existentes
-            if not plan_hoy.empty:
-                plan_hoy["cubetas_asignadas"] = pd.to_numeric(plan_hoy["cubetas_asignadas"], errors="coerce").fillna(0)
-                plan_hoy_vista = plan_hoy.copy()
-                plan_hoy_vista["Lote"] = plan_hoy_vista["recepcion_id"].map(fmt_rec).fillna(plan_hoy_vista["recepcion_id"])
-                st.dataframe(
-                    plan_hoy_vista[["plan_mp_id","Lote","cubetas_asignadas","observaciones"]].rename(columns={
-                        "plan_mp_id":"ID","cubetas_asignadas":"Cubetas asignadas","observaciones":"Obs."
-                    }),
-                    use_container_width=True, hide_index=True,
+                total_bodega = int(rec_disp["cubetas_saldo"].sum())
+                st.info(
+                    f"📦 **{total_bodega} cubetas disponibles** en bodega — se descontarán FIFO por fecha de recepción."
                 )
-                total_asignado = plan_hoy["cubetas_asignadas"].sum()
-                diff = total_asignado - cubetas_necesarias_total
-                if diff >= 0:
-                    st.success(f"✅ Asignadas {total_asignado:.0f} cubetas — cubre el plan ({cubetas_necesarias_total:.0f} necesarias)")
-                else:
-                    st.warning(f"⚠️ Asignadas {total_asignado:.0f} de {cubetas_necesarias_total:.0f} cubetas necesarias — faltan {abs(diff):.0f}")
 
-                if st.button("🗑️ Limpiar asignación del día"):
-                    for _, row in plan_hoy.iterrows():
-                        db.update_row("plan_mp_asignado", "plan_mp_id", row["plan_mp_id"], {"cubetas_asignadas": 0})
-                    st.success("Asignación eliminada.")
-                    st.rerun()
-            else:
-                st.info("No hay lotes asignados para este día todavía.")
+                # Cantidad a usar: recomendada = necesarias, editable
+                cant_default = int(round(cubetas_necesarias_total)) if cubetas_necesarias_total > 0 else 0
+                cant_a_usar = st.number_input(
+                    f"Cubetas a usar (recomendadas por el plan: **{cant_default}**)",
+                    min_value=0, max_value=total_bodega, step=1,
+                    value=cant_default, key="pmp_cant_total",
+                )
 
-            st.write("")
-            st.markdown("**Agregar lote al plan:**")
-            pa, pb, pc = st.columns([3, 1, 2])
-            rec_sel  = pa.selectbox("Lote de MP", opciones_rec,
-                                     format_func=lambda x: fmt_rec.get(x, x), key="pmp_lote")
-            cub_sel  = pb.number_input("Cubetas", min_value=1, step=1, key="pmp_cub")
-            obs_sel  = pc.text_input("Obs. (opcional)", "", key="pmp_obs")
-
-            if st.button("➕ Agregar lote al plan", use_container_width=True):
-                # Validar que no supere el saldo
-                saldo_lote = float(rec_disp.set_index("recepcion_id").loc[rec_sel, "cubetas_saldo"])
-                ya_asignado = plan_hoy[plan_hoy["recepcion_id"] == rec_sel]["cubetas_asignadas"].sum() if not plan_hoy.empty else 0
-                if cub_sel > (saldo_lote - ya_asignado):
-                    st.error(f"⚠️ Solo hay {saldo_lote - ya_asignado:.0f} cubetas disponibles de ese lote.")
-                else:
-                    pmp_id = db.siguiente_id("plan_mp_asignado", "PMP", fecha_sel)
-                    db.append_row("plan_mp_asignado", {
-                        "plan_mp_id": pmp_id,
-                        "fecha": fecha_sel.isoformat(),
-                        "recepcion_id": rec_sel,
-                        "cubetas_asignadas": cub_sel,
-                        "usuario": username,
-                        "observaciones": obs_sel,
+                # Simular el descuento FIFO en vivo (no persiste — solo para mostrar)
+                sim_asignaciones = []
+                restante_sim = cant_a_usar
+                for _, lote in rec_disp.iterrows():
+                    if restante_sim <= 0:
+                        break
+                    saldo = float(lote["cubetas_saldo"])
+                    tomar = min(saldo, restante_sim)
+                    sim_asignaciones.append({
+                        "recepcion_id": lote["recepcion_id"],
+                        "fecha": str(lote.get("fecha", "")),
+                        "cubetas": tomar,
+                        "origen_id": str(lote.get("origen_id", "")),
                     })
-                    st.success(f"✅ {cub_sel} cubetas de {rec_sel} asignadas al plan del {fecha_sel}.")
+                    restante_sim -= tomar
+
+                if sim_asignaciones:
+                    st.markdown("**Se van a asignar estos lotes (FIFO):**")
+                    df_sim = pd.DataFrame(sim_asignaciones)
+                    st.dataframe(
+                        df_sim.rename(columns={
+                            "recepcion_id": "Lote", "fecha": "Fecha recep.",
+                            "cubetas": "Cubetas", "origen_id": "Proveedor",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+                    total_asignado_sim = sum(a["cubetas"] for a in sim_asignaciones)
+                    diff = total_asignado_sim - cubetas_necesarias_total
+                    if diff >= 0:
+                        st.success(f"✅ {total_asignado_sim:.0f} cubetas — cubre el plan ({cubetas_necesarias_total:.0f} necesarias)")
+                    else:
+                        st.warning(f"⚠️ {total_asignado_sim:.0f} de {cubetas_necesarias_total:.0f} cubetas necesarias — faltan {abs(diff):.0f}")
+
+                # Ver asignaciones ya guardadas del día (si las hay) y ofrecer limpiar
+                if not plan_hoy.empty:
+                    plan_hoy["cubetas_asignadas"] = pd.to_numeric(plan_hoy["cubetas_asignadas"], errors="coerce").fillna(0)
+                    total_guardado = plan_hoy["cubetas_asignadas"].sum()
+                    st.caption(f"ℹ️ Ya hay una asignación guardada para este día con {int(total_guardado)} cubetas.")
+
+                col_g, col_l = st.columns(2)
+                if col_g.button("💾 Confirmar y guardar asignación", type="primary", use_container_width=True):
+                    # Limpiar asignación previa del día (si existe)
+                    if not plan_hoy.empty:
+                        for _, row in plan_hoy.iterrows():
+                            db.delete_row("plan_mp_asignado", "plan_mp_id", row["plan_mp_id"])
+                    # Guardar la nueva asignación FIFO
+                    for a in sim_asignaciones:
+                        pmp_id = db.siguiente_id("plan_mp_asignado", "PMP", fecha_sel)
+                        db.append_row("plan_mp_asignado", {
+                            "plan_mp_id": pmp_id,
+                            "fecha": fecha_sel.isoformat(),
+                            "recepcion_id": a["recepcion_id"],
+                            "cubetas_asignadas": a["cubetas"],
+                            "usuario": username,
+                            "observaciones": "Asignacion automatica FIFO",
+                        })
+                    st.success(f"✅ Plan guardado: {int(sum(a['cubetas'] for a in sim_asignaciones))} cubetas en {len(sim_asignaciones)} lote(s).")
+                    st.rerun()
+                if not plan_hoy.empty and col_l.button("🗑️ Limpiar asignación del día", use_container_width=True):
+                    for _, row in plan_hoy.iterrows():
+                        db.delete_row("plan_mp_asignado", "plan_mp_id", row["plan_mp_id"])
+                    st.success("Asignación eliminada.")
                     st.rerun()
 
     st.write("")
