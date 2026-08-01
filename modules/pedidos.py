@@ -182,6 +182,18 @@ def render(db, username, rol):
                 st.rerun()
 
     # ======================== EXTRA A PEDIDO EXISTENTE ========================
+    def _refrescar_resumen_productos(db, pedido_id, nuevo_tipo):
+        """Devuelve el string 'tipo_producto' de la cabecera con todos los
+        tipos de producto que ahora tiene el pedido (incluido el nuevo)."""
+        lineas_actuales = db.get_df("pedidos_lineas")
+        if lineas_actuales.empty:
+            return nuevo_tipo
+        tipos_actuales = set(
+            lineas_actuales[lineas_actuales["pedido_id"] == pedido_id]["tipo_producto"].astype(str).tolist()
+        )
+        tipos_actuales.add(nuevo_tipo)
+        return ", ".join(sorted(tipos_actuales))
+
     with tab_extra:
         st.caption(
             "Cuando un cliente llama pidiendo agregar una cantidad extra a un "
@@ -321,17 +333,6 @@ def render(db, username, rol):
                         )
                         st.rerun()
 
-    def _refrescar_resumen_productos(db, pedido_id, nuevo_tipo):
-        """Devuelve el string 'tipo_producto' de la cabecera con todos los
-        tipos de producto que ahora tiene el pedido (incluido el nuevo)."""
-        lineas_actuales = db.get_df("pedidos_lineas")
-        if lineas_actuales.empty:
-            return nuevo_tipo
-        tipos_actuales = set(
-            lineas_actuales[lineas_actuales["pedido_id"] == pedido_id]["tipo_producto"].astype(str).tolist()
-        )
-        tipos_actuales.add(nuevo_tipo)
-        return ", ".join(sorted(tipos_actuales))
 
     # ======================== helper: lineas con todos los datos ========================
     def _cargar_lineas():
