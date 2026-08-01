@@ -95,10 +95,10 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
 
     if plan_mp_lista:
         el.append(Paragraph("Lotes de huevo asignados", ESTILOS["Heading2"]))
-        datos_mp = [[_p(h, negrita=True) for h in ["Lote MP", "Cubetas asignadas", "Obs."]]]
+        datos_mp = [[_p(h, negrita=True) for h in ["Lote MP", "Cubetas asignadas"]]]
         for r in plan_mp_lista:
-            datos_mp.append([_p(r["lote_desc"]), _p(str(r["cubetas"])), _p(r.get("obs",""))])
-        datos_mp.append([_p("TOTAL",negrita=True), _p(str(sum(r["cubetas"] for r in plan_mp_lista)),negrita=True), _p("")])
+            datos_mp.append([_p(r["lote_desc"]), _p(str(r["cubetas"]))])
+        datos_mp.append([_p("TOTAL",negrita=True), _p(str(sum(r["cubetas"] for r in plan_mp_lista)),negrita=True)])
         tmp = Table(datos_mp, repeatRows=1)
         tmp.setStyle(TableStyle([
             ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#f9a825")),
@@ -132,6 +132,20 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
         ("TOPPADDING", (0,0), (-1,-1), 4),
     ]))
     el.append(td)
+
+    # Bloque de Notas al final del PDF (para que el jefe de planta escriba a mano)
+    el.append(Spacer(1, 1.0*cm))
+    el.append(Paragraph("Notas", ESTILOS["Heading2"]))
+    # 5 lineas en blanco para notas manuscritas
+    notas_data = [[_p("")] for _ in range(5)]
+    notas_tabla = Table(notas_data, colWidths=[17*cm])
+    notas_tabla.setStyle(TableStyle([
+        ("LINEBELOW", (0,0), (-1,-1), 0.5, colors.HexColor("#999999")),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 14),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+    ]))
+    el.append(notas_tabla)
+
     doc.build(el)
     buffer.seek(0)
     return buffer.getvalue()
