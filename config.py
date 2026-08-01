@@ -16,7 +16,7 @@ SHEET_SCHEMAS = {
         "pct_clara", "pct_yema", "pct_cascara", "notas",
     ],
     "insumos": ["insumo_id", "nombre", "tipo", "unidad", "costo_unitario", "activo"],
-    "presentaciones": ["presentacion_id", "nombre", "kg_nominal", "tipo_envase", "costo_envase_unitario", "activo"],
+    "presentaciones": ["presentacion_id", "nombre", "kg_nominal", "tipo_envase", "costo_envase_unitario", "activo", "unidades_por_gaveta"],
     "tapas": ["tapa_id", "color", "costo_unitario", "activo"],
     "etiquetas": ["etiqueta_id", "nombre", "origen", "costo_unitario", "activo"],
     "cartones": ["carton_id", "nombre", "capacidad", "costo_unitario", "activo"],
@@ -179,6 +179,11 @@ SHEET_SCHEMAS = {
     "bitacora_cambios": [
         "bitacora_id", "fecha_hora", "usuario", "modulo", "tabla",
         "id_registro", "accion", "campo", "valor_antes", "valor_despues", "motivo",
+    ],
+    # ---------- Orden de salida ----------
+    "orden_salida_asignaciones": [
+        "asignacion_id", "fecha_entrega", "linea_id", "lote_producto_id",
+        "kg_asignado", "gavetas", "usuario", "observaciones", "creado_en",
     ],
 }
 

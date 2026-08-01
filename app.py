@@ -130,6 +130,7 @@ if not es_despachador(rol):
     _boton_modulo("Solicitud MP e Insumos", "📑")
     _boton_modulo("Recepción de pedidos", "🧾")
     _boton_modulo("Plan de producción", "📅")
+    _boton_modulo("Orden de salida", "📤")
 
     _categoria("🏭&nbsp;&nbsp;PRODUCCIÓN", "#D9740C")
     _boton_modulo("Producción de semielaborados", "⚗️")
@@ -249,4 +250,6 @@ elif modulo == "Catálogos y configuración":
     _mod("catalogos").render(db, username, rol)
 elif modulo == "Bitácora":
     _mod("bitacora").render(db, username, rol)
+elif modulo == "Orden de salida":
+    _mod("orden_salida").render(db, username, rol)
 

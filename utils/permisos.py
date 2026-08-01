@@ -34,17 +34,17 @@ MODULOS_PERMITIDOS = {
     "admin": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
         "Solicitud MP e Insumos", "Recepción de pedidos",
-        "Plan de producción", "Personal y turnos", "Catálogos y configuración", "🔧 Migración MP", "Bitácora"
+        "Plan de producción", "Personal y turnos", "Catálogos y configuración", "🔧 Migración MP", "Bitácora", "Orden de salida"
     },
     "gerencia": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
         "Solicitud MP e Insumos", "Recepción de pedidos",
-        "Plan de producción", "Personal y turnos", "Bitácora"
+        "Plan de producción", "Personal y turnos", "Bitácora", "Orden de salida"
     },
     "jefe_planta": _MODULOS_OPERATIVOS | {
         "Dashboard", "Trazabilidad", "Supervisión y calidad",
         "Solicitud MP e Insumos", "Recepción de pedidos",
-        "Plan de producción", "Personal y turnos",
+        "Plan de producción", "Personal y turnos", "Orden de salida",
     },
     "supervisor": set(_MODULOS_OPERATIVOS),
     "despachador": {
