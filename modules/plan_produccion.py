@@ -438,10 +438,19 @@ def _render_planificar(db, username, rol):
     # PDF — incluye lotes asignados
     plan_mp_lista = []
     if not plan_hoy.empty:
+        # Recargar recepciones para armar la descripcion (proveedor + saldo)
+        mapa_desc_lote = {}
+        if not recepciones.empty:
+            recepciones_l = recepciones.copy()
+            recepciones_l["cubetas_saldo"] = pd.to_numeric(recepciones_l["cubetas_saldo"], errors="coerce").fillna(0)
+            for _, rec in recepciones_l.iterrows():
+                mapa_desc_lote[rec["recepcion_id"]] = (
+                    f"{rec['recepcion_id']} — {rec.get('origen_id', '')} — saldo: {int(rec['cubetas_saldo'])} cub."
+                )
         for _, r in plan_hoy.iterrows():
             plan_mp_lista.append({
                 "recepcion_id": r["recepcion_id"],
-                "lote_desc": fmt_rec.get(r["recepcion_id"], r["recepcion_id"]),
+                "lote_desc": mapa_desc_lote.get(r["recepcion_id"], r["recepcion_id"]),
                 "cubetas": int(r["cubetas_asignadas"]),
             })
 
