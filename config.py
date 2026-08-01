@@ -58,7 +58,7 @@ SHEET_SCHEMAS = {
         "cantidad_kg", "unidades_solicitadas", "observaciones",
     ],
     "plan_mp_asignado": [
-        "plan_mp_id", "fecha", "recepcion_id", "cubetas_asignadas", "usuario", "observaciones",
+        "plan_mp_id", "fecha", "recepcion_id", "cubetas_asignadas", "usuario", "observaciones", "notas",
     ],
 
     "pedidos": [
