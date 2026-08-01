@@ -287,26 +287,19 @@ def render(db, username, rol):
             asig_linea = asig_fecha[asig_fecha["linea_id"].astype(str) == str(linea["linea_id"])]
             lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
 
-            # Aviso si no hay lotes disponibles
-            if lotes_disp.empty:
-                st.error(
-                    f"⚠️ No hay lotes disponibles en cuarto frío para "
-                    f"**{linea['tipo_producto']}** en **{mapa_pres_nombre.get(pid, pid)}**. "
-                    f"Verifica que exista producción envasada de este producto con esta presentación."
-                )
-
-            # Opciones de lote (para el selectbox)
-            opciones_lote = [""] + lotes_disp["lote_producto_id"].astype(str).tolist() if not lotes_disp.empty else [""]
-            etq_lote = {"": "— (elegir lote) —"}
+            # Mostrar lotes disponibles como ayuda (no bloquea)
             if not lotes_disp.empty:
-                for _, ld in lotes_disp.iterrows():
-                    etq_lote[str(ld["lote_producto_id"])] = (
-                        f"{ld['lote_producto_id']} — {ld['fecha']} — disp: {ld['kg_disponible']:.1f} kg"
-                    )
+                sugerencias_txt = ", ".join(
+                    f"{r['lote_producto_id']} ({r['kg_disponible']:.0f} kg)"
+                    for _, r in lotes_disp.head(5).iterrows()
+                )
+                st.caption(f"💡 Lotes disponibles en cuarto frío: {sugerencias_txt}")
+            else:
+                st.caption("💡 No hay lotes en cuarto frío todavía — puedes escribir un lote planificado.")
 
-            # Headers de columnas (una sola vez por linea)
+            # Headers de columnas
             hc1, hc2, hc3, hc4, hc5 = st.columns([3, 1, 1, 1, 1])
-            hc1.markdown("**Lote de cuarto frío**")
+            hc1.markdown("**Lote (editable)**")
             hc2.markdown("**Kg**")
             hc3.markdown("**Gavetas**")
             hc4.markdown("**Obs.**")
@@ -316,13 +309,11 @@ def render(db, username, rol):
             for _, a in asig_linea.iterrows():
                 c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
                 lote_curr = str(a.get("lote_producto_id", "") or "")
-                idx_lote = opciones_lote.index(lote_curr) if lote_curr in opciones_lote else 0
-                nuevo_lote = c1.selectbox(
-                    "Lote", opciones_lote,
-                    format_func=lambda x: etq_lote.get(x, x),
-                    index=idx_lote,
+                nuevo_lote = c1.text_input(
+                    "Lote", value=lote_curr,
                     key=f"lote_{a['asignacion_id']}",
                     label_visibility="collapsed",
+                    placeholder="Escribe el lote",
                 )
                 kg_curr = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
                 nuevo_kg = c2.number_input(
