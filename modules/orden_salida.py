@@ -71,7 +71,7 @@ def _sugerir_asignacion_fifo(linea, lotes_disponibles_df, mapa_kg_nominal):
     return asignaciones
 
 
-def _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, mapa_kg_nominal):
+def _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal):
     """Devuelve un DataFrame con los lote_producto_id disponibles en cuarto
     frio para esa linea (mismo tipo_producto + pasteurizado + presentacion_id),
     con saldo, kg_disponible y fecha_ingreso, ordenados FIFO."""
@@ -82,7 +82,7 @@ def _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, mapa_kg_no
     # Traer lote_semielaborado y pasteurizado de pasteurizacion_envasado
     past_c = pasteurizacion.copy()
     past_c["pasteurizado_bool"] = past_c.get("pasteurizado", "").astype(str).str.upper().isin(["TRUE", "1", "SI", "SÍ"])
-    # JOIN entradas cuarto frio con pasteurizacion (para obtener lote_semielaborado)
+    # JOIN entradas cuarto frio con pasteurizacion
     cf = cf_entradas.copy()
     cf["saldo"] = pd.to_numeric(cf["saldo"], errors="coerce").fillna(0)
     cf = cf[cf["saldo"] > 0]
@@ -98,19 +98,16 @@ def _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, mapa_kg_no
     cf = cf[cf["pasteurizado_bool"] == pasteurizado_esperado]
     if cf.empty:
         return pd.DataFrame()
-    # Filtrar por tipo de producto usando el prefijo del lote_semielaborado
-    # SR = huevo entero, R = clara, TK = yema
-    def _tipo_de_lote(lote_semi):
-        s = str(lote_semi or "").upper()
-        if s.startswith("SR"):
-            return "Huevo entero"
-        if s.startswith("TK"):
-            return "Yema"
-        if s.startswith("R"):
-            return "Clara"
-        return ""
-    cf["tipo_semi"] = cf["lote_semielaborado_id"].apply(_tipo_de_lote)
-    cf = cf[cf["tipo_semi"] == base]
+    # Filtrar por tipo de producto usando JOIN con produccion_semielaborados
+    # (mas robusto que el prefijo del ID)
+    if not produccion_semi.empty and "tipo_producto" in produccion_semi.columns:
+        cf = cf.merge(
+            produccion_semi[["lote_semielaborado_id", "tipo_producto"]],
+            on="lote_semielaborado_id", how="left",
+        )
+        cf = cf[cf["tipo_producto"] == base]
+    else:
+        return pd.DataFrame()
     if cf.empty:
         return pd.DataFrame()
     # Calcular kg disponibles: saldo * kg_nominal
@@ -141,6 +138,7 @@ def render(db, username, rol):
     presentaciones = db.get_df("presentaciones")
     cf_entradas = db.get_df("cuarto_frio_entradas")
     pasteurizacion = db.get_df("pasteurizacion_envasado")
+    produccion_semi = db.get_df("produccion_semielaborados")
     asignaciones_df = db.get_df("orden_salida_asignaciones")
 
     if lineas.empty:
@@ -239,7 +237,7 @@ def render(db, username, rol):
     if asig_fecha.empty:
         st.info("🤖 Sugerencia FIFO inicial — puedes editarla antes de descargar el PDF.")
         for _, linea in lineas_producidas.iterrows():
-            lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, mapa_kg_nominal)
+            lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
             sugerencias = _sugerir_asignacion_fifo(linea, lotes_disp, mapa_kg_nominal)
             if not sugerencias:
                 # Guardar un placeholder sin lote asignado
@@ -287,16 +285,32 @@ def render(db, username, rol):
 
             # Filtrar asignaciones de esta linea
             asig_linea = asig_fecha[asig_fecha["linea_id"].astype(str) == str(linea["linea_id"])]
-            lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, mapa_kg_nominal)
+            lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
+
+            # Aviso si no hay lotes disponibles
+            if lotes_disp.empty:
+                st.error(
+                    f"⚠️ No hay lotes disponibles en cuarto frío para "
+                    f"**{linea['tipo_producto']}** en **{mapa_pres_nombre.get(pid, pid)}**. "
+                    f"Verifica que exista producción envasada de este producto con esta presentación."
+                )
 
             # Opciones de lote (para el selectbox)
             opciones_lote = [""] + lotes_disp["lote_producto_id"].astype(str).tolist() if not lotes_disp.empty else [""]
-            etq_lote = {"": "(sin lote asignado)"}
+            etq_lote = {"": "— (elegir lote) —"}
             if not lotes_disp.empty:
                 for _, ld in lotes_disp.iterrows():
                     etq_lote[str(ld["lote_producto_id"])] = (
                         f"{ld['lote_producto_id']} — {ld['fecha']} — disp: {ld['kg_disponible']:.1f} kg"
                     )
+
+            # Headers de columnas (una sola vez por linea)
+            hc1, hc2, hc3, hc4, hc5 = st.columns([3, 1, 1, 1, 1])
+            hc1.markdown("**Lote de cuarto frío**")
+            hc2.markdown("**Kg**")
+            hc3.markdown("**Gavetas**")
+            hc4.markdown("**Obs.**")
+            hc5.markdown("**Quitar**")
 
             kg_total_asignado = 0.0
             for _, a in asig_linea.iterrows():
