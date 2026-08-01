@@ -43,7 +43,7 @@ def _cubetas_necesarias(kg_liquido, kg_por_cubeta):
 
 
 def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
-                 cubetas_disponibles, alerta_mp, plan_mp_lista=None):
+                 cubetas_disponibles, alerta_mp, plan_mp_lista=None, notas=""):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                              topMargin=1.8*cm, bottomMargin=1.8*cm,
@@ -113,12 +113,13 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
 
     el.append(Paragraph("Detalle por pedido", ESTILOS["Heading2"]))
     det = [[_p(h, negrita=True) for h in
-            ["Pedido", "Cliente", "Producto", "Presentación", "Kg", "Unid.", "Entrega", "Observaciones"]]]
+            ["Pedido", "Cliente", "Producto", "Presentación", "Kg", "Unid.", "Turno", "Entrega", "Observaciones"]]]
     for row in detalle:
         det.append([
             _p(row["pedido_id"], pequeño=True), _p(row["cliente"], pequeño=True),
             _p(row["tipo_producto"], pequeño=True), _p(row["presentacion"], pequeño=True),
             _p(f"{row['kg']:.1f}", pequeño=True), _p(str(row["unidades"]), pequeño=True),
+            _p(row.get("turno_nombre", "—") or "—", pequeño=True),
             _p(row["fecha_entrega"], pequeño=True),
             _p(row.get("observaciones", "") or "", pequeño=True),
         ])
@@ -133,18 +134,23 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
     ]))
     el.append(td)
 
-    # Bloque de Notas al final del PDF (para que el jefe de planta escriba a mano)
+    # Bloque de Notas al final del PDF (texto escrito desde la app)
     el.append(Spacer(1, 1.0*cm))
     el.append(Paragraph("Notas", ESTILOS["Heading2"]))
-    # 5 lineas en blanco para notas manuscritas
-    notas_data = [[_p("")] for _ in range(5)]
-    notas_tabla = Table(notas_data, colWidths=[17*cm])
-    notas_tabla.setStyle(TableStyle([
-        ("LINEBELOW", (0,0), (-1,-1), 0.5, colors.HexColor("#999999")),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 14),
-        ("TOPPADDING", (0,0), (-1,-1), 6),
-    ]))
-    el.append(notas_tabla)
+    if notas and notas.strip():
+        # Preservar saltos de linea del text_area
+        texto_html = notas.strip().replace("\n", "<br/>")
+        el.append(Paragraph(texto_html, ESTILOS["Normal"]))
+    else:
+        # Si no hay notas, dejar 5 lineas en blanco para escribir a mano
+        notas_data = [[_p("")] for _ in range(5)]
+        notas_tabla = Table(notas_data, colWidths=[17*cm])
+        notas_tabla.setStyle(TableStyle([
+            ("LINEBELOW", (0,0), (-1,-1), 0.5, colors.HexColor("#999999")),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 14),
+            ("TOPPADDING", (0,0), (-1,-1), 6),
+        ]))
+        el.append(notas_tabla)
 
     doc.build(el)
     buffer.seek(0)
@@ -256,13 +262,36 @@ def _render_planificar(db, username, rol):
             stock_cf = cf_saldo.groupby("tipo_producto")["kg_cf"].sum().to_dict()
 
     # ── CONSOLIDADO ────────────────────────────────────────────────────────────
+    # Traer nombres de turno para mostrarlos bonito
+    turnos_cat = db.get_df("turnos")
+    mapa_turnos = {}
+    if not turnos_cat.empty:
+        for _, tr in turnos_cat.iterrows():
+            mapa_turnos[str(tr["turno_id"])] = str(tr.get("nombre", tr["turno_id"]))
+
+    if "turno" not in pedidos_fecha.columns:
+        pedidos_fecha["turno"] = ""
+    pedidos_fecha["turno"] = pedidos_fecha["turno"].fillna("").astype(str).str.strip()
+
+    turnos_del_dia = sorted([t for t in pedidos_fecha["turno"].unique() if t and t.lower() not in ("nan", "none")])
+    hay_sin_asignar = (pedidos_fecha["turno"] == "").any() or (pedidos_fecha["turno"].str.lower().isin(["nan", "none"])).any()
+
     consolidado = []
     for tipo in pedidos_fecha["tipo_producto"].unique():
         grupo = pedidos_fecha[pedidos_fecha["tipo_producto"] == tipo]
         kg_total = grupo["cantidad_kg"].sum()
+        # Desglose por turno
+        kg_por_turno = {}
+        for t in turnos_del_dia:
+            kg_t = grupo[grupo["turno"] == t]["cantidad_kg"].sum()
+            if kg_t > 0:
+                kg_por_turno[t] = float(kg_t)
+        kg_sin_turno = float(grupo[grupo["turno"].isin(["", "nan", "None"])]["cantidad_kg"].sum())
         consolidado.append({
             "producto": tipo,
             "kg": kg_total,
+            "kg_por_turno": kg_por_turno,
+            "kg_sin_turno": kg_sin_turno,
             "pedidos": list(grupo["pedido_id"]),
             "clientes": list(grupo["cliente_nombre"].unique()),
         })
@@ -274,6 +303,18 @@ def _render_planificar(db, username, rol):
 
     # ── VISTA EN PANTALLA ──────────────────────────────────────────────────────
     st.markdown(f"### 📋 Plan del {fecha_sel.strftime('%d/%m/%Y')}")
+
+    # Tabla resumen por turno (si hay al menos un turno asignado)
+    if turnos_del_dia or hay_sin_asignar:
+        st.markdown("##### 🔀 Distribución por turno")
+        fila_tur = {"Producto": [c["producto"] for c in consolidado]}
+        for t in turnos_del_dia:
+            fila_tur[mapa_turnos.get(t, t)] = [f"{c['kg_por_turno'].get(t, 0):.1f} kg" if c['kg_por_turno'].get(t, 0) > 0 else "—" for c in consolidado]
+        if hay_sin_asignar:
+            fila_tur["Sin asignar"] = [f"{c['kg_sin_turno']:.1f} kg" if c['kg_sin_turno'] > 0 else "—" for c in consolidado]
+        fila_tur["Total"] = [f"{c['kg']:.1f} kg" for c in consolidado]
+        st.dataframe(pd.DataFrame(fila_tur), use_container_width=True, hide_index=True)
+        st.write("")
 
     # Alerta MP
     if alerta_mp:
@@ -478,13 +519,41 @@ def _render_planificar(db, username, rol):
             "unidades": int(row["unidades_solicitadas"]),
             "fecha_entrega": str(row["fecha_entrega"]),
             "observaciones": str(row.get("observaciones", "") or ""),
+            "turno_nombre": mapa_turnos.get(str(row.get("turno", "") or "").strip(), "Sin asignar") if str(row.get("turno", "") or "").strip() else "Sin asignar",
         }
         for _, row in pedidos_fecha.iterrows()
     ]
+    # ---- Notas del plan (editables desde la app, aparecen en el PDF) ----
+    # Se guardan en la columna 'notas' de plan_mp_asignado del dia (todas las
+    # filas del mismo dia comparten el mismo texto de notas).
+    notas_prev = ""
+    if not plan_hoy.empty and "notas" in plan_hoy.columns:
+        for v in plan_hoy["notas"].fillna("").astype(str):
+            if v.strip():
+                notas_prev = v
+                break
+
+    st.markdown("##### 📝 Notas del plan")
+    st.caption("Escribe cualquier observación o instrucción del día. Aparecerá en la última sección del PDF.")
+    notas_input = st.text_area(
+        "Notas", value=notas_prev, height=120, key=f"plan_notas_{fecha_sel.isoformat()}",
+        label_visibility="collapsed",
+    )
+    if notas_input != notas_prev:
+        if st.button("💾 Guardar notas", key=f"btn_notas_{fecha_sel.isoformat()}"):
+            if plan_hoy.empty:
+                st.error("Primero guarda una asignación de lotes para poder asociar las notas al plan del día.")
+            else:
+                for _, row in plan_hoy.iterrows():
+                    db.update_row("plan_mp_asignado", "plan_mp_id", row["plan_mp_id"], {"notas": notas_input})
+                st.success("✅ Notas guardadas.")
+                st.rerun()
+    st.write("")
+
     pdf_bytes = _generar_pdf(
         fecha_sel, consolidado, detalle_lista,
         cubetas_necesarias_total, cubetas_disponibles, alerta_mp,
-        plan_mp_lista,
+        plan_mp_lista, notas=notas_input,
     )
     st.download_button(
         "📄 Descargar plan del día (PDF)",

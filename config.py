@@ -70,7 +70,7 @@ SHEET_SCHEMAS = {
     "pedidos_lineas": [
         "linea_id", "pedido_id", "tipo_producto", "presentacion_id",
         "unidades", "cantidad_kg", "fecha_produccion", "fecha_entrega",
-        "producido", "orden_produccion_vinculada", "observaciones",
+        "producido", "orden_produccion_vinculada", "observaciones", "turno",
     ],
     "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "genero", "activo"],
     "clientes": ["cliente_id", "nombre", "contacto", "activo"],
