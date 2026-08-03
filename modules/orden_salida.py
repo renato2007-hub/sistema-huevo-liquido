@@ -8,7 +8,6 @@ No descuenta inventario -- ese descuento sigue haciendose desde
 'Cuarto frio -> Despacho a cliente'.
 """
 import io
-import math
 import datetime
 import streamlit as st
 import pandas as pd
@@ -49,7 +48,7 @@ def _tipo_linea_a_semielaborado(tipo_linea):
 
 def _sugerir_asignacion_fifo(linea, lotes_disponibles_df, mapa_kg_nominal):
     """Devuelve lista de asignaciones sugeridas para una linea (FIFO).
-    Cada asignacion = {lote_producto_id, kg_asignado, gavetas_sugeridas}."""
+    Cada asignacion = {lote_producto_id, kg_asignado}."""
     if lotes_disponibles_df.empty:
         return []
     kg_pedido = float(linea.get("cantidad_kg", 0) or 0)
@@ -199,34 +198,14 @@ def render(db, username, rol):
     else:
         lineas_producidas["cliente_nombre"] = lineas_producidas["cliente_id"]
 
-    # Presentaciones: nombre + kg_nominal + unidades_por_gaveta
+    # Presentaciones: nombre + kg_nominal
     mapa_pres_nombre = {}
     mapa_kg_nominal = {}
-    mapa_upg = {}
     if not presentaciones.empty:
         for _, pr in presentaciones.iterrows():
             pid = str(pr["presentacion_id"])
             mapa_pres_nombre[pid] = str(pr.get("nombre", pid))
             mapa_kg_nominal[pid] = float(pd.to_numeric(pr.get("kg_nominal", 0), errors="coerce") or 0)
-            upg = pr.get("unidades_por_gaveta", 0)
-            try:
-                mapa_upg[pid] = float(upg) if pd.notna(upg) and str(upg).strip() != "" else 0
-            except (ValueError, TypeError):
-                mapa_upg[pid] = 0
-
-    # Alerta: presentaciones sin unidades_por_gaveta
-    presentaciones_sin_upg = set()
-    for _, l in lineas_producidas.iterrows():
-        pid = str(l["presentacion_id"])
-        if mapa_upg.get(pid, 0) == 0:
-            presentaciones_sin_upg.add(pid)
-    if presentaciones_sin_upg:
-        st.warning(
-            "⚠️ Estas presentaciones no tienen configurado el número de "
-            "**unidades por gaveta**: "
-            + ", ".join(mapa_pres_nombre.get(p, p) for p in presentaciones_sin_upg)
-            + ". Configúralo en **Catálogos → Presentaciones** para que se sugieran automáticamente."
-        )
 
     # -------- Cargar/inicializar asignaciones --------
     asig_fecha = asignaciones_df[
@@ -244,16 +223,13 @@ def render(db, username, rol):
                 sugerencias = [{"lote_producto_id": "", "kg_asignado": float(linea["cantidad_kg"])}]
             for s in sugerencias:
                 asig_id = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
-                upg = mapa_upg.get(str(linea["presentacion_id"]), 0)
-                unidades_asig = (s["kg_asignado"] / mapa_kg_nominal.get(str(linea["presentacion_id"]), 1)) if mapa_kg_nominal.get(str(linea["presentacion_id"]), 0) > 0 else 0
-                gavetas_sug = math.ceil(unidades_asig / upg) if upg > 0 else 0
                 db.append_row("orden_salida_asignaciones", {
                     "asignacion_id": asig_id,
                     "fecha_entrega": fecha_sel.isoformat(),
                     "linea_id": linea["linea_id"],
                     "lote_producto_id": s["lote_producto_id"],
                     "kg_asignado": s["kg_asignado"],
-                    "gavetas": gavetas_sug,
+                    "gavetas": 0,
                     "usuario": username,
                     "observaciones": "",
                     "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -298,16 +274,15 @@ def render(db, username, rol):
                 st.caption("💡 No hay lotes en cuarto frío todavía — puedes escribir un lote planificado.")
 
             # Headers de columnas
-            hc1, hc2, hc3, hc4, hc5 = st.columns([3, 1, 1, 1, 1])
+            hc1, hc2, hc3, hc4 = st.columns([3, 1, 1, 1])
             hc1.markdown("**Lote (editable)**")
             hc2.markdown("**Kg**")
-            hc3.markdown("**Gavetas**")
-            hc4.markdown("**Obs.**")
-            hc5.markdown("**Quitar**")
+            hc3.markdown("**Obs.**")
+            hc4.markdown("**Quitar**")
 
             kg_total_asignado = 0.0
             for _, a in asig_linea.iterrows():
-                c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+                c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
                 lote_curr = str(a.get("lote_producto_id", "") or "")
                 nuevo_lote = c1.text_input(
                     "Lote", value=lote_curr,
@@ -322,29 +297,21 @@ def render(db, username, rol):
                     label_visibility="collapsed",
                 )
                 kg_total_asignado += nuevo_kg
-                # Gavetas: sugerida (auto) o editable
-                gav_curr = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
-                nuevo_gav = c3.number_input(
-                    "Gavetas", min_value=0, step=1, value=gav_curr,
-                    key=f"gav_{a['asignacion_id']}",
-                    label_visibility="collapsed",
-                )
-                obs_a = c4.text_input(
+                obs_a = c3.text_input(
                     "Obs.", value=str(a.get("observaciones", "") or ""),
                     key=f"obs_{a['asignacion_id']}",
                     label_visibility="collapsed",
                 )
-                borrar = c5.button("🗑️", key=f"del_{a['asignacion_id']}", help="Eliminar esta línea de asignación")
+                borrar = c4.button("🗑️", key=f"del_{a['asignacion_id']}", help="Eliminar esta línea de asignación")
                 if borrar:
                     db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
                     st.rerun()
                 # Auto-guardar si cambio algo
-                if (nuevo_lote != lote_curr or nuevo_kg != kg_curr or nuevo_gav != gav_curr
+                if (nuevo_lote != lote_curr or nuevo_kg != kg_curr
                         or obs_a != str(a.get("observaciones", "") or "")):
                     db.update_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"], {
                         "lote_producto_id": nuevo_lote,
                         "kg_asignado": nuevo_kg,
-                        "gavetas": nuevo_gav,
                         "observaciones": obs_a,
                     })
 
@@ -403,14 +370,9 @@ def render(db, username, rol):
             unid_extra_m = colm4.number_input("Unidades", min_value=0, step=1, key="man_unid")
             kg_nom_extra = float(presentaciones.set_index("presentacion_id").loc[pres_extra_m, "kg_nominal"])
             kg_extra_m = round(unid_extra_m * kg_nom_extra, 2)
-            colm5, colm6 = st.columns(2)
-            lote_extra = colm5.text_input("Lote", "", key="man_lote", placeholder="Escribe el lote")
-            upg_extra = mapa_upg.get(str(pres_extra_m), 0)
-            gav_default = math.ceil(unid_extra_m / upg_extra) if upg_extra > 0 else 0
-            gav_extra = colm6.number_input("Gavetas", min_value=0, step=1, value=int(gav_default), key="man_gav")
+            lote_extra = st.text_input("Lote", "", key="man_lote", placeholder="Escribe el lote")
             obs_extra_m = st.text_input("Observaciones", "", key="man_obs")
-            colm7, _ = st.columns(2)
-            colm7.metric("Kg calculados", f"{kg_extra_m:.1f} kg")
+            st.metric("Kg calculados", f"{kg_extra_m:.1f} kg")
 
             if st.button("➕ Agregar línea manual", key="btn_man_add"):
                 if unid_extra_m <= 0:
@@ -425,7 +387,7 @@ def render(db, username, rol):
                         "linea_id": linea_id_manual,
                         "lote_producto_id": lote_extra,
                         "kg_asignado": kg_extra_m,
-                        "gavetas": gav_extra,
+                        "gavetas": 0,
                         "usuario": username,
                         "observaciones": obs_extra_m,
                         "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -459,14 +421,13 @@ def render(db, username, rol):
     st.divider()
     st.markdown("### 📊 Totales por producto")
     totales_prod = {}
-    totales_pres = {}  # (tipo, pres_id) -> {"kg": float, "gavetas": int}  (para tabla por producto+presentación)
+    totales_pres = {}  # (tipo, pres_id) -> {"kg": float}  (para tabla por producto+presentación)
     # Sumar de asignaciones de pedidos + manuales
     for _, a in asig_fecha.iterrows():
         # Las filas marcador de "gavetas reales" no son asignaciones de producto real
         if str(a["linea_id"]).startswith("TOTALGAV:"):
             continue
         kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-        gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
         # Determinar tipo de producto y presentacion
         if str(a["linea_id"]).startswith("MANUAL:"):
             partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
@@ -479,34 +440,31 @@ def render(db, username, rol):
             tipo = fila_lin.iloc[0]["tipo_producto"]
             pres_id = str(fila_lin.iloc[0]["presentacion_id"])
         if tipo not in totales_prod:
-            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0}
+            totales_prod[tipo] = {"kg": 0.0}
         totales_prod[tipo]["kg"] += kg_a
-        totales_prod[tipo]["gavetas"] += gav
 
         clave_pp = (tipo, pres_id)
         if clave_pp not in totales_pres:
-            totales_pres[clave_pp] = {"kg": 0.0, "gavetas": 0}
+            totales_pres[clave_pp] = {"kg": 0.0}
         totales_pres[clave_pp]["kg"] += kg_a
-        totales_pres[clave_pp]["gavetas"] += gav
 
     if totales_prod:
         df_tot = pd.DataFrame([
-            {"Producto": t, "Kg totales": f"{v['kg']:.1f}", "Gavetas totales": v["gavetas"]}
+            {"Producto": t, "Kg totales": f"{v['kg']:.1f}"}
             for t, v in sorted(totales_prod.items())
         ])
         total_general_kg = sum(v["kg"] for v in totales_prod.values())
-        total_general_gav = sum(v["gavetas"] for v in totales_prod.values())
-        df_tot.loc[len(df_tot)] = ["TOTAL GENERAL", f"{total_general_kg:.1f}", total_general_gav]
+        df_tot.loc[len(df_tot)] = ["TOTAL GENERAL", f"{total_general_kg:.1f}"]
         st.dataframe(df_tot, use_container_width=True, hide_index=True)
 
-    # -------- TOTALES POR PRODUCTO Y PRESENTACIÓN (con gavetas reales editable) --------
+    # -------- TOTALES POR PRODUCTO Y PRESENTACIÓN (gavetas reales editable) --------
     st.divider()
     st.markdown("### 📦 Totales por producto y presentación")
     mapa_gavreal_final = {}  # (tipo, pres_id) -> gavetas reales (para reutilizar al generar el PDF)
     if totales_pres:
         st.caption(
             "La columna **Gavetas reales** es editable: úsala para anotar cuántas "
-            "gavetas se armaron finalmente (puede diferir de la sugerencia). Se guarda "
+            "gavetas se arman de cada producto y presentación. Se guarda "
             "automáticamente por fecha."
         )
         # Cargar valores de "gavetas reales" ya guardados para esta fecha
@@ -522,15 +480,13 @@ def render(db, username, rol):
                 "gavetas": int(pd.to_numeric(g.get("gavetas", 0), errors="coerce") or 0),
             }
 
-        hp1, hp2, hp3, hp4, hp5 = st.columns([2, 2, 1, 1, 1])
+        hp1, hp2, hp3, hp4 = st.columns([2, 2, 1, 1])
         hp1.markdown("**Producto**")
         hp2.markdown("**Presentación**")
         hp3.markdown("**Kg totales**")
-        hp4.markdown("**Gavetas sugeridas**")
-        hp5.markdown("**Gavetas reales**")
+        hp4.markdown("**Gavetas reales**")
 
         tot_kg_pres = 0.0
-        tot_gav_sug_pres = 0
         tot_gav_real_pres = 0
         pres_ordenadas = sorted(
             totales_pres.items(),
@@ -538,16 +494,15 @@ def render(db, username, rol):
         )
         for (tipo, pres_id), v in pres_ordenadas:
             pres_nombre = mapa_pres_nombre.get(pres_id, pres_id or "Sin presentación")
-            cp1, cp2, cp3, cp4, cp5 = st.columns([2, 2, 1, 1, 1])
+            cp1, cp2, cp3, cp4 = st.columns([2, 2, 1, 1])
             cp1.markdown(tipo)
             cp2.markdown(pres_nombre)
             cp3.markdown(f"{v['kg']:.1f}")
-            cp4.markdown(str(v["gavetas"]))
 
             clave_g = (tipo, pres_id)
             guardado = mapa_gavreal_guardado.get(clave_g)
-            valor_default = guardado["gavetas"] if guardado else v["gavetas"]
-            nuevo_gavreal = cp5.number_input(
+            valor_default = guardado["gavetas"] if guardado else 0
+            nuevo_gavreal = cp4.number_input(
                 "Gavetas reales", min_value=0, step=1, value=int(valor_default),
                 key=f"gavreal_{fecha_sel.isoformat()}_{tipo}_{pres_id}",
                 label_visibility="collapsed",
@@ -559,7 +514,7 @@ def render(db, username, rol):
                     db.update_row("orden_salida_asignaciones", "asignacion_id", guardado["asignacion_id"], {
                         "gavetas": nuevo_gavreal,
                     })
-            elif nuevo_gavreal != v["gavetas"]:
+            elif nuevo_gavreal != 0:
                 asig_id_g = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
                 db.append_row("orden_salida_asignaciones", {
                     "asignacion_id": asig_id_g,
@@ -574,15 +529,13 @@ def render(db, username, rol):
                 })
 
             tot_kg_pres += v["kg"]
-            tot_gav_sug_pres += v["gavetas"]
             tot_gav_real_pres += nuevo_gavreal
 
         st.markdown("---")
-        cf1, cf2, cf3, cf4, cf5 = st.columns([2, 2, 1, 1, 1])
+        cf1, cf2, cf3, cf4 = st.columns([2, 2, 1, 1])
         cf1.markdown("**TOTAL GENERAL**")
         cf3.markdown(f"**{tot_kg_pres:.1f}**")
-        cf4.markdown(f"**{tot_gav_sug_pres}**")
-        cf5.markdown(f"**{tot_gav_real_pres}**")
+        cf4.markdown(f"**{tot_gav_real_pres}**")
 
     # -------- PDF --------
     st.divider()
@@ -602,7 +555,6 @@ def render(db, username, rol):
             pres_nombre = mapa_pres_nombre.get(str(linea["presentacion_id"]), str(linea["presentacion_id"]))
             for _, a in asig_l.iterrows():
                 kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-                gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
                 kg_nom = mapa_kg_nominal.get(str(linea["presentacion_id"]), 0)
                 unid_lote = int(round(kg_a / kg_nom)) if kg_nom > 0 else 0
                 datos_pdf.setdefault(cli, []).append({
@@ -612,7 +564,6 @@ def render(db, username, rol):
                     "kg_lote": kg_a,
                     "presentacion": pres_nombre,
                     "unidades": unid_lote,
-                    "gavetas": gav,
                     "obs_linea": str(linea.get("observaciones", "") or ""),
                     "obs_asig": str(a.get("observaciones", "") or ""),
                 })
@@ -627,7 +578,6 @@ def render(db, username, rol):
             unid_m = int(partes[3]) if len(partes) > 3 and partes[3].isdigit() else 0
             cli_nombre_m = mapa_cli_pdf.get(cli_id_m, cli_id_m)
             kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-            gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
             datos_pdf.setdefault(cli_nombre_m, []).append({
                 "producto": tipo_m + " (extra)",
                 "lote": str(a.get("lote_producto_id", "") or "—") or "—",
@@ -635,7 +585,6 @@ def render(db, username, rol):
                 "kg_lote": kg_a,
                 "presentacion": mapa_pres_nombre.get(pres_id_m, pres_id_m),
                 "unidades": unid_m,
-                "gavetas": gav,
                 "obs_linea": "",
                 "obs_asig": str(a.get("observaciones", "") or ""),
             })
@@ -647,7 +596,7 @@ def render(db, username, rol):
             totales_pres_pdf[(tipo, nombre_p)] = {
                 "kg": v["kg"],
                 "unidades": unid_p,
-                "gavetas_reales": mapa_gavreal_final.get((tipo, pres_id), v["gavetas"]),
+                "gavetas_reales": mapa_gavreal_final.get((tipo, pres_id), 0),
             }
         pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod, totales_pres_pdf)
         st.download_button(
@@ -681,12 +630,11 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None)
     for cliente, filas in sorted(datos_por_cliente.items()):
         bloque = []
         bloque.append(Paragraph(f"CLIENTE: {cliente}", ESTILOS["Heading2"]))
-        # Tabla: Producto | Lote | Kg total | Kg/lote | Presentación | Unid. | Gavetas | Obs.
-        encab = ["Producto", "Lote", "Kg total", "Kg lote", "Presentación", "Unid.", "Gavetas", "Observaciones"]
+        # Tabla: Producto | Lote | Kg total | Kg/lote | Presentación | Unid. | Obs.
+        encab = ["Producto", "Lote", "Kg total", "Kg lote", "Presentación", "Unid.", "Observaciones"]
         datos = [[_p(h, negrita=True, pequeño=True) for h in encab]]
         total_kg = 0.0
         total_unid = 0
-        total_gav = 0
         for f in filas:
             obs = f["obs_asig"] or f["obs_linea"]
             datos.append([
@@ -696,18 +644,15 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None)
                 _p(f"{f['kg_lote']:.1f}", pequeño=True),
                 _p(f["presentacion"], pequeño=True),
                 _p(str(f["unidades"]), pequeño=True),
-                _p(str(f["gavetas"]), pequeño=True),
                 _p(obs, pequeño=True),
             ])
             total_kg += f["kg_lote"]
             total_unid += f["unidades"]
-            total_gav += f["gavetas"]
         # Fila TOTAL
         datos.append([
             _p("TOTAL", negrita=True, pequeño=True), _p(""), _p(""),
             _p(f"{total_kg:.1f}", negrita=True, pequeño=True),
-            _p(""), _p(str(total_unid), negrita=True, pequeño=True),
-            _p(str(total_gav), negrita=True, pequeño=True), _p(""),
+            _p(""), _p(str(total_unid), negrita=True, pequeño=True), _p(""),
         ])
         t = Table(datos, repeatRows=1)
         t.setStyle(TableStyle([
