@@ -28,7 +28,19 @@ ORDEN_PRODUCTOS = [
     "Yema sin pasteurizar",
 ]
 
-KG_POR_CUBETA_DEFAULT = 1.724  # kg líquido por cubeta si no hay categoría configurada
+KG_POR_CUBETA_DEFAULT = 1.724  # kg líquido por cubeta si no hay categoría configurada (fallback)
+
+# Rendimiento de materia prima segun el producto que se este separando:
+# por cada 100 cubetas se obtienen aprox. 150kg de huevo entero, 95kg de
+# clara y 55kg de yema (95+55=150, cuadra con el total de huevo entero).
+RENDIMIENTO_KG_POR_CUBETA = {
+    "Huevo entero pasteurizado": 1.50,
+    "Huevo entero sin pasteurizar": 1.50,
+    "Clara pasteurizada": 0.95,
+    "Clara sin pasteurizar": 0.95,
+    "Yema pasteurizada": 0.55,
+    "Yema sin pasteurizar": 0.55,
+}
 
 
 def _p(txt, negrita=False, pequeño=False):
@@ -64,16 +76,18 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
         el.append(Spacer(1, 0.3*cm))
 
     el.append(Paragraph("Consolidado del día", ESTILOS["Heading2"]))
-    datos = [[_p(h, negrita=True) for h in ["Producto", "Kg a producir", "Pedidos", "Clientes"]]]
+    datos = [[_p(h, negrita=True) for h in ["Producto", "Kg a producir", "Cubetas", "Pedidos", "Clientes"]]]
     for row in consolidado:
         datos.append([
             _p(row["producto"]), _p(f"{row['kg']:.1f} kg"),
+            _p(f"{row.get('cubetas', 0):.0f}"),
             _p(", ".join(row["pedidos"][:3]) + ("..." if len(row["pedidos"]) > 3 else "")),
             _p(", ".join(sorted(set(row["clientes"]))[:3])),
         ])
     datos.append([
         _p("TOTAL", negrita=True),
         _p(f"{sum(r['kg'] for r in consolidado):.1f} kg", negrita=True),
+        _p(f"{cubetas_necesarias_total:.0f}", negrita=True),
         _p(""), _p(""),
     ])
     t = Table(datos, repeatRows=1)
@@ -221,14 +235,17 @@ def _render_planificar(db, username, rol):
     pedidos_fecha["cliente_nombre"] = pedidos_fecha["cliente_id"].map(mapa_cli).fillna(pedidos_fecha["cliente_id"])
     pedidos_fecha["presentacion_nombre"] = pedidos_fecha["presentacion_id"].map(mapa_pres).fillna(pedidos_fecha["presentacion_id"])
 
-    # Calcular cubetas necesarias usando el rendimiento de la categoría
-    kg_por_cubeta = KG_POR_CUBETA_DEFAULT
+    # Cubetas necesarias: usa el rendimiento especifico de RENDIMIENTO_KG_POR_CUBETA
+    # segun el tipo de producto (huevo entero / clara / yema). Si aparece un
+    # tipo_producto que no esta en esa tabla, cae a un rendimiento generico
+    # calculado desde categorias_huevo.
+    kg_por_cubeta_fallback = KG_POR_CUBETA_DEFAULT
     if not categorias.empty and "kg_promedio_cubeta" in categorias.columns:
         vals = pd.to_numeric(categorias["kg_promedio_cubeta"], errors="coerce").dropna()
         if not vals.empty:
-            kg_por_cubeta = float(vals.mean())
-    rendimiento_liquido = 0.83  # pct promedio de kg líquido vs kg bruto
-    kg_liquido_por_cubeta = kg_por_cubeta * rendimiento_liquido
+            kg_por_cubeta_fallback = float(vals.mean())
+    rendimiento_liquido_fallback = 0.83  # pct promedio de kg líquido vs kg bruto
+    kg_liquido_por_cubeta_fallback = kg_por_cubeta_fallback * rendimiento_liquido_fallback
 
     # Cubetas disponibles en bodega
     cubetas_disponibles = 0
@@ -287,9 +304,12 @@ def _render_planificar(db, username, rol):
             if kg_t > 0:
                 kg_por_turno[t] = float(kg_t)
         kg_sin_turno = float(grupo[grupo["turno"].isin(["", "nan", "None"])]["cantidad_kg"].sum())
+        kg_liquido_por_cubeta_tipo = RENDIMIENTO_KG_POR_CUBETA.get(tipo, kg_liquido_por_cubeta_fallback)
+        cubetas_tipo = _cubetas_necesarias(kg_total, kg_liquido_por_cubeta_tipo)
         consolidado.append({
             "producto": tipo,
             "kg": kg_total,
+            "cubetas": cubetas_tipo,
             "kg_por_turno": kg_por_turno,
             "kg_sin_turno": kg_sin_turno,
             "pedidos": list(grupo["pedido_id"]),
@@ -298,7 +318,7 @@ def _render_planificar(db, username, rol):
     consolidado.sort(key=lambda r: ORDEN_PRODUCTOS.index(r["producto"]) if r["producto"] in ORDEN_PRODUCTOS else 99)
 
     kg_total_dia = sum(r["kg"] for r in consolidado)
-    cubetas_necesarias_total = _cubetas_necesarias(kg_total_dia, kg_liquido_por_cubeta)
+    cubetas_necesarias_total = sum(r["cubetas"] for r in consolidado)
     alerta_mp = cubetas_necesarias_total > cubetas_disponibles
 
     # ── VISTA EN PANTALLA ──────────────────────────────────────────────────────
@@ -341,6 +361,7 @@ def _render_planificar(db, username, rol):
             with st.container(border=True):
                 st.markdown(f"**{row['producto']}**")
                 st.metric("Kg pedidos", f"{row['kg']:,.1f} kg")
+                st.caption(f"🥚 Cubetas necesarias: {row['cubetas']:.0f}")
                 if kg_en_cf > 0:
                     st.caption(f"✅ {kg_en_cf:.1f} kg ya en cuarto frío → producir {kg_a_producir:.1f} kg adicionales")
                 else:
