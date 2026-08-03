@@ -459,23 +459,34 @@ def render(db, username, rol):
     st.divider()
     st.markdown("### 📊 Totales por producto")
     totales_prod = {}
+    totales_pres = {}  # pres_id -> {"kg": float, "gavetas": int}  (para tabla por presentación)
     # Sumar de asignaciones de pedidos + manuales
     for _, a in asig_fecha.iterrows():
+        # Las filas marcador de "gavetas reales" no son asignaciones de producto real
+        if str(a["linea_id"]).startswith("TOTALGAV:"):
+            continue
         kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
         gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
-        # Determinar tipo de producto
+        # Determinar tipo de producto y presentacion
         if str(a["linea_id"]).startswith("MANUAL:"):
             partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
             tipo = partes[1] if len(partes) > 1 else "Sin tipo"
+            pres_id = partes[2] if len(partes) > 2 else ""
         else:
             fila_lin = lineas_producidas[lineas_producidas["linea_id"].astype(str) == str(a["linea_id"])]
             if fila_lin.empty:
                 continue
             tipo = fila_lin.iloc[0]["tipo_producto"]
+            pres_id = str(fila_lin.iloc[0]["presentacion_id"])
         if tipo not in totales_prod:
             totales_prod[tipo] = {"kg": 0.0, "gavetas": 0}
         totales_prod[tipo]["kg"] += kg_a
         totales_prod[tipo]["gavetas"] += gav
+
+        if pres_id not in totales_pres:
+            totales_pres[pres_id] = {"kg": 0.0, "gavetas": 0}
+        totales_pres[pres_id]["kg"] += kg_a
+        totales_pres[pres_id]["gavetas"] += gav
 
     if totales_prod:
         df_tot = pd.DataFrame([
@@ -486,6 +497,82 @@ def render(db, username, rol):
         total_general_gav = sum(v["gavetas"] for v in totales_prod.values())
         df_tot.loc[len(df_tot)] = ["TOTAL GENERAL", f"{total_general_kg:.1f}", total_general_gav]
         st.dataframe(df_tot, use_container_width=True, hide_index=True)
+
+    # -------- TOTALES POR PRESENTACIÓN (con gavetas reales editable) --------
+    st.divider()
+    st.markdown("### 📦 Totales por presentación")
+    mapa_gavreal_final = {}  # pres_id -> gavetas reales (para reutilizar al generar el PDF)
+    if totales_pres:
+        st.caption(
+            "La columna **Gavetas reales** es editable: úsala para anotar cuántas "
+            "gavetas se armaron finalmente (puede diferir de la sugerencia). Se guarda "
+            "automáticamente por fecha."
+        )
+        # Cargar valores de "gavetas reales" ya guardados para esta fecha
+        asig_gavreal = asig_fecha[asig_fecha["linea_id"].astype(str).str.startswith("TOTALGAV:")]
+        mapa_gavreal_guardado = {}
+        for _, g in asig_gavreal.iterrows():
+            clave = str(g["linea_id"]).replace("TOTALGAV:", "", 1)
+            mapa_gavreal_guardado[clave] = {
+                "asignacion_id": g["asignacion_id"],
+                "gavetas": int(pd.to_numeric(g.get("gavetas", 0), errors="coerce") or 0),
+            }
+
+        hp1, hp2, hp3, hp4 = st.columns([2, 1, 1, 1])
+        hp1.markdown("**Presentación**")
+        hp2.markdown("**Kg totales**")
+        hp3.markdown("**Gavetas sugeridas**")
+        hp4.markdown("**Gavetas reales**")
+
+        tot_kg_pres = 0.0
+        tot_gav_sug_pres = 0
+        tot_gav_real_pres = 0
+        pres_ordenadas = sorted(totales_pres.items(), key=lambda kv: mapa_pres_nombre.get(kv[0], kv[0]))
+        for pres_id, v in pres_ordenadas:
+            pres_nombre = mapa_pres_nombre.get(pres_id, pres_id or "Sin presentación")
+            cp1, cp2, cp3, cp4 = st.columns([2, 1, 1, 1])
+            cp1.markdown(pres_nombre)
+            cp2.markdown(f"{v['kg']:.1f}")
+            cp3.markdown(str(v["gavetas"]))
+
+            guardado = mapa_gavreal_guardado.get(pres_id)
+            valor_default = guardado["gavetas"] if guardado else v["gavetas"]
+            nuevo_gavreal = cp4.number_input(
+                "Gavetas reales", min_value=0, step=1, value=int(valor_default),
+                key=f"gavreal_{fecha_sel.isoformat()}_{pres_id}",
+                label_visibility="collapsed",
+            )
+            mapa_gavreal_final[pres_id] = nuevo_gavreal
+
+            if guardado:
+                if nuevo_gavreal != guardado["gavetas"]:
+                    db.update_row("orden_salida_asignaciones", "asignacion_id", guardado["asignacion_id"], {
+                        "gavetas": nuevo_gavreal,
+                    })
+            elif nuevo_gavreal != v["gavetas"]:
+                asig_id_g = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
+                db.append_row("orden_salida_asignaciones", {
+                    "asignacion_id": asig_id_g,
+                    "fecha_entrega": fecha_sel.isoformat(),
+                    "linea_id": f"TOTALGAV:{pres_id}",
+                    "lote_producto_id": "",
+                    "kg_asignado": 0,
+                    "gavetas": nuevo_gavreal,
+                    "usuario": username,
+                    "observaciones": "",
+                    "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+            tot_kg_pres += v["kg"]
+            tot_gav_sug_pres += v["gavetas"]
+            tot_gav_real_pres += nuevo_gavreal
+
+        st.markdown("---")
+        cf1, cf2, cf3, cf4 = st.columns([2, 1, 1, 1])
+        cf1.markdown("**TOTAL GENERAL**")
+        cf2.markdown(f"**{tot_kg_pres:.1f}**")
+        cf3.markdown(f"**{tot_gav_sug_pres}**")
+        cf4.markdown(f"**{tot_gav_real_pres}**")
 
     # -------- PDF --------
     st.divider()
@@ -542,7 +629,15 @@ def render(db, username, rol):
                 "obs_linea": "",
                 "obs_asig": str(a.get("observaciones", "") or ""),
             })
-        pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod)
+        totales_pres_pdf = {}
+        for pres_id, v in totales_pres.items():
+            nombre_p = mapa_pres_nombre.get(pres_id, pres_id or "Sin presentación")
+            totales_pres_pdf[nombre_p] = {
+                "kg": v["kg"],
+                "gavetas_sugeridas": v["gavetas"],
+                "gavetas_reales": mapa_gavreal_final.get(pres_id, v["gavetas"]),
+            }
+        pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod, totales_pres_pdf)
         st.download_button(
             "⬇️ Descargar PDF",
             data=pdf_bytes,
@@ -552,7 +647,7 @@ def render(db, username, rol):
         )
 
 
-def _generar_pdf(fecha, datos_por_cliente, totales_prod=None):
+def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                             topMargin=1.5*cm, bottomMargin=1.5*cm,
@@ -649,6 +744,42 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None):
         ]))
         bloque_tot.append(tt)
         el.append(KeepTogether(bloque_tot))
+
+    # Tabla resumen: totales por presentación (con gavetas reales)
+    if totales_pres:
+        el.append(Spacer(1, 0.5*cm))
+        bloque_pres = []
+        bloque_pres.append(Paragraph("Totales por presentación", ESTILOS["Heading2"]))
+        encab_pres = ["Presentación", "Kg totales", "Gavetas sugeridas", "Gavetas reales"]
+        datos_pres = [[_p(h, negrita=True) for h in encab_pres]]
+        for nombre_p, v in sorted(totales_pres.items()):
+            datos_pres.append([
+                _p(nombre_p),
+                _p(f"{v['kg']:.1f}"),
+                _p(str(v["gavetas_sugeridas"])),
+                _p(str(v["gavetas_reales"])),
+            ])
+        tot_kg_p = sum(v["kg"] for v in totales_pres.values())
+        tot_gav_sug_p = sum(v["gavetas_sugeridas"] for v in totales_pres.values())
+        tot_gav_real_p = sum(v["gavetas_reales"] for v in totales_pres.values())
+        datos_pres.append([
+            _p("TOTAL GENERAL", negrita=True),
+            _p(f"{tot_kg_p:.1f}", negrita=True),
+            _p(str(tot_gav_sug_p), negrita=True),
+            _p(str(tot_gav_real_p), negrita=True),
+        ])
+        tp = Table(datos_pres, repeatRows=1)
+        tp.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#6a1b9a")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#dddddd")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-2), [colors.white, colors.HexColor("#f5f5f5")]),
+            ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#fff3e0")),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING", (0,0), (-1,-1), 5),
+        ]))
+        bloque_pres.append(tp)
+        el.append(KeepTogether(bloque_pres))
 
     doc.build(el)
     buffer.seek(0)
