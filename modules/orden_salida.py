@@ -718,21 +718,18 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None)
         el.append(Spacer(1, 0.5*cm))
         bloque_tot = []
         bloque_tot.append(Paragraph("Totales por producto (para logística)", ESTILOS["Heading2"]))
-        encab_tot = ["Producto", "Kg totales", "Gavetas totales"]
+        encab_tot = ["Producto", "Kg totales"]
         datos_tot = [[_p(h, negrita=True) for h in encab_tot]]
         for tipo, v in sorted(totales_prod.items()):
             datos_tot.append([
                 _p(tipo),
                 _p(f"{v['kg']:.1f}"),
-                _p(str(v['gavetas'])),
             ])
         # Fila TOTAL GENERAL
         tot_kg = sum(v["kg"] for v in totales_prod.values())
-        tot_gav = sum(v["gavetas"] for v in totales_prod.values())
         datos_tot.append([
             _p("TOTAL GENERAL", negrita=True),
             _p(f"{tot_kg:.1f}", negrita=True),
-            _p(str(tot_gav), negrita=True),
         ])
         tt = Table(datos_tot, repeatRows=1)
         tt.setStyle(TableStyle([
