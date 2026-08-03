@@ -812,6 +812,10 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None,
         titulo += f" — {nombre_orden}"
     el.append(Paragraph(titulo, ESTILOS["Title"]))
     el.append(Paragraph(
+        f"<b>Fecha de entrega: {fecha.strftime('%d/%m/%Y')}</b>",
+        ESTILOS["Normal"],
+    ))
+    el.append(Paragraph(
         f"Generado: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}",
         ESTILOS["Normal"],
     ))
