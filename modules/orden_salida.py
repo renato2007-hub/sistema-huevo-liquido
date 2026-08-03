@@ -477,7 +477,7 @@ def render(db, username, rol):
             pres_id_g = partes_g[1] if len(partes_g) > 1 else ""
             mapa_gavreal_guardado[(tipo_g, pres_id_g)] = {
                 "asignacion_id": g["asignacion_id"],
-                "gavetas": int(pd.to_numeric(g.get("gavetas", 0), errors="coerce") or 0),
+                "gavetas": float(pd.to_numeric(g.get("gavetas", 0), errors="coerce") or 0),
             }
 
         hp1, hp2, hp3, hp4 = st.columns([2, 2, 1, 1])
@@ -487,7 +487,7 @@ def render(db, username, rol):
         hp4.markdown("**Gavetas reales**")
 
         tot_kg_pres = 0.0
-        tot_gav_real_pres = 0
+        tot_gav_real_pres = 0.0
         pres_ordenadas = sorted(
             totales_pres.items(),
             key=lambda kv: (kv[0][0], mapa_pres_nombre.get(kv[0][1], kv[0][1])),
@@ -501,9 +501,10 @@ def render(db, username, rol):
 
             clave_g = (tipo, pres_id)
             guardado = mapa_gavreal_guardado.get(clave_g)
-            valor_default = guardado["gavetas"] if guardado else 0
+            valor_default = guardado["gavetas"] if guardado else 0.0
             nuevo_gavreal = cp4.number_input(
-                "Gavetas reales", min_value=0, step=1, value=int(valor_default),
+                "Gavetas reales", min_value=0.0, step=0.1, value=float(valor_default),
+                format="%.1f",
                 key=f"gavreal_{fecha_sel.isoformat()}_{tipo}_{pres_id}",
                 label_visibility="collapsed",
             )
@@ -535,7 +536,7 @@ def render(db, username, rol):
         cf1, cf2, cf3, cf4 = st.columns([2, 2, 1, 1])
         cf1.markdown("**TOTAL GENERAL**")
         cf3.markdown(f"**{tot_kg_pres:.1f}**")
-        cf4.markdown(f"**{tot_gav_real_pres}**")
+        cf4.markdown(f"**{tot_gav_real_pres:.1f}**")
 
     # -------- PDF --------
     st.divider()
@@ -712,7 +713,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None)
                 _p(nombre_p),
                 _p(f"{v['kg']:.1f}"),
                 _p(str(v["unidades"])),
-                _p(str(v["gavetas_reales"])),
+                _p(f"{v['gavetas_reales']:.1f}"),
             ])
         tot_kg_p = sum(v["kg"] for v in totales_pres.values())
         tot_unid_p = sum(v["unidades"] for v in totales_pres.values())
@@ -722,7 +723,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None)
             _p(""),
             _p(f"{tot_kg_p:.1f}", negrita=True),
             _p(str(tot_unid_p), negrita=True),
-            _p(str(tot_gav_real_p), negrita=True),
+            _p(f"{tot_gav_real_p:.1f}", negrita=True),
         ])
         tp = Table(datos_pres, repeatRows=1)
         tp.setStyle(TableStyle([
