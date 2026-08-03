@@ -185,8 +185,14 @@ SHEET_SCHEMAS = {
     # camiones/rutas). "ordenes_salida" es la cabecera de cada una; cada fila
     # de "orden_salida_asignaciones" pertenece a una orden puntual via
     # "orden_id" (ultima columna -- se agrego despues, ver migracion manual).
+    # "fecha_entrega_pdf" (ultima columna -- se agrego despues, ver migracion
+    # manual) es la fecha que se imprime en el PDF/certificado; por defecto
+    # es igual a "fecha_entrega" pero se puede editar aparte, porque la orden
+    # se arma segun la fecha de compromiso de los pedidos y a veces el
+    # certificado se emite un dia para una entrega en otro.
     "ordenes_salida": [
         "orden_id", "fecha_entrega", "nombre", "usuario", "creado_en",
+        "fecha_entrega_pdf",
     ],
     "orden_salida_asignaciones": [
         "asignacion_id", "fecha_entrega", "linea_id", "lote_producto_id",

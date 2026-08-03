@@ -348,6 +348,32 @@ def render(db, username, rol):
             st.rerun()
         st.stop()
 
+    # -------- FECHA DE ENTREGA QUE APARECE EN EL PDF/CERTIFICADO --------
+    # Por defecto es la fecha de esta orden (fecha_sel), pero es editable:
+    # la orden se arma segun la fecha de compromiso de los pedidos, y a veces
+    # el certificado se genera un dia para una entrega en otra fecha.
+    fila_orden_actual = ordenes_fecha[ordenes_fecha["orden_id"].astype(str) == str(orden_sel)]
+    fecha_pdf_guardada = None
+    if not fila_orden_actual.empty and "fecha_entrega_pdf" in fila_orden_actual.columns:
+        valor_guardado = str(fila_orden_actual.iloc[0].get("fecha_entrega_pdf", "") or "").strip()
+        if valor_guardado:
+            try:
+                fecha_pdf_guardada = datetime.date.fromisoformat(valor_guardado)
+            except ValueError:
+                fecha_pdf_guardada = None
+    fecha_pdf_default = fecha_pdf_guardada or fecha_sel
+    fecha_pdf_sel = st.date_input(
+        "🚚 Fecha de entrega en el PDF/certificado",
+        value=fecha_pdf_default,
+        key=f"fecha_pdf_{orden_sel}",
+        help="Por defecto es la misma fecha de esta orden. Cámbiala si el "
+             "certificado se genera hoy pero la entrega es en otro día.",
+    )
+    if fecha_pdf_sel != fecha_pdf_default:
+        db.update_row("ordenes_salida", "orden_id", orden_sel, {
+            "fecha_entrega_pdf": fecha_pdf_sel.isoformat(),
+        })
+
     # ==================== ASIGNACIONES DE LA ORDEN ACTUAL ====================
     asig_fecha_todas = asignaciones_df[
         asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
@@ -788,14 +814,14 @@ def render(db, username, rol):
                 "unidades": unid_p,
                 "gavetas_reales": mapa_gavreal_final.get((tipo, pres_id), 0),
             }
-        pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod, totales_pres_pdf, nombre_orden_actual)
+        pdf_bytes = _generar_pdf(fecha_pdf_sel, datos_pdf, totales_prod, totales_pres_pdf, nombre_orden_actual)
         nombre_archivo_orden = "".join(
             c if c.isalnum() else "_" for c in nombre_orden_actual
         ).strip("_").lower() or orden_sel
         st.download_button(
             "⬇️ Descargar PDF",
             data=pdf_bytes,
-            file_name=f"orden_salida_{fecha_sel.isoformat()}_{nombre_archivo_orden}.pdf",
+            file_name=f"orden_salida_{fecha_pdf_sel.isoformat()}_{nombre_archivo_orden}.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
@@ -813,10 +839,6 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None,
     el.append(Paragraph(titulo, ESTILOS["Title"]))
     el.append(Paragraph(
         f"<b>Fecha de entrega: {fecha.strftime('%d/%m/%Y')}</b>",
-        ESTILOS["Normal"],
-    ))
-    el.append(Paragraph(
-        f"Generado: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}",
         ESTILOS["Normal"],
     ))
     el.append(Spacer(1, 0.4*cm))
