@@ -632,9 +632,11 @@ def render(db, username, rol):
         totales_pres_pdf = {}
         for pres_id, v in totales_pres.items():
             nombre_p = mapa_pres_nombre.get(pres_id, pres_id or "Sin presentación")
+            kg_nom_p = mapa_kg_nominal.get(pres_id, 0)
+            unid_p = int(round(v["kg"] / kg_nom_p)) if kg_nom_p > 0 else 0
             totales_pres_pdf[nombre_p] = {
                 "kg": v["kg"],
-                "gavetas_sugeridas": v["gavetas"],
+                "unidades": unid_p,
                 "gavetas_reales": mapa_gavreal_final.get(pres_id, v["gavetas"]),
             }
         pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod, totales_pres_pdf)
@@ -750,22 +752,22 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None)
         el.append(Spacer(1, 0.5*cm))
         bloque_pres = []
         bloque_pres.append(Paragraph("Totales por presentación", ESTILOS["Heading2"]))
-        encab_pres = ["Presentación", "Kg totales", "Gavetas sugeridas", "Gavetas reales"]
+        encab_pres = ["Presentación", "Kg totales", "Unidades", "Gavetas reales"]
         datos_pres = [[_p(h, negrita=True) for h in encab_pres]]
         for nombre_p, v in sorted(totales_pres.items()):
             datos_pres.append([
                 _p(nombre_p),
                 _p(f"{v['kg']:.1f}"),
-                _p(str(v["gavetas_sugeridas"])),
+                _p(str(v["unidades"])),
                 _p(str(v["gavetas_reales"])),
             ])
         tot_kg_p = sum(v["kg"] for v in totales_pres.values())
-        tot_gav_sug_p = sum(v["gavetas_sugeridas"] for v in totales_pres.values())
+        tot_unid_p = sum(v["unidades"] for v in totales_pres.values())
         tot_gav_real_p = sum(v["gavetas_reales"] for v in totales_pres.values())
         datos_pres.append([
             _p("TOTAL GENERAL", negrita=True),
             _p(f"{tot_kg_p:.1f}", negrita=True),
-            _p(str(tot_gav_sug_p), negrita=True),
+            _p(str(tot_unid_p), negrita=True),
             _p(str(tot_gav_real_p), negrita=True),
         ])
         tp = Table(datos_pres, repeatRows=1)
