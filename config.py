@@ -181,9 +181,17 @@ SHEET_SCHEMAS = {
         "id_registro", "accion", "campo", "valor_antes", "valor_despues", "motivo",
     ],
     # ---------- Orden de salida ----------
+    # NOTA: puede haber mas de una orden de salida el mismo dia (distintos
+    # camiones/rutas). "ordenes_salida" es la cabecera de cada una; cada fila
+    # de "orden_salida_asignaciones" pertenece a una orden puntual via
+    # "orden_id" (ultima columna -- se agrego despues, ver migracion manual).
+    "ordenes_salida": [
+        "orden_id", "fecha_entrega", "nombre", "usuario", "creado_en",
+    ],
     "orden_salida_asignaciones": [
         "asignacion_id", "fecha_entrega", "linea_id", "lote_producto_id",
         "kg_asignado", "gavetas", "usuario", "observaciones", "creado_en",
+        "orden_id",
     ],
 }
 
