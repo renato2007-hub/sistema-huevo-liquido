@@ -373,6 +373,120 @@ def render(db, username, rol):
                 })
                 st.rerun()
 
+    # -------- LÍNEAS MANUALES (cliente extra) --------
+    st.divider()
+    with st.expander("➕ Agregar línea manual (cliente extra fuera del sistema)", expanded=False):
+        st.caption(
+            "Para clientes cuyo pedido no está registrado en el sistema pero "
+            "necesitas incluirlos en esta orden de salida. Solo aparecen en el PDF."
+        )
+        if clientes.empty or presentaciones.empty:
+            st.warning("Necesitas tener clientes y presentaciones en catálogos.")
+        else:
+            colm1, colm2 = st.columns(2)
+            cli_extra = colm1.selectbox(
+                "Cliente", clientes["cliente_id"],
+                format_func=lambda x: clientes.set_index("cliente_id").loc[x, "nombre"],
+                key="man_cli",
+            )
+            tipo_extra_m = colm2.selectbox(
+                "Producto",
+                ["Huevo entero pasteurizado", "Clara pasteurizada", "Clara sin pasteurizar", "Yema pasteurizada"],
+                key="man_tipo",
+            )
+            colm3, colm4 = st.columns(2)
+            pres_extra_m = colm3.selectbox(
+                "Presentación", presentaciones["presentacion_id"],
+                format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
+                key="man_pres",
+            )
+            unid_extra_m = colm4.number_input("Unidades", min_value=0, step=1, key="man_unid")
+            kg_nom_extra = float(presentaciones.set_index("presentacion_id").loc[pres_extra_m, "kg_nominal"])
+            kg_extra_m = round(unid_extra_m * kg_nom_extra, 2)
+            colm5, colm6 = st.columns(2)
+            lote_extra = colm5.text_input("Lote", "", key="man_lote", placeholder="Escribe el lote")
+            upg_extra = mapa_upg.get(str(pres_extra_m), 0)
+            gav_default = math.ceil(unid_extra_m / upg_extra) if upg_extra > 0 else 0
+            gav_extra = colm6.number_input("Gavetas", min_value=0, step=1, value=int(gav_default), key="man_gav")
+            obs_extra_m = st.text_input("Observaciones", "", key="man_obs")
+            colm7, _ = st.columns(2)
+            colm7.metric("Kg calculados", f"{kg_extra_m:.1f} kg")
+
+            if st.button("➕ Agregar línea manual", key="btn_man_add"):
+                if unid_extra_m <= 0:
+                    st.error("Ingresa las unidades.")
+                else:
+                    asig_id = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
+                    # linea_id="MANUAL:<cliente>|<tipo>|<pres>" — asi lo distinguimos y traemos sus datos al PDF
+                    linea_id_manual = f"MANUAL:{cli_extra}|{tipo_extra_m}|{pres_extra_m}|{unid_extra_m}"
+                    db.append_row("orden_salida_asignaciones", {
+                        "asignacion_id": asig_id,
+                        "fecha_entrega": fecha_sel.isoformat(),
+                        "linea_id": linea_id_manual,
+                        "lote_producto_id": lote_extra,
+                        "kg_asignado": kg_extra_m,
+                        "gavetas": gav_extra,
+                        "usuario": username,
+                        "observaciones": obs_extra_m,
+                        "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                    st.success(f"✅ Línea manual agregada al cliente {clientes.set_index('cliente_id').loc[cli_extra, 'nombre']}.")
+                    st.rerun()
+
+    # Mostrar las líneas manuales existentes para poder borrarlas
+    asig_manual = asig_fecha[asig_fecha["linea_id"].astype(str).str.startswith("MANUAL:")]
+    if not asig_manual.empty:
+        st.markdown("##### Líneas manuales agregadas")
+        mapa_cli_m = dict(zip(clientes["cliente_id"], clientes["nombre"])) if not clientes.empty else {}
+        for _, a in asig_manual.iterrows():
+            partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
+            cli_id_m = partes[0] if len(partes) > 0 else "?"
+            tipo_m = partes[1] if len(partes) > 1 else "?"
+            pres_id_m = partes[2] if len(partes) > 2 else "?"
+            unid_m = partes[3] if len(partes) > 3 else "0"
+            cm1, cm2 = st.columns([6, 1])
+            cm1.markdown(
+                f"• **{mapa_cli_m.get(cli_id_m, cli_id_m)}** — {tipo_m} — "
+                f"{mapa_pres_nombre.get(pres_id_m, pres_id_m)} — "
+                f"{unid_m} un., {float(a.get('kg_asignado', 0)):.1f} kg — "
+                f"lote `{a.get('lote_producto_id', '') or '(sin lote)'}`"
+            )
+            if cm2.button("🗑️", key=f"del_man_{a['asignacion_id']}"):
+                db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
+                st.rerun()
+
+    # -------- TOTALES POR PRODUCTO --------
+    st.divider()
+    st.markdown("### 📊 Totales por producto")
+    totales_prod = {}
+    # Sumar de asignaciones de pedidos + manuales
+    for _, a in asig_fecha.iterrows():
+        kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
+        gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+        # Determinar tipo de producto
+        if str(a["linea_id"]).startswith("MANUAL:"):
+            partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
+            tipo = partes[1] if len(partes) > 1 else "Sin tipo"
+        else:
+            fila_lin = lineas_producidas[lineas_producidas["linea_id"].astype(str) == str(a["linea_id"])]
+            if fila_lin.empty:
+                continue
+            tipo = fila_lin.iloc[0]["tipo_producto"]
+        if tipo not in totales_prod:
+            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0}
+        totales_prod[tipo]["kg"] += kg_a
+        totales_prod[tipo]["gavetas"] += gav
+
+    if totales_prod:
+        df_tot = pd.DataFrame([
+            {"Producto": t, "Kg totales": f"{v['kg']:.1f}", "Gavetas totales": v["gavetas"]}
+            for t, v in sorted(totales_prod.items())
+        ])
+        total_general_kg = sum(v["kg"] for v in totales_prod.values())
+        total_general_gav = sum(v["gavetas"] for v in totales_prod.values())
+        df_tot.loc[len(df_tot)] = ["TOTAL GENERAL", f"{total_general_kg:.1f}", total_general_gav]
+        st.dataframe(df_tot, use_container_width=True, hide_index=True)
+
     # -------- PDF --------
     st.divider()
     st.markdown("### 📄 Descargar orden de salida (PDF)")
@@ -382,6 +496,7 @@ def render(db, username, rol):
         asig_fecha = asignaciones_df[
             asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
         ].copy()
+        mapa_cli_pdf = dict(zip(clientes["cliente_id"], clientes["nombre"])) if not clientes.empty else {}
         # Armar datos por cliente
         datos_pdf = {}
         for _, linea in lineas_producidas.iterrows():
@@ -404,7 +519,30 @@ def render(db, username, rol):
                     "obs_linea": str(linea.get("observaciones", "") or ""),
                     "obs_asig": str(a.get("observaciones", "") or ""),
                 })
-        pdf_bytes = _generar_pdf(fecha_sel, datos_pdf)
+        # Agregar lineas manuales al PDF
+        for _, a in asig_fecha.iterrows():
+            if not str(a["linea_id"]).startswith("MANUAL:"):
+                continue
+            partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
+            cli_id_m = partes[0] if len(partes) > 0 else ""
+            tipo_m = partes[1] if len(partes) > 1 else ""
+            pres_id_m = partes[2] if len(partes) > 2 else ""
+            unid_m = int(partes[3]) if len(partes) > 3 and partes[3].isdigit() else 0
+            cli_nombre_m = mapa_cli_pdf.get(cli_id_m, cli_id_m)
+            kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
+            gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+            datos_pdf.setdefault(cli_nombre_m, []).append({
+                "producto": tipo_m + " (extra)",
+                "lote": str(a.get("lote_producto_id", "") or "—") or "—",
+                "kg_total": kg_a,
+                "kg_lote": kg_a,
+                "presentacion": mapa_pres_nombre.get(pres_id_m, pres_id_m),
+                "unidades": unid_m,
+                "gavetas": gav,
+                "obs_linea": "",
+                "obs_asig": str(a.get("observaciones", "") or ""),
+            })
+        pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod)
         st.download_button(
             "⬇️ Descargar PDF",
             data=pdf_bytes,
@@ -414,7 +552,7 @@ def render(db, username, rol):
         )
 
 
-def _generar_pdf(fecha, datos_por_cliente):
+def _generar_pdf(fecha, datos_por_cliente, totales_prod=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                             topMargin=1.5*cm, bottomMargin=1.5*cm,
@@ -477,6 +615,40 @@ def _generar_pdf(fecha, datos_por_cliente):
         bloque.append(t)
         el.append(KeepTogether(bloque))
         el.append(Spacer(1, 0.6*cm))
+
+    # Tabla resumen: totales por producto (para elegir tamaño de camión)
+    if totales_prod:
+        el.append(Spacer(1, 0.5*cm))
+        bloque_tot = []
+        bloque_tot.append(Paragraph("Totales por producto (para logística)", ESTILOS["Heading2"]))
+        encab_tot = ["Producto", "Kg totales", "Gavetas totales"]
+        datos_tot = [[_p(h, negrita=True) for h in encab_tot]]
+        for tipo, v in sorted(totales_prod.items()):
+            datos_tot.append([
+                _p(tipo),
+                _p(f"{v['kg']:.1f}"),
+                _p(str(v['gavetas'])),
+            ])
+        # Fila TOTAL GENERAL
+        tot_kg = sum(v["kg"] for v in totales_prod.values())
+        tot_gav = sum(v["gavetas"] for v in totales_prod.values())
+        datos_tot.append([
+            _p("TOTAL GENERAL", negrita=True),
+            _p(f"{tot_kg:.1f}", negrita=True),
+            _p(str(tot_gav), negrita=True),
+        ])
+        tt = Table(datos_tot, repeatRows=1)
+        tt.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2e7d32")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#dddddd")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-2), [colors.white, colors.HexColor("#f5f5f5")]),
+            ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#fff3e0")),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING", (0,0), (-1,-1), 5),
+        ]))
+        bloque_tot.append(tt)
+        el.append(KeepTogether(bloque_tot))
 
     doc.build(el)
     buffer.seek(0)
