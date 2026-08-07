@@ -1,16 +1,14 @@
 """
-Orden de salida: para una fecha de entrega puede haber mas de una orden de
-salida (distintos camiones/rutas/clientes). Cada orden agrupa un subconjunto
-de las lineas de pedido comprometidas y producidas para esa fecha -- las
-lineas no marcadas como incluidas en una orden no aparecen en ella. Para
-cada linea incluida, sugiere de que lote de cuarto frio sale (FIFO), editable,
-y genera un PDF por cliente para que la ingeniera de calidad emita los
-certificados y el despachador cargue el camion.
+Orden de salida: para una fecha de entrega, muestra las lineas de pedido
+comprometidas (marcadas como producidas), sugiere de que lote de cuarto
+frio salen (FIFO), y genera un PDF por cliente para que la ingeniera de
+calidad emita los certificados y el despachador cargue el camion.
 
 No descuenta inventario -- ese descuento sigue haciendose desde
 'Cuarto frio -> Despacho a cliente'.
 """
 import io
+import math
 import datetime
 import streamlit as st
 import pandas as pd
@@ -51,7 +49,7 @@ def _tipo_linea_a_semielaborado(tipo_linea):
 
 def _sugerir_asignacion_fifo(linea, lotes_disponibles_df, mapa_kg_nominal):
     """Devuelve lista de asignaciones sugeridas para una linea (FIFO).
-    Cada asignacion = {lote_producto_id, kg_asignado}."""
+    Cada asignacion = {lote_producto_id, kg_asignado, gavetas_sugeridas}."""
     if lotes_disponibles_df.empty:
         return []
     kg_pedido = float(linea.get("cantidad_kg", 0) or 0)
@@ -121,68 +119,13 @@ def _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion
     return cf[["lote_producto_id", "saldo", "kg_disponible", "fecha"]].reset_index(drop=True)
 
 
-def _crear_fifo_para_linea(db, username, fecha_sel, orden_sel, linea,
-                            cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal):
-    """Crea las filas de asignacion (sugerencia FIFO, o placeholder sin lote
-    si no hay stock) para una linea dentro de una orden puntual."""
-    lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
-    sugerencias = _sugerir_asignacion_fifo(linea, lotes_disp, mapa_kg_nominal)
-    if not sugerencias:
-        sugerencias = [{"lote_producto_id": "", "kg_asignado": float(linea["cantidad_kg"])}]
-    for s in sugerencias:
-        asig_id = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
-        db.append_row("orden_salida_asignaciones", {
-            "asignacion_id": asig_id,
-            "fecha_entrega": fecha_sel.isoformat(),
-            "linea_id": linea["linea_id"],
-            "lote_producto_id": s["lote_producto_id"],
-            "kg_asignado": s["kg_asignado"],
-            "gavetas": 0,
-            "usuario": username,
-            "observaciones": "",
-            "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "orden_id": orden_sel,
-        })
-
-
-def _incluir_linea_en_orden(db, username, fecha_sel, orden_sel, linea, asig_fecha_todas,
-                             cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal):
-    """Marca una linea como incluida en la orden actual. Si ya existian
-    asignaciones 'huerfanas' para esa linea (creadas antes de que existiera
-    el concepto de orden, sin orden_id), las adopta en vez de duplicarlas."""
-    lid = str(linea["linea_id"])
-    if "orden_id" in asig_fecha_todas.columns:
-        huerfanas = asig_fecha_todas[
-            (asig_fecha_todas["linea_id"].astype(str) == lid)
-            & (asig_fecha_todas["orden_id"].astype(str).str.strip() == "")
-        ]
-    else:
-        huerfanas = asig_fecha_todas[asig_fecha_todas["linea_id"].astype(str) == lid]
-    if not huerfanas.empty:
-        for _, h in huerfanas.iterrows():
-            db.update_row("orden_salida_asignaciones", "asignacion_id", h["asignacion_id"], {
-                "orden_id": orden_sel,
-            })
-        return
-    _crear_fifo_para_linea(db, username, fecha_sel, orden_sel, linea,
-                            cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
-
-
-def _excluir_linea_de_orden(db, linea_id, asig_fecha_orden):
-    """Quita una linea de la orden actual (borra sus filas de asignacion)."""
-    filas = asig_fecha_orden[asig_fecha_orden["linea_id"].astype(str) == str(linea_id)]
-    for _, f in filas.iterrows():
-        db.delete_row("orden_salida_asignaciones", "asignacion_id", f["asignacion_id"])
-
-
 def render(db, username, rol):
     st.title("📤 Orden de salida")
     st.caption(
         "Consolidado de todo lo que se va a despachar en una fecha, agrupado por cliente. "
-        "En un mismo día puede haber más de una orden de salida (distintos camiones o "
-        "rutas): elige o crea una orden y marca qué pedidos van en ella. Sugiere de qué "
-        "lote de cuarto frío sale cada producto (FIFO), y lo puedes editar. Sirve para que "
-        "la ingeniera de calidad emita los certificados y el despachador cargue el camión."
+        "Sugiere de qué lote de cuarto frío sale cada producto (FIFO), y lo puedes "
+        "editar. Sirve para que la ingeniera de calidad emita los certificados y el "
+        "despachador cargue el camión."
     )
 
     hoy = datetime.date.today()
@@ -196,7 +139,6 @@ def render(db, username, rol):
     cf_entradas = db.get_df("cuarto_frio_entradas")
     pasteurizacion = db.get_df("pasteurizacion_envasado")
     produccion_semi = db.get_df("produccion_semielaborados")
-    ordenes_df = db.get_df("ordenes_salida")
     asignaciones_df = db.get_df("orden_salida_asignaciones")
 
     if lineas.empty:
@@ -256,219 +198,99 @@ def render(db, username, rol):
         lineas_producidas["cliente_nombre"] = lineas_producidas["cliente_nombre"].fillna(lineas_producidas["cliente_id"])
     else:
         lineas_producidas["cliente_nombre"] = lineas_producidas["cliente_id"]
-    lineas_producidas = lineas_producidas.sort_values(["cliente_nombre", "tipo_producto"])
 
-    # Presentaciones: nombre + kg_nominal
+    # Presentaciones: nombre + kg_nominal + unidades_por_gaveta
     mapa_pres_nombre = {}
     mapa_kg_nominal = {}
+    mapa_upg = {}
     if not presentaciones.empty:
         for _, pr in presentaciones.iterrows():
             pid = str(pr["presentacion_id"])
             mapa_pres_nombre[pid] = str(pr.get("nombre", pid))
             mapa_kg_nominal[pid] = float(pd.to_numeric(pr.get("kg_nominal", 0), errors="coerce") or 0)
-
-    # ==================== SELECCIÓN / CREACIÓN DE ORDEN ====================
-    st.divider()
-    st.markdown("### 🗂️ Orden de salida de esta fecha")
-    st.caption(
-        "Puede haber más de una orden de salida el mismo día (ej. distintos "
-        "camiones o rutas). Elige una orden existente o crea una nueva; luego, "
-        "más abajo, marca qué pedidos van en ella."
-    )
-
-    ordenes_fecha = (
-        ordenes_df[ordenes_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()].copy()
-        if not ordenes_df.empty else pd.DataFrame()
-    )
-    if not ordenes_fecha.empty:
-        ordenes_fecha = ordenes_fecha.sort_values("creado_en")
-    mapa_orden_nombre = dict(zip(ordenes_fecha["orden_id"], ordenes_fecha["nombre"])) if not ordenes_fecha.empty else {}
-
-    session_key = f"orden_sel_{fecha_sel.isoformat()}"
-    CREAR_NUEVA = "➕ Crear nueva orden…"
-    orden_sel = None
-    nombre_orden_actual = None
-
-    if ordenes_fecha.empty:
-        st.info("Todavía no hay ninguna orden de salida creada para esta fecha.")
-        mostrar_form_nueva = True
-    else:
-        ids_disponibles = list(mapa_orden_nombre.keys())
-        if st.session_state.get(session_key) not in ids_disponibles:
-            st.session_state[session_key] = ids_disponibles[0]
-        etiquetas = [f"{mapa_orden_nombre[i]}" for i in ids_disponibles] + [CREAR_NUEVA]
-        idx_default = ids_disponibles.index(st.session_state[session_key])
-        elegido = st.selectbox(
-            "Selecciona la orden de salida", etiquetas, index=idx_default,
-            key=f"sb_orden_{fecha_sel.isoformat()}",
-        )
-        if elegido == CREAR_NUEVA:
-            mostrar_form_nueva = True
-        else:
-            mostrar_form_nueva = False
-            orden_sel = ids_disponibles[etiquetas.index(elegido)]
-            nombre_orden_actual = mapa_orden_nombre[orden_sel]
-            st.session_state[session_key] = orden_sel
-
-    if mostrar_form_nueva:
-        nombre_nueva = st.text_input(
-            "Nombre de la nueva orden",
-            placeholder="Ej. Camión mañana, Ruta Norte, Cliente urgente...",
-            key=f"nombre_nueva_orden_{fecha_sel.isoformat()}",
-        )
-        if st.button("➕ Crear orden", type="primary", key=f"btn_crear_orden_{fecha_sel.isoformat()}"):
-            if not nombre_nueva.strip():
-                st.error("Ponle un nombre a la orden.")
-                st.stop()
-            nuevo_orden_id = db.siguiente_id("ordenes_salida", "OS", fecha_sel)
-            era_primera = ordenes_fecha.empty
-            db.append_row("ordenes_salida", {
-                "orden_id": nuevo_orden_id,
-                "fecha_entrega": fecha_sel.isoformat(),
-                "nombre": nombre_nueva.strip(),
-                "usuario": username,
-                "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            })
-            if era_primera:
-                # Adoptar asignaciones creadas antes de que existiera el concepto
-                # de orden (sin orden_id) como parte de esta primera orden del dia,
-                # para no perder ediciones previas.
-                asig_todas_fecha = asignaciones_df[
-                    asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
-                ] if not asignaciones_df.empty else pd.DataFrame()
-                if "orden_id" in asig_todas_fecha.columns:
-                    huerfanas = asig_todas_fecha[asig_todas_fecha["orden_id"].astype(str).str.strip() == ""]
-                else:
-                    huerfanas = asig_todas_fecha
-                for _, h in huerfanas.iterrows():
-                    db.update_row("orden_salida_asignaciones", "asignacion_id", h["asignacion_id"], {
-                        "orden_id": nuevo_orden_id,
-                    })
-            st.session_state[session_key] = nuevo_orden_id
-            st.rerun()
-        st.stop()
-
-    # -------- FECHA DE ENTREGA QUE APARECE EN EL PDF/CERTIFICADO --------
-    # Por defecto es la fecha de esta orden (fecha_sel), pero es editable:
-    # la orden se arma segun la fecha de compromiso de los pedidos, y a veces
-    # el certificado se genera un dia para una entrega en otra fecha.
-    fila_orden_actual = ordenes_fecha[ordenes_fecha["orden_id"].astype(str) == str(orden_sel)]
-    fecha_pdf_guardada = None
-    if not fila_orden_actual.empty and "fecha_entrega_pdf" in fila_orden_actual.columns:
-        valor_guardado = str(fila_orden_actual.iloc[0].get("fecha_entrega_pdf", "") or "").strip()
-        if valor_guardado:
+            upg = pr.get("unidades_por_gaveta", 0)
             try:
-                fecha_pdf_guardada = datetime.date.fromisoformat(valor_guardado)
-            except ValueError:
-                fecha_pdf_guardada = None
-    fecha_pdf_default = fecha_pdf_guardada or fecha_sel
-    fecha_pdf_sel = st.date_input(
-        "🚚 Fecha de entrega en el PDF/certificado",
-        value=fecha_pdf_default,
-        key=f"fecha_pdf_{orden_sel}",
-        help="Por defecto es la misma fecha de esta orden. Cámbiala si el "
-             "certificado se genera hoy pero la entrega es en otro día.",
-    )
-    if fecha_pdf_sel != fecha_pdf_default:
-        db.update_row("ordenes_salida", "orden_id", orden_sel, {
-            "fecha_entrega_pdf": fecha_pdf_sel.isoformat(),
-        })
+                mapa_upg[pid] = float(upg) if pd.notna(upg) and str(upg).strip() != "" else 0
+            except (ValueError, TypeError):
+                mapa_upg[pid] = 0
 
-    # ==================== ASIGNACIONES DE LA ORDEN ACTUAL ====================
-    asig_fecha_todas = asignaciones_df[
+    # Alerta: presentaciones sin unidades_por_gaveta
+    presentaciones_sin_upg = set()
+    for _, l in lineas_producidas.iterrows():
+        pid = str(l["presentacion_id"])
+        if mapa_upg.get(pid, 0) == 0:
+            presentaciones_sin_upg.add(pid)
+    if presentaciones_sin_upg:
+        st.warning(
+            "⚠️ Estas presentaciones no tienen configurado el número de "
+            "**unidades por gaveta**: "
+            + ", ".join(mapa_pres_nombre.get(p, p) for p in presentaciones_sin_upg)
+            + ". Configúralo en **Catálogos → Presentaciones** para que se sugieran automáticamente."
+        )
+
+    # -------- Cargar/inicializar asignaciones --------
+    asig_fecha = asignaciones_df[
         asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
     ].copy() if not asignaciones_df.empty else pd.DataFrame()
+    # Deduplicar por asignacion_id (en caso que el sheet tenga duplicados)
+    if not asig_fecha.empty:
+        asig_fecha = asig_fecha.drop_duplicates(subset=["asignacion_id"], keep="last")
 
-    if "orden_id" in asig_fecha_todas.columns:
-        asig_fecha = asig_fecha_todas[asig_fecha_todas["orden_id"].astype(str) == str(orden_sel)].copy()
-    else:
-        asig_fecha = pd.DataFrame(columns=asig_fecha_todas.columns)
-
-    # A que orden pertenece cada linea real (no MANUAL/TOTALGAV), para saber
-    # cuales ya estan tomadas por OTRA orden de esta misma fecha.
-    mapa_linea_a_orden = {}
-    if not asig_fecha_todas.empty and "orden_id" in asig_fecha_todas.columns:
-        reales_todas = asig_fecha_todas[
-            ~asig_fecha_todas["linea_id"].astype(str).str.startswith("TOTALGAV:")
-            & ~asig_fecha_todas["linea_id"].astype(str).str.startswith("MANUAL:")
-        ]
-        for _, r in reales_todas.iterrows():
-            oid = str(r.get("orden_id", "") or "").strip()
-            if oid:
-                mapa_linea_a_orden[str(r["linea_id"])] = oid
-
-    # -------- Selección de pedidos incluidos en esta orden --------
-    st.divider()
-    st.markdown(f"### ✅ Pedidos incluidos en «{nombre_orden_actual}»")
-    st.caption(
-        "Marca qué líneas de pedido salen en esta orden. Las que no marques "
-        "no aparecerán en el PDF ni en los totales de esta orden — quedan "
-        "disponibles para otra orden de este mismo día."
-    )
-
-    if st.button("🔄 Regenerar sugerencia FIFO de esta orden (borra ediciones)", type="secondary"):
-        reales_orden = asig_fecha[
-            ~asig_fecha["linea_id"].astype(str).str.startswith("TOTALGAV:")
-            & ~asig_fecha["linea_id"].astype(str).str.startswith("MANUAL:")
-        ]
-        lineas_a_regenerar = reales_orden["linea_id"].astype(str).unique().tolist()
-        for _, a in reales_orden.iterrows():
-            db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
-        for lid in lineas_a_regenerar:
-            fila_lin = lineas_producidas[lineas_producidas["linea_id"].astype(str) == lid]
-            if fila_lin.empty:
-                continue
-            _crear_fifo_para_linea(db, username, fecha_sel, orden_sel, fila_lin.iloc[0],
-                                    cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
+    # Si no hay asignaciones para esta fecha, sugerir FIFO para todas las lineas
+    if asig_fecha.empty:
+        st.info("🤖 Sugerencia FIFO inicial — puedes editarla antes de descargar el PDF.")
+        for _, linea in lineas_producidas.iterrows():
+            lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
+            sugerencias = _sugerir_asignacion_fifo(linea, lotes_disp, mapa_kg_nominal)
+            if not sugerencias:
+                # Guardar un placeholder sin lote asignado
+                sugerencias = [{"lote_producto_id": "", "kg_asignado": float(linea["cantidad_kg"])}]
+            for s in sugerencias:
+                asig_id = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
+                upg = mapa_upg.get(str(linea["presentacion_id"]), 0)
+                unidades_asig = (s["kg_asignado"] / mapa_kg_nominal.get(str(linea["presentacion_id"]), 1)) if mapa_kg_nominal.get(str(linea["presentacion_id"]), 0) > 0 else 0
+                gavetas_sug = math.ceil(unidades_asig / upg) if upg > 0 else 0
+                db.append_row("orden_salida_asignaciones", {
+                    "asignacion_id": asig_id,
+                    "fecha_entrega": fecha_sel.isoformat(),
+                    "linea_id": linea["linea_id"],
+                    "lote_producto_id": s["lote_producto_id"],
+                    "kg_asignado": s["kg_asignado"],
+                    "gavetas": gavetas_sug,
+                    "usuario": username,
+                    "observaciones": "",
+                    "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                })
         st.rerun()
 
-    lineas_incluidas_ids = []
+    # -------- Vista editable por linea --------
+    st.divider()
+    st.markdown("### 📋 Asignaciones por línea")
+
+    if st.button("🔄 Regenerar sugerencia FIFO (borra ediciones)", type="secondary"):
+        for _, a in asig_fecha.iterrows():
+            db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
+        st.rerun()
+
+    lineas_producidas = lineas_producidas.sort_values(["cliente_nombre", "tipo_producto"])
+
     for _, linea in lineas_producidas.iterrows():
-        lid = str(linea["linea_id"])
         pid = str(linea["presentacion_id"])
-        orden_de_linea = mapa_linea_a_orden.get(lid)
-        ya_en_esta = orden_de_linea == orden_sel
-        ya_en_otra = orden_de_linea is not None and orden_de_linea != orden_sel
-
-        etiqueta = (
-            f"**{linea['cliente_nombre']}** — Pedido `{linea['pedido_id']}` — "
-            f"{linea['tipo_producto']} — {linea['cantidad_kg']:.1f} kg — "
-            f"{int(linea['unidades'])} un. {mapa_pres_nombre.get(pid, pid)}"
-        )
-
         with st.container(border=True):
-            colchk, coltxt = st.columns([1, 9])
-            if ya_en_otra:
-                colchk.checkbox("Incluir", value=False, disabled=True,
-                                 key=f"chk_{orden_sel}_{lid}", label_visibility="collapsed")
-                nombre_otra = mapa_orden_nombre.get(orden_de_linea, orden_de_linea)
-                coltxt.markdown(f"~~{etiqueta}~~")
-                coltxt.caption(f"🔒 Ya incluida en la orden «{nombre_otra}»")
-                continue
-
-            marcado = colchk.checkbox("Incluir", value=ya_en_esta,
-                                       key=f"chk_{orden_sel}_{lid}", label_visibility="collapsed")
-            coltxt.markdown(etiqueta)
+            st.markdown(
+                f"**{linea['cliente_nombre']}** — Pedido `{linea['pedido_id']}` — "
+                f"{linea['tipo_producto']} — {linea['cantidad_kg']:.1f} kg — "
+                f"{int(linea['unidades'])} un. {mapa_pres_nombre.get(pid, pid)}"
+            )
             obs_linea = str(linea.get("observaciones", "") or "").strip()
             if obs_linea:
-                coltxt.caption(f"📝 {obs_linea}")
+                st.caption(f"📝 {obs_linea}")
 
-            if marcado and not ya_en_esta:
-                _incluir_linea_en_orden(db, username, fecha_sel, orden_sel, linea, asig_fecha_todas,
-                                         cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
-                st.rerun()
-            elif not marcado and ya_en_esta:
-                _excluir_linea_de_orden(db, lid, asig_fecha)
-                st.rerun()
-
-            if not marcado:
-                continue
-            lineas_incluidas_ids.append(lid)
-
-            # -------- Sub-tabla editable de lotes para esta linea --------
-            asig_linea = asig_fecha[asig_fecha["linea_id"].astype(str) == lid]
+            # Filtrar asignaciones de esta linea
+            asig_linea = asig_fecha[asig_fecha["linea_id"].astype(str) == str(linea["linea_id"])]
             lotes_disp = _lotes_disponibles_para_linea(linea, cf_entradas, pasteurizacion, produccion_semi, mapa_kg_nominal)
 
+            # Mostrar lotes disponibles como ayuda (no bloquea)
             if not lotes_disp.empty:
                 sugerencias_txt = ", ".join(
                     f"{r['lote_producto_id']} ({r['kg_disponible']:.0f} kg)"
@@ -478,44 +300,56 @@ def render(db, username, rol):
             else:
                 st.caption("💡 No hay lotes en cuarto frío todavía — puedes escribir un lote planificado.")
 
-            hc1, hc2, hc3, hc4 = st.columns([3, 1, 1, 1])
+            # Headers de columnas
+            hc1, hc2, hc3, hc4, hc5 = st.columns([3, 1, 1, 1, 1])
             hc1.markdown("**Lote (editable)**")
             hc2.markdown("**Kg**")
-            hc3.markdown("**Obs.**")
-            hc4.markdown("**Quitar**")
+            hc3.markdown("**Gavetas**")
+            hc4.markdown("**Obs.**")
+            hc5.markdown("**Quitar**")
 
             kg_total_asignado = 0.0
-            for _, a in asig_linea.iterrows():
-                c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+            for idx_a, (_, a) in enumerate(asig_linea.iterrows()):
+                c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+                # Sufijo compuesto para asegurar unicidad de keys
+                sk = f"{linea['linea_id']}_{a['asignacion_id']}_{idx_a}"
                 lote_curr = str(a.get("lote_producto_id", "") or "")
                 nuevo_lote = c1.text_input(
                     "Lote", value=lote_curr,
-                    key=f"lote_{a['asignacion_id']}",
+                    key=f"lote_{sk}",
                     label_visibility="collapsed",
                     placeholder="Escribe el lote",
                 )
                 kg_curr = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
                 nuevo_kg = c2.number_input(
                     "Kg", min_value=0.0, step=0.5, value=kg_curr,
-                    key=f"kg_{a['asignacion_id']}",
+                    key=f"kg_{sk}",
                     label_visibility="collapsed",
                 )
                 kg_total_asignado += nuevo_kg
-                obs_a = c3.text_input(
-                    "Obs.", value=str(a.get("observaciones", "") or ""),
-                    key=f"obs_{a['asignacion_id']}",
+                # Gavetas: sugerida (auto) o editable
+                gav_curr = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+                nuevo_gav = c3.number_input(
+                    "Gavetas", min_value=0, step=1, value=gav_curr,
+                    key=f"gav_{sk}",
                     label_visibility="collapsed",
                 )
-                borrar = c4.button("🗑️", key=f"del_{a['asignacion_id']}", help="Eliminar esta línea de asignación")
+                obs_a = c4.text_input(
+                    "Obs.", value=str(a.get("observaciones", "") or ""),
+                    key=f"obs_{sk}",
+                    label_visibility="collapsed",
+                )
+                borrar = c5.button("🗑️", key=f"del_{sk}", help="Eliminar esta línea de asignación")
                 if borrar:
                     db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
                     st.rerun()
                 # Auto-guardar si cambio algo
-                if (nuevo_lote != lote_curr or nuevo_kg != kg_curr
+                if (nuevo_lote != lote_curr or nuevo_kg != kg_curr or nuevo_gav != gav_curr
                         or obs_a != str(a.get("observaciones", "") or "")):
                     db.update_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"], {
                         "lote_producto_id": nuevo_lote,
                         "kg_asignado": nuevo_kg,
+                        "gavetas": nuevo_gav,
                         "observaciones": obs_a,
                     })
 
@@ -541,11 +375,8 @@ def render(db, username, rol):
                     "usuario": username,
                     "observaciones": "",
                     "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "orden_id": orden_sel,
                 })
                 st.rerun()
-
-    lineas_incluidas = lineas_producidas[lineas_producidas["linea_id"].astype(str).isin(lineas_incluidas_ids)]
 
     # -------- LÍNEAS MANUALES (cliente extra) --------
     st.divider()
@@ -577,9 +408,14 @@ def render(db, username, rol):
             unid_extra_m = colm4.number_input("Unidades", min_value=0, step=1, key="man_unid")
             kg_nom_extra = float(presentaciones.set_index("presentacion_id").loc[pres_extra_m, "kg_nominal"])
             kg_extra_m = round(unid_extra_m * kg_nom_extra, 2)
-            lote_extra = st.text_input("Lote", "", key="man_lote", placeholder="Escribe el lote")
+            colm5, colm6 = st.columns(2)
+            lote_extra = colm5.text_input("Lote", "", key="man_lote", placeholder="Escribe el lote")
+            upg_extra = mapa_upg.get(str(pres_extra_m), 0)
+            gav_default = math.ceil(unid_extra_m / upg_extra) if upg_extra > 0 else 0
+            gav_extra = colm6.number_input("Gavetas", min_value=0, step=1, value=int(gav_default), key="man_gav")
             obs_extra_m = st.text_input("Observaciones", "", key="man_obs")
-            st.metric("Kg calculados", f"{kg_extra_m:.1f} kg")
+            colm7, _ = st.columns(2)
+            colm7.metric("Kg calculados", f"{kg_extra_m:.1f} kg")
 
             if st.button("➕ Agregar línea manual", key="btn_man_add"):
                 if unid_extra_m <= 0:
@@ -594,11 +430,10 @@ def render(db, username, rol):
                         "linea_id": linea_id_manual,
                         "lote_producto_id": lote_extra,
                         "kg_asignado": kg_extra_m,
-                        "gavetas": 0,
+                        "gavetas": gav_extra,
                         "usuario": username,
                         "observaciones": obs_extra_m,
                         "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "orden_id": orden_sel,
                     })
                     st.success(f"✅ Línea manual agregada al cliente {clientes.set_index('cliente_id').loc[cli_extra, 'nombre']}.")
                     st.rerun()
@@ -625,152 +460,146 @@ def render(db, username, rol):
                 db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
                 st.rerun()
 
-    # -------- TOTALES POR PRODUCTO --------
+    # -------- TOTALES POR PRODUCTO Y POR PRESENTACIÓN --------
     st.divider()
-    st.markdown("### 📊 Totales por producto")
+    st.markdown("### 📊 Totales")
+
     totales_prod = {}
-    totales_pres = {}  # (tipo, pres_id) -> {"kg": float}  (para tabla por producto+presentación)
-    # Sumar de asignaciones de pedidos + manuales (de esta orden)
-    for _, a in asig_fecha.iterrows():
-        # Las filas marcador de "gavetas reales" no son asignaciones de producto real
-        if str(a["linea_id"]).startswith("TOTALGAV:"):
-            continue
+    totales_pres = {}  # {pres_id: {kg, gavetas_sugeridas, unidades}}
+
+    # Excluir los ajustes de totales (marcador especial) del cálculo
+    asig_reales = asig_fecha[~asig_fecha["linea_id"].astype(str).str.startswith("TOTALGAV:")]
+
+    for _, a in asig_reales.iterrows():
         kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-        # Determinar tipo de producto y presentacion
+        gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+        # Determinar tipo y presentacion
         if str(a["linea_id"]).startswith("MANUAL:"):
             partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
             tipo = partes[1] if len(partes) > 1 else "Sin tipo"
             pres_id = partes[2] if len(partes) > 2 else ""
+            unid_m = int(partes[3]) if len(partes) > 3 and partes[3].isdigit() else 0
         else:
             fila_lin = lineas_producidas[lineas_producidas["linea_id"].astype(str) == str(a["linea_id"])]
             if fila_lin.empty:
                 continue
             tipo = fila_lin.iloc[0]["tipo_producto"]
             pres_id = str(fila_lin.iloc[0]["presentacion_id"])
+            kg_nom = mapa_kg_nominal.get(pres_id, 0)
+            unid_m = int(round(kg_a / kg_nom)) if kg_nom > 0 else 0
+
         if tipo not in totales_prod:
-            totales_prod[tipo] = {"kg": 0.0}
+            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0}
         totales_prod[tipo]["kg"] += kg_a
+        totales_prod[tipo]["gavetas"] += gav
 
-        clave_pp = (tipo, pres_id)
-        if clave_pp not in totales_pres:
-            totales_pres[clave_pp] = {"kg": 0.0}
-        totales_pres[clave_pp]["kg"] += kg_a
+        if pres_id not in totales_pres:
+            totales_pres[pres_id] = {"kg": 0.0, "gavetas_sugeridas": 0, "unidades": 0}
+        totales_pres[pres_id]["kg"] += kg_a
+        totales_pres[pres_id]["gavetas_sugeridas"] += gav
+        totales_pres[pres_id]["unidades"] += unid_m
 
+    # Tabla: totales por producto
     if totales_prod:
-        df_tot = pd.DataFrame([
-            {"Producto": t, "Kg totales": f"{v['kg']:.1f}"}
+        st.markdown("##### Totales por producto")
+        df_prod = pd.DataFrame([
+            {"Producto": t, "Kg totales": f"{v['kg']:.1f}", "Gavetas": v["gavetas"]}
             for t, v in sorted(totales_prod.items())
         ])
-        total_general_kg = sum(v["kg"] for v in totales_prod.values())
-        df_tot.loc[len(df_tot)] = ["TOTAL GENERAL", f"{total_general_kg:.1f}"]
-        st.dataframe(df_tot, use_container_width=True, hide_index=True)
-    else:
-        st.caption("Todavía no hay pedidos incluidos en esta orden.")
+        total_kg_p = sum(v["kg"] for v in totales_prod.values())
+        total_gav_p = sum(v["gavetas"] for v in totales_prod.values())
+        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.1f}", total_gav_p]
+        st.dataframe(df_prod, use_container_width=True, hide_index=True)
 
-    # -------- TOTALES POR PRODUCTO Y PRESENTACIÓN (gavetas reales editable) --------
-    st.divider()
-    st.markdown("### 📦 Totales por producto y presentación")
-    mapa_gavreal_final = {}  # (tipo, pres_id) -> gavetas reales (para reutilizar al generar el PDF)
+    # Tabla: totales por presentación con gavetas reales editables
+    gavetas_reales_map = {}  # {pres_id: gavetas_reales} para pasar al PDF
     if totales_pres:
+        st.markdown("##### Totales por presentación")
         st.caption(
-            "La columna **Gavetas reales** es editable: úsala para anotar cuántas "
-            "gavetas se arman de cada producto y presentación. Se guarda "
-            "automáticamente por orden."
+            "Las **gavetas sugeridas** son la suma de gavetas de cada línea. "
+            "Puedes editar el número **real** que llevará el camión (a veces se "
+            "consolidan en menos gavetas físicas al agrupar productos)."
         )
-        # Cargar valores de "gavetas reales" ya guardados para esta orden
-        asig_gavreal = asig_fecha[asig_fecha["linea_id"].astype(str).str.startswith("TOTALGAV:")]
-        mapa_gavreal_guardado = {}
-        for _, g in asig_gavreal.iterrows():
-            clave = str(g["linea_id"]).replace("TOTALGAV:", "", 1)
-            partes_g = clave.split("|", 1)
-            tipo_g = partes_g[0] if len(partes_g) > 0 else ""
-            pres_id_g = partes_g[1] if len(partes_g) > 1 else ""
-            mapa_gavreal_guardado[(tipo_g, pres_id_g)] = {
-                "asignacion_id": g["asignacion_id"],
-                "gavetas": float(pd.to_numeric(g.get("gavetas", 0), errors="coerce") or 0),
+        # Cargar ajustes previos (TOTALGAV:<pres_id>)
+        ajustes_previos = asig_fecha[asig_fecha["linea_id"].astype(str).str.startswith("TOTALGAV:")]
+        mapa_ajuste_prev = {}
+        for _, aj in ajustes_previos.iterrows():
+            key_pres = str(aj["linea_id"]).replace("TOTALGAV:", "")
+            mapa_ajuste_prev[key_pres] = {
+                "asignacion_id": aj["asignacion_id"],
+                "gavetas_reales": int(pd.to_numeric(aj.get("gavetas", 0), errors="coerce") or 0),
             }
 
-        hp1, hp2, hp3, hp4 = st.columns([2, 2, 1, 1])
-        hp1.markdown("**Producto**")
-        hp2.markdown("**Presentación**")
-        hp3.markdown("**Kg totales**")
-        hp4.markdown("**Gavetas reales**")
-
-        tot_kg_pres = 0.0
-        tot_gav_real_pres = 0.0
-        pres_ordenadas = sorted(
-            totales_pres.items(),
-            key=lambda kv: (kv[0][0], mapa_pres_nombre.get(kv[0][1], kv[0][1])),
-        )
-        for (tipo, pres_id), v in pres_ordenadas:
-            pres_nombre = mapa_pres_nombre.get(pres_id, pres_id or "Sin presentación")
-            cp1, cp2, cp3, cp4 = st.columns([2, 2, 1, 1])
-            cp1.markdown(tipo)
-            cp2.markdown(pres_nombre)
-            cp3.markdown(f"{v['kg']:.1f}")
-
-            clave_g = (tipo, pres_id)
-            guardado = mapa_gavreal_guardado.get(clave_g)
-            valor_default = guardado["gavetas"] if guardado else 0.0
-            nuevo_gavreal = cp4.number_input(
-                "Gavetas reales", min_value=0.0, step=0.1, value=float(valor_default),
-                format="%.1f",
-                key=f"gavreal_{orden_sel}_{tipo}_{pres_id}",
-                label_visibility="collapsed",
+        hc1, hc2, hc3, hc4, hc5 = st.columns([3, 1, 1, 1, 1])
+        hc1.markdown("**Presentación**")
+        hc2.markdown("**Kg**")
+        hc3.markdown("**Unidades**")
+        hc4.markdown("**Gavetas sug.**")
+        hc5.markdown("**Gavetas reales**")
+        for pres_id, v in sorted(totales_pres.items(), key=lambda x: mapa_pres_nombre.get(x[0], x[0])):
+            c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+            c1.markdown(mapa_pres_nombre.get(pres_id, pres_id))
+            c2.markdown(f"{v['kg']:.1f}")
+            c3.markdown(str(v['unidades']))
+            c4.markdown(str(v['gavetas_sugeridas']))
+            # Gavetas reales editables (persistidas)
+            gav_real_prev = mapa_ajuste_prev.get(pres_id, {}).get("gavetas_reales", v["gavetas_sugeridas"])
+            gav_real_new = c5.number_input(
+                "Reales", min_value=0, step=1, value=int(gav_real_prev),
+                key=f"gavr_{pres_id}", label_visibility="collapsed",
             )
-            mapa_gavreal_final[clave_g] = nuevo_gavreal
-
-            if guardado:
-                if nuevo_gavreal != guardado["gavetas"]:
-                    db.update_row("orden_salida_asignaciones", "asignacion_id", guardado["asignacion_id"], {
-                        "gavetas": nuevo_gavreal,
+            gavetas_reales_map[pres_id] = gav_real_new
+            # Auto-guardar cambios
+            if pres_id in mapa_ajuste_prev:
+                if gav_real_new != mapa_ajuste_prev[pres_id]["gavetas_reales"]:
+                    db.update_row(
+                        "orden_salida_asignaciones", "asignacion_id",
+                        mapa_ajuste_prev[pres_id]["asignacion_id"],
+                        {"gavetas": gav_real_new},
+                    )
+            else:
+                # Solo crear registro si el valor difiere del sugerido
+                if gav_real_new != v["gavetas_sugeridas"]:
+                    ajuste_id = db.siguiente_id("orden_salida_asignaciones", "TGV", fecha_sel)
+                    db.append_row("orden_salida_asignaciones", {
+                        "asignacion_id": ajuste_id,
+                        "fecha_entrega": fecha_sel.isoformat(),
+                        "linea_id": f"TOTALGAV:{pres_id}",
+                        "lote_producto_id": "",
+                        "kg_asignado": 0,
+                        "gavetas": gav_real_new,
+                        "usuario": username,
+                        "observaciones": "Ajuste manual de gavetas totales reales",
+                        "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     })
-            elif nuevo_gavreal != 0:
-                asig_id_g = db.siguiente_id("orden_salida_asignaciones", "OSA", fecha_sel)
-                db.append_row("orden_salida_asignaciones", {
-                    "asignacion_id": asig_id_g,
-                    "fecha_entrega": fecha_sel.isoformat(),
-                    "linea_id": f"TOTALGAV:{tipo}|{pres_id}",
-                    "lote_producto_id": "",
-                    "kg_asignado": 0,
-                    "gavetas": nuevo_gavreal,
-                    "usuario": username,
-                    "observaciones": "",
-                    "creado_en": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "orden_id": orden_sel,
-                })
-
-            tot_kg_pres += v["kg"]
-            tot_gav_real_pres += nuevo_gavreal
-
-        st.markdown("---")
-        cf1, cf2, cf3, cf4 = st.columns([2, 2, 1, 1])
-        cf1.markdown("**TOTAL GENERAL**")
-        cf3.markdown(f"**{tot_kg_pres:.1f}**")
-        cf4.markdown(f"**{tot_gav_real_pres:.1f}**")
+        # Total general de gavetas reales
+        total_gav_real = sum(gavetas_reales_map.values())
+        total_gav_sug = sum(v["gavetas_sugeridas"] for v in totales_pres.values())
+        st.metric(
+            "🚚 Total de gavetas reales (para el camión)",
+            f"{total_gav_real}",
+            delta=f"{total_gav_real - total_gav_sug:+d} vs sugerido" if total_gav_real != total_gav_sug else None,
+        )
 
     # -------- PDF --------
     st.divider()
     st.markdown("### 📄 Descargar orden de salida (PDF)")
     if st.button("📄 Generar PDF", type="primary", use_container_width=True):
-        # Recargar asignaciones actualizadas, filtradas a esta fecha y esta orden
+        # Recargar asignaciones actualizadas
         asignaciones_df = db.get_df("orden_salida_asignaciones")
-        asig_fecha_recarga = asignaciones_df[
+        asig_fecha = asignaciones_df[
             asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
         ].copy()
-        if "orden_id" in asig_fecha_recarga.columns:
-            asig_fecha = asig_fecha_recarga[asig_fecha_recarga["orden_id"].astype(str) == str(orden_sel)].copy()
-        else:
-            asig_fecha = asig_fecha_recarga.iloc[0:0].copy()
         mapa_cli_pdf = dict(zip(clientes["cliente_id"], clientes["nombre"])) if not clientes.empty else {}
-        # Armar datos por cliente (solo lineas incluidas en esta orden)
+        # Armar datos por cliente
         datos_pdf = {}
-        for _, linea in lineas_incluidas.iterrows():
+        for _, linea in lineas_producidas.iterrows():
             cli = linea["cliente_nombre"]
             asig_l = asig_fecha[asig_fecha["linea_id"].astype(str) == str(linea["linea_id"])]
             pres_nombre = mapa_pres_nombre.get(str(linea["presentacion_id"]), str(linea["presentacion_id"]))
             for _, a in asig_l.iterrows():
                 kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
+                gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
                 kg_nom = mapa_kg_nominal.get(str(linea["presentacion_id"]), 0)
                 unid_lote = int(round(kg_a / kg_nom)) if kg_nom > 0 else 0
                 datos_pdf.setdefault(cli, []).append({
@@ -780,6 +609,7 @@ def render(db, username, rol):
                     "kg_lote": kg_a,
                     "presentacion": pres_nombre,
                     "unidades": unid_lote,
+                    "gavetas": gav,
                     "obs_linea": str(linea.get("observaciones", "") or ""),
                     "obs_asig": str(a.get("observaciones", "") or ""),
                 })
@@ -794,6 +624,7 @@ def render(db, username, rol):
             unid_m = int(partes[3]) if len(partes) > 3 and partes[3].isdigit() else 0
             cli_nombre_m = mapa_cli_pdf.get(cli_id_m, cli_id_m)
             kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
+            gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
             datos_pdf.setdefault(cli_nombre_m, []).append({
                 "producto": tipo_m + " (extra)",
                 "lote": str(a.get("lote_producto_id", "") or "—") or "—",
@@ -801,50 +632,35 @@ def render(db, username, rol):
                 "kg_lote": kg_a,
                 "presentacion": mapa_pres_nombre.get(pres_id_m, pres_id_m),
                 "unidades": unid_m,
+                "gavetas": gav,
                 "obs_linea": "",
                 "obs_asig": str(a.get("observaciones", "") or ""),
             })
-        totales_pres_pdf = {}
-        for (tipo, pres_id), v in totales_pres.items():
-            nombre_p = mapa_pres_nombre.get(pres_id, pres_id or "Sin presentación")
-            kg_nom_p = mapa_kg_nominal.get(pres_id, 0)
-            unid_p = int(round(v["kg"] / kg_nom_p)) if kg_nom_p > 0 else 0
-            totales_pres_pdf[(tipo, nombre_p)] = {
-                "kg": v["kg"],
-                "unidades": unid_p,
-                "gavetas_reales": mapa_gavreal_final.get((tipo, pres_id), 0),
-            }
-        pdf_bytes = _generar_pdf(fecha_pdf_sel, datos_pdf, totales_prod, totales_pres_pdf, nombre_orden_actual)
-        nombre_archivo_orden = "".join(
-            c if c.isalnum() else "_" for c in nombre_orden_actual
-        ).strip("_").lower() or orden_sel
+        pdf_bytes = _generar_pdf(fecha_sel, datos_pdf, totales_prod)
         st.download_button(
             "⬇️ Descargar PDF",
             data=pdf_bytes,
-            file_name=f"orden_salida_{fecha_pdf_sel.isoformat()}_{nombre_archivo_orden}.pdf",
+            file_name=f"orden_salida_{fecha_sel.isoformat()}.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
 
 
-def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None, nombre_orden=None):
+def _generar_pdf(fecha, datos_por_cliente, totales_prod=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                             topMargin=1.5*cm, bottomMargin=1.5*cm,
                             leftMargin=1.5*cm, rightMargin=1.5*cm)
     el = []
-    titulo = f"Orden de salida — {fecha.strftime('%d/%m/%Y')}"
-    if nombre_orden:
-        titulo += f" — {nombre_orden}"
-    el.append(Paragraph(titulo, ESTILOS["Title"]))
+    el.append(Paragraph(f"Orden de salida — {fecha.strftime('%d/%m/%Y')}", ESTILOS["Title"]))
     el.append(Paragraph(
-        f"<b>Fecha de entrega: {fecha.strftime('%d/%m/%Y')}</b>",
+        f"Generado: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}",
         ESTILOS["Normal"],
     ))
     el.append(Spacer(1, 0.4*cm))
 
     if not datos_por_cliente:
-        el.append(Paragraph("No hay líneas incluidas en esta orden.", ESTILOS["Normal"]))
+        el.append(Paragraph("No hay líneas comprometidas para esta fecha.", ESTILOS["Normal"]))
         doc.build(el)
         buffer.seek(0)
         return buffer.getvalue()
@@ -852,11 +668,12 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None,
     for cliente, filas in sorted(datos_por_cliente.items()):
         bloque = []
         bloque.append(Paragraph(f"CLIENTE: {cliente}", ESTILOS["Heading2"]))
-        # Tabla: Producto | Lote | Kg total | Kg/lote | Presentación | Unid. | Obs.
-        encab = ["Producto", "Lote", "Kg total", "Kg lote", "Presentación", "Unid.", "Observaciones"]
+        # Tabla: Producto | Lote | Kg total | Kg/lote | Presentación | Unid. | Gavetas | Obs.
+        encab = ["Producto", "Lote", "Kg total", "Kg lote", "Presentación", "Unid.", "Gavetas", "Observaciones"]
         datos = [[_p(h, negrita=True, pequeño=True) for h in encab]]
         total_kg = 0.0
         total_unid = 0
+        total_gav = 0
         for f in filas:
             obs = f["obs_asig"] or f["obs_linea"]
             datos.append([
@@ -866,15 +683,18 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None,
                 _p(f"{f['kg_lote']:.1f}", pequeño=True),
                 _p(f["presentacion"], pequeño=True),
                 _p(str(f["unidades"]), pequeño=True),
+                _p(str(f["gavetas"]), pequeño=True),
                 _p(obs, pequeño=True),
             ])
             total_kg += f["kg_lote"]
             total_unid += f["unidades"]
+            total_gav += f["gavetas"]
         # Fila TOTAL
         datos.append([
             _p("TOTAL", negrita=True, pequeño=True), _p(""), _p(""),
             _p(f"{total_kg:.1f}", negrita=True, pequeño=True),
-            _p(""), _p(str(total_unid), negrita=True, pequeño=True), _p(""),
+            _p(""), _p(str(total_unid), negrita=True, pequeño=True),
+            _p(str(total_gav), negrita=True, pequeño=True), _p(""),
         ])
         t = Table(datos, repeatRows=1)
         t.setStyle(TableStyle([
@@ -895,18 +715,21 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None,
         el.append(Spacer(1, 0.5*cm))
         bloque_tot = []
         bloque_tot.append(Paragraph("Totales por producto (para logística)", ESTILOS["Heading2"]))
-        encab_tot = ["Producto", "Kg totales"]
+        encab_tot = ["Producto", "Kg totales", "Gavetas totales"]
         datos_tot = [[_p(h, negrita=True) for h in encab_tot]]
         for tipo, v in sorted(totales_prod.items()):
             datos_tot.append([
                 _p(tipo),
                 _p(f"{v['kg']:.1f}"),
+                _p(str(v['gavetas'])),
             ])
         # Fila TOTAL GENERAL
         tot_kg = sum(v["kg"] for v in totales_prod.values())
+        tot_gav = sum(v["gavetas"] for v in totales_prod.values())
         datos_tot.append([
             _p("TOTAL GENERAL", negrita=True),
             _p(f"{tot_kg:.1f}", negrita=True),
+            _p(str(tot_gav), negrita=True),
         ])
         tt = Table(datos_tot, repeatRows=1)
         tt.setStyle(TableStyle([
@@ -920,44 +743,6 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, totales_pres=None,
         ]))
         bloque_tot.append(tt)
         el.append(KeepTogether(bloque_tot))
-
-    # Tabla resumen: totales por producto y presentación (con gavetas reales)
-    if totales_pres:
-        el.append(Spacer(1, 0.5*cm))
-        bloque_pres = []
-        bloque_pres.append(Paragraph("Totales por producto y presentación", ESTILOS["Heading2"]))
-        encab_pres = ["Producto", "Presentación", "Kg totales", "Unidades", "Gavetas reales"]
-        datos_pres = [[_p(h, negrita=True) for h in encab_pres]]
-        for (tipo, nombre_p), v in sorted(totales_pres.items()):
-            datos_pres.append([
-                _p(tipo),
-                _p(nombre_p),
-                _p(f"{v['kg']:.1f}"),
-                _p(str(v["unidades"])),
-                _p(f"{v['gavetas_reales']:.1f}"),
-            ])
-        tot_kg_p = sum(v["kg"] for v in totales_pres.values())
-        tot_unid_p = sum(v["unidades"] for v in totales_pres.values())
-        tot_gav_real_p = sum(v["gavetas_reales"] for v in totales_pres.values())
-        datos_pres.append([
-            _p("TOTAL GENERAL", negrita=True),
-            _p(""),
-            _p(f"{tot_kg_p:.1f}", negrita=True),
-            _p(str(tot_unid_p), negrita=True),
-            _p(f"{tot_gav_real_p:.1f}", negrita=True),
-        ])
-        tp = Table(datos_pres, repeatRows=1)
-        tp.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#6a1b9a")),
-            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-            ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#dddddd")),
-            ("ROWBACKGROUNDS", (0,1), (-1,-2), [colors.white, colors.HexColor("#f5f5f5")]),
-            ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#fff3e0")),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
-            ("TOPPADDING", (0,0), (-1,-1), 5),
-        ]))
-        bloque_pres.append(tp)
-        el.append(KeepTogether(bloque_pres))
 
     doc.build(el)
     buffer.seek(0)
