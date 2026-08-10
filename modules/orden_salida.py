@@ -552,10 +552,10 @@ def render(db, username, rol):
                     label_visibility="collapsed",
                 )
                 kg_total_asignado += nuevo_kg
-                # Gavetas: sugerida (auto) o editable
-                gav_curr = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+                # Gavetas: sugerida (auto) o editable, admite un decimal
+                gav_curr = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
                 nuevo_gav = c3.number_input(
-                    "Gavetas", min_value=0, step=1, value=gav_curr,
+                    "Gavetas", min_value=0.0, step=0.1, value=gav_curr, format="%.1f",
                     key=f"gav_{sk}",
                     label_visibility="collapsed",
                 )
@@ -701,7 +701,7 @@ def render(db, username, rol):
 
     for _, a in asig_reales.iterrows():
         kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-        gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+        gav = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
         # Determinar tipo y presentacion
         if str(a["linea_id"]).startswith("MANUAL:"):
             partes = str(a["linea_id"]).replace("MANUAL:", "").split("|")
@@ -718,12 +718,12 @@ def render(db, username, rol):
             unid_m = int(round(kg_a / kg_nom)) if kg_nom > 0 else 0
 
         if tipo not in totales_prod:
-            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0}
+            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0.0}
         totales_prod[tipo]["kg"] += kg_a
         totales_prod[tipo]["gavetas"] += gav
 
         if pres_id not in totales_pres:
-            totales_pres[pres_id] = {"kg": 0.0, "gavetas_sugeridas": 0, "unidades": 0}
+            totales_pres[pres_id] = {"kg": 0.0, "gavetas_sugeridas": 0.0, "unidades": 0}
         totales_pres[pres_id]["kg"] += kg_a
         totales_pres[pres_id]["gavetas_sugeridas"] += gav
         totales_pres[pres_id]["unidades"] += unid_m
@@ -732,12 +732,12 @@ def render(db, username, rol):
     if totales_prod:
         st.markdown("##### Totales por producto")
         df_prod = pd.DataFrame([
-            {"Producto": t, "Kg totales": f"{v['kg']:.1f}", "Gavetas": v["gavetas"]}
+            {"Producto": t, "Kg totales": f"{v['kg']:.1f}", "Gavetas": f"{v['gavetas']:.1f}"}
             for t, v in sorted(totales_prod.items())
         ])
         total_kg_p = sum(v["kg"] for v in totales_prod.values())
         total_gav_p = sum(v["gavetas"] for v in totales_prod.values())
-        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.1f}", total_gav_p]
+        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.1f}", f"{total_gav_p:.1f}"]
         st.dataframe(df_prod, use_container_width=True, hide_index=True)
     else:
         st.caption("Todavía no hay pedidos incluidos en esta orden.")
@@ -773,7 +773,7 @@ def render(db, username, rol):
             c1.markdown(mapa_pres_nombre.get(pres_id, pres_id))
             c2.markdown(f"{v['kg']:.1f}")
             c3.markdown(str(v['unidades']))
-            c4.markdown(str(v['gavetas_sugeridas']))
+            c4.markdown(f"{v['gavetas_sugeridas']:.1f}")
             # Gavetas reales editables (persistidas), admite un decimal
             gav_real_prev = mapa_ajuste_prev.get(pres_id, {}).get("gavetas_reales", float(v["gavetas_sugeridas"]))
             gav_real_new = c5.number_input(
@@ -838,7 +838,7 @@ def render(db, username, rol):
             pres_nombre = mapa_pres_nombre.get(str(linea["presentacion_id"]), str(linea["presentacion_id"]))
             for _, a in asig_l.iterrows():
                 kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-                gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+                gav = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
                 kg_nom = mapa_kg_nominal.get(str(linea["presentacion_id"]), 0)
                 unid_lote = int(round(kg_a / kg_nom)) if kg_nom > 0 else 0
                 datos_pdf.setdefault(cli, []).append({
@@ -863,7 +863,7 @@ def render(db, username, rol):
             unid_m = int(partes[3]) if len(partes) > 3 and partes[3].isdigit() else 0
             cli_nombre_m = mapa_cli_pdf.get(cli_id_m, cli_id_m)
             kg_a = float(pd.to_numeric(a.get("kg_asignado", 0), errors="coerce") or 0)
-            gav = int(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+            gav = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
             datos_pdf.setdefault(cli_nombre_m, []).append({
                 "producto": tipo_m + " (extra)",
                 "lote": str(a.get("lote_producto_id", "") or "—") or "—",
@@ -922,7 +922,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
         datos = [[_p(h, negrita=True, pequeño=True) for h in encab]]
         total_kg = 0.0
         total_unid = 0
-        total_gav = 0
+        total_gav = 0.0
         for f in filas:
             obs = f["obs_asig"] or f["obs_linea"]
             datos.append([
@@ -932,7 +932,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
                 _p(f"{f['kg_lote']:.1f}", pequeño=True),
                 _p(f["presentacion"], pequeño=True),
                 _p(str(f["unidades"]), pequeño=True),
-                _p(str(f["gavetas"]), pequeño=True),
+                _p(f"{f['gavetas']:.1f}", pequeño=True),
                 _p(obs, pequeño=True),
             ])
             total_kg += f["kg_lote"]
@@ -943,7 +943,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
             _p("TOTAL", negrita=True, pequeño=True), _p(""), _p(""),
             _p(f"{total_kg:.1f}", negrita=True, pequeño=True),
             _p(""), _p(str(total_unid), negrita=True, pequeño=True),
-            _p(str(total_gav), negrita=True, pequeño=True), _p(""),
+            _p(f"{total_gav:.1f}", negrita=True, pequeño=True), _p(""),
         ])
         t = Table(datos, repeatRows=1)
         t.setStyle(TableStyle([
@@ -970,7 +970,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
             datos_tot.append([
                 _p(tipo),
                 _p(f"{v['kg']:.1f}"),
-                _p(str(v['gavetas'])),
+                _p(f"{v['gavetas']:.1f}"),
             ])
         # Fila TOTAL GENERAL
         tot_kg = sum(v["kg"] for v in totales_prod.values())
@@ -978,7 +978,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
         datos_tot.append([
             _p("TOTAL GENERAL", negrita=True),
             _p(f"{tot_kg:.1f}", negrita=True),
-            _p(str(tot_gav), negrita=True),
+            _p(f"{tot_gav:.1f}", negrita=True),
         ])
         tt = Table(datos_tot, repeatRows=1)
         tt.setStyle(TableStyle([
