@@ -307,7 +307,7 @@ def render(db, username, rol):
 
     ordenes_fecha = (
         ordenes_df[ordenes_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()].copy()
-        if not ordenes_df.empty else pd.DataFrame()
+        if not ordenes_df.empty else pd.DataFrame(columns=ordenes_df.columns)
     )
     if not ordenes_fecha.empty:
         ordenes_fecha = ordenes_fecha.sort_values("creado_en")
@@ -376,7 +376,7 @@ def render(db, username, rol):
                 # para no perder ediciones previas.
                 asig_todas_fecha = asignaciones_df[
                     asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
-                ] if not asignaciones_df.empty else pd.DataFrame()
+                ] if not asignaciones_df.empty else pd.DataFrame(columns=asignaciones_df.columns)
                 if not asig_todas_fecha.empty:
                     asig_todas_fecha = asig_todas_fecha.drop_duplicates(subset=["asignacion_id"], keep="last")
                 if "orden_id" in asig_todas_fecha.columns:
@@ -421,7 +421,7 @@ def render(db, username, rol):
     # ==================== ASIGNACIONES DE LA ORDEN ACTUAL ====================
     asig_fecha_todas = asignaciones_df[
         asignaciones_df["fecha_entrega"].astype(str) == fecha_sel.isoformat()
-    ].copy() if not asignaciones_df.empty else pd.DataFrame()
+    ].copy() if not asignaciones_df.empty else pd.DataFrame(columns=asignaciones_df.columns)
     # Deduplicar por asignacion_id (en caso que el sheet tenga duplicados)
     if not asig_fecha_todas.empty:
         asig_fecha_todas = asig_fecha_todas.drop_duplicates(subset=["asignacion_id"], keep="last")
@@ -473,6 +473,17 @@ def render(db, username, rol):
     for _, linea in lineas_producidas.iterrows():
         lid = str(linea["linea_id"])
         pid = str(linea["presentacion_id"])
+        chk_key = f"chk_{orden_sel}_{lid}"
+        pending_chk_key = f"_pending_{chk_key}"
+        # Igual que con el selectbox de orden: el checkbox tiene su propio
+        # estado por key, que persiste entre reruns. Si el boton "Eliminar"
+        # de mas abajo borra el ultimo lote de una linea, hay que
+        # desmarcarla aqui, ANTES de instanciar el checkbox, o si no el
+        # checkbox seguiria marcado y la linea se re-incluiria sola creando
+        # un lote sugerido nuevo (pareceria que "Eliminar" no hizo nada).
+        if pending_chk_key in st.session_state:
+            st.session_state[chk_key] = st.session_state.pop(pending_chk_key)
+
         orden_de_linea = mapa_linea_a_orden.get(lid)
         ya_en_esta = orden_de_linea == orden_sel
         ya_en_otra = orden_de_linea is not None and orden_de_linea != orden_sel
@@ -487,14 +498,14 @@ def render(db, username, rol):
             colchk, coltxt = st.columns([1, 9])
             if ya_en_otra:
                 colchk.checkbox("Incluir", value=False, disabled=True,
-                                 key=f"chk_{orden_sel}_{lid}", label_visibility="collapsed")
+                                 key=chk_key, label_visibility="collapsed")
                 nombre_otra = mapa_orden_nombre.get(orden_de_linea, orden_de_linea)
                 coltxt.markdown(f"~~{etiqueta}~~")
                 coltxt.caption(f"🔒 Ya incluida en la orden «{nombre_otra}»")
                 continue
 
             marcado = colchk.checkbox("Incluir", value=ya_en_esta,
-                                       key=f"chk_{orden_sel}_{lid}", label_visibility="collapsed")
+                                       key=chk_key, label_visibility="collapsed")
             coltxt.markdown(etiqueta)
             obs_linea = str(linea.get("observaciones", "") or "").strip()
             if obs_linea:
@@ -567,6 +578,11 @@ def render(db, username, rol):
                 borrar = c5.button("🗑️", key=f"del_{sk}", help="Eliminar esta línea de asignación")
                 if borrar:
                     db.delete_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"])
+                    if len(asig_linea) <= 1:
+                        # Se borro el ultimo lote de esta linea: desmarcarla
+                        # (bandera pendiente, ver arriba) para que no se
+                        # vuelva a incluir sola con un lote sugerido nuevo.
+                        st.session_state[pending_chk_key] = False
                     st.rerun()
                 # Auto-guardar si cambio algo
                 if (nuevo_lote != lote_curr or nuevo_kg != kg_curr or nuevo_gav != gav_curr
