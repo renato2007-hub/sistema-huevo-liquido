@@ -832,6 +832,11 @@ def render(db, username, rol):
                         (salidas_v["fecha"].astype(str) == fecha_v.isoformat())
                         & (salidas_v["vehiculo_id"].astype(str) == str(vehiculo_v))
                     ]
+                    entradas_cf_v = db.get_df("cuarto_frio_entradas")
+                    if not entradas_cf_v.empty:
+                        despachos_dia = despachos_dia.merge(
+                            entradas_cf_v[["entrada_id", "lote_producto_id"]], on="entrada_id", how="left",
+                        )
 
                     if despachos_dia.empty:
                         st.warning("No hay despachos registrados para esa fecha y vehículo — no hay nada que verificar todavía.")
@@ -847,7 +852,8 @@ def render(db, username, rol):
 
                         st.markdown(f"**Despachos registrados ese día para este vehículo:** {len(despachos_dia)}")
                         st.dataframe(
-                            despachos_dia[[c for c in ["salida_id", "cliente_id", "cantidad", "despachador", "usuario"] if c in despachos_dia.columns]],
+                            despachos_dia[[c for c in ["lote_producto_id", "cliente_id", "cantidad", "despachador", "usuario"] if c in despachos_dia.columns]]
+                            .rename(columns={"lote_producto_id": "Lote despachado"}),
                             use_container_width=True, hide_index=True,
                         )
 
