@@ -517,7 +517,7 @@ def render(db, username, rol):
 
             kg_accion = st.number_input(
                 f"Kg a procesar (máx {kg_disp_stock:.1f} kg)",
-                min_value=0.1, max_value=kg_disp_stock, value=kg_disp_stock, step=0.1,
+                min_value=min(0.1, kg_disp_stock), max_value=kg_disp_stock, value=kg_disp_stock, step=0.1,
                 key="granel_kg_accion",
             )
 
