@@ -837,6 +837,12 @@ def render(db, username, rol):
                         despachos_dia = despachos_dia.merge(
                             entradas_cf_v[["entrada_id", "lote_producto_id"]], on="entrada_id", how="left",
                         )
+                    if not clientes.empty:
+                        despachos_dia = despachos_dia.merge(
+                            clientes[["cliente_id", "nombre"]].rename(columns={"nombre": "cliente_nombre"}),
+                            on="cliente_id", how="left",
+                        )
+                        despachos_dia["cliente_nombre"] = despachos_dia["cliente_nombre"].fillna(despachos_dia["cliente_id"])
 
                     if despachos_dia.empty:
                         st.warning("No hay despachos registrados para esa fecha y vehículo — no hay nada que verificar todavía.")
@@ -852,8 +858,8 @@ def render(db, username, rol):
 
                         st.markdown(f"**Despachos registrados ese día para este vehículo:** {len(despachos_dia)}")
                         st.dataframe(
-                            despachos_dia[[c for c in ["lote_producto_id", "cliente_id", "cantidad", "despachador", "usuario"] if c in despachos_dia.columns]]
-                            .rename(columns={"lote_producto_id": "Lote despachado"}),
+                            despachos_dia[[c for c in ["lote_producto_id", "cliente_nombre", "cantidad", "despachador", "usuario"] if c in despachos_dia.columns]]
+                            .rename(columns={"lote_producto_id": "Lote despachado", "cliente_nombre": "Cliente"}),
                             use_container_width=True, hide_index=True,
                         )
 
