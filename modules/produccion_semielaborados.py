@@ -914,7 +914,7 @@ def render(db, username, rol):
                     "Lote semielaborado", disponibles_perdida["lote_semielaborado_id"],
                     format_func=lambda x: (
                         f"{x} — {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'tipo_producto']} "
-                        f"(saldo {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.1f} kg)"
+                        f"(saldo {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.2f} kg)"
                     ),
                 )
                 fila_lote = disponibles_perdida.set_index("lote_semielaborado_id").loc[lote_perdida_id]

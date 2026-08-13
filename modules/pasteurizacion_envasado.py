@@ -36,7 +36,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         "Lote de semielaborado",
         disponibles["lote_semielaborado_id"],
         format_func=lambda x: (
-            f"{x} — saldo {disponibles.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.1f} kg"
+            f"{x} — saldo {disponibles.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.2f} kg"
         ),
     )
     fila_lote = disponibles.set_index("lote_semielaborado_id").loc[lote_semielaborado_id]
@@ -388,7 +388,7 @@ def render(db, username, rol):
                     semi_disp["lote_semielaborado_id"],
                     format_func=lambda x: (
                         f"{x} — {semi_disp.set_index('lote_semielaborado_id').loc[x, 'tipo_producto']} "
-                        f"({semi_disp.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.1f} kg disponibles)"
+                        f"({semi_disp.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.2f} kg disponibles)"
                     ),
                     key="granel_lote_sel",
                 )
