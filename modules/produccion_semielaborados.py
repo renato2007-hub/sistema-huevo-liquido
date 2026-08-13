@@ -8,7 +8,7 @@ import streamlit as st
 import pandas as pd
 from utils.costing import costo_ponderado, sugerir_codigo_lote
 from utils.horas_trabajo import calcular_horas_sesion
-from utils.permisos import ve_costos, es_admin
+from utils.permisos import ve_costos, es_admin, es_admin_o_jefe_planta
 from utils.bitacora import log_cambio
 
 
@@ -982,6 +982,65 @@ def render(db, username, rol):
             )
             kg_total_desechado = pd.to_numeric(df_mermas_vista["kg_desechado"], errors="coerce").fillna(0).sum()
             st.caption(f"Total desechado histórico: **{kg_total_desechado:,.1f} kg** en {len(df_mermas_vista)} registro(s)")
+
+            if es_admin_o_jefe_planta(rol):
+                st.markdown("###### ↩️ Revertir una pérdida registrada por error")
+                merma_sel = st.selectbox(
+                    "Selecciona la pérdida a revertir",
+                    df_mermas_vista["merma_id"],
+                    format_func=lambda x: (
+                        f"{x} — {df_mermas_vista.set_index('merma_id').loc[x, 'lote_semielaborado_id']} "
+                        f"({float(pd.to_numeric(df_mermas_vista.set_index('merma_id').loc[x, 'kg_desechado'], errors='coerce') or 0):.2f} kg, "
+                        f"{df_mermas_vista.set_index('merma_id').loc[x, 'causa']})"
+                    ),
+                    key="revertir_merma_sel",
+                )
+                fila_merma = df_mermas_vista.set_index("merma_id").loc[merma_sel]
+                lote_merma = str(fila_merma["lote_semielaborado_id"])
+                kg_merma = float(pd.to_numeric(fila_merma["kg_desechado"], errors="coerce") or 0)
+
+                lote_actual_df = db.get_df("produccion_semielaborados")
+                lote_actual = lote_actual_df[lote_actual_df["lote_semielaborado_id"] == lote_merma]
+                if lote_actual.empty:
+                    st.warning(
+                        f"⚠️ El lote {lote_merma} ya no existe (fue eliminado por separado). "
+                        "Se puede borrar el registro de pérdida, pero no hay saldo al cual devolver los kg."
+                    )
+                else:
+                    saldo_lote_actual = round(float(lote_actual.iloc[0]["kg_saldo"]), 2)
+                    st.caption(
+                        f"Al revertir, se devolverán **{kg_merma:.2f} kg** al saldo del lote {lote_merma} "
+                        f"(saldo actual {saldo_lote_actual:.2f} kg → nuevo saldo {round(saldo_lote_actual + kg_merma, 2):.2f} kg) "
+                        "y se eliminará este registro de pérdida."
+                    )
+
+                confirmar_revertir = st.checkbox(
+                    f"Confirmo que quiero revertir la pérdida {merma_sel}",
+                    key="confirmar_revertir_merma",
+                )
+                if st.button("↩️ Revertir esta pérdida"):
+                    if not confirmar_revertir:
+                        st.error("Marca la casilla de confirmación antes de revertir.")
+                    else:
+                        if not lote_actual.empty:
+                            db.update_row(
+                                "produccion_semielaborados", "lote_semielaborado_id", lote_merma,
+                                {"kg_saldo": round(saldo_lote_actual + kg_merma, 2)},
+                            )
+                        db.delete_row("mermas_semielaborado", "merma_id", merma_sel)
+                        log_cambio(
+                            db, username,
+                            modulo="Produccion de semielaborados",
+                            tabla="mermas_semielaborado",
+                            id_registro=merma_sel, accion="eliminacion",
+                            motivo=(
+                                f"Perdida revertida — {kg_merma:.2f} kg devueltos al saldo del lote {lote_merma}"
+                                if not lote_actual.empty
+                                else "Perdida revertida — lote origen ya no existe, no se devolvio saldo"
+                            ),
+                        )
+                        st.success(f"Pérdida {merma_sel} revertida.")
+                        st.rerun()
     with tab_rendimiento:
         df = db.get_df("produccion_semielaborados")
         if df.empty:

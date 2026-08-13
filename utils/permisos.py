@@ -74,6 +74,10 @@ def es_admin(rol) -> bool:
     return rol_normalizado(rol) == "admin"
 
 
+def es_admin_o_jefe_planta(rol) -> bool:
+    return rol_normalizado(rol) in ("admin", "jefe_planta")
+
+
 def puede_editar_pedidos(rol) -> bool:
     return rol_normalizado(rol) in ("admin", "gerencia")
 
