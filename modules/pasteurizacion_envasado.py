@@ -82,7 +82,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
     costo_etiqueta_unitario = float(etiquetas.set_index("etiqueta_id").loc[etiqueta_id, "costo_unitario"])
 
     kg_usado = st.number_input(
-        "Kg a pasteurizar/envasar", min_value=0.0, max_value=kg_disponible, step=0.5,
+        "Kg a pasteurizar/envasar", min_value=0.0, max_value=kg_disponible, step=0.01,
         key=f"kg_usado_{lote_semielaborado_id}",
     )
     unidades_teoricas = int(kg_usado / kg_nominal) if kg_nominal else 0
@@ -400,8 +400,8 @@ def render(db, username, rol):
                     st.warning("⚠️ Este lote tiene saldo 0 kg — no hay nada disponible para trasladar.")
                 else:
                     kg_a_trasladar = st.number_input(
-                        f"Kg a trasladar al recipiente (máx {saldo_disp:.1f} kg)",
-                        min_value=0.0, max_value=float(saldo_disp), value=float(saldo_disp), step=0.1,
+                        f"Kg a trasladar al recipiente (máx {saldo_disp:.2f} kg)",
+                        min_value=0.0, max_value=float(saldo_disp), value=float(saldo_disp), step=0.01,
                         key="granel_kg",
                     )
                     fecha_gr = st.date_input("Fecha de traslado", value=datetime.date.today(), key="granel_fecha")

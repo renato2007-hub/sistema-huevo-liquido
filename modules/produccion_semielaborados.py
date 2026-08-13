@@ -922,7 +922,8 @@ def render(db, username, rol):
                 costo_unit_lote = float(pd.to_numeric(fila_lote.get("costo_unitario_kg", 0), errors="coerce") or 0)
 
                 kg_desechar = st.number_input(
-                    "Kg a desechar", min_value=0.0, max_value=saldo_disponible, step=0.5,
+                    "Kg a desechar", min_value=0.0, max_value=saldo_disponible,
+                    value=saldo_disponible, step=0.01,
                 )
                 causa = st.selectbox(
                     "Causa", ["Sobrante sin cliente", "Dañado", "Vencido", "Otro"],
