@@ -918,7 +918,7 @@ def render(db, username, rol):
                     ),
                 )
                 fila_lote = disponibles_perdida.set_index("lote_semielaborado_id").loc[lote_perdida_id]
-                saldo_disponible = float(fila_lote["kg_saldo"])
+                saldo_disponible = round(float(fila_lote["kg_saldo"]), 2)
                 costo_unit_lote = float(pd.to_numeric(fila_lote.get("costo_unitario_kg", 0), errors="coerce") or 0)
 
                 kg_desechar = st.number_input(
@@ -936,7 +936,7 @@ def render(db, username, rol):
                     if kg_desechar <= 0:
                         st.error("Ingresa una cantidad mayor a 0.")
                     else:
-                        nuevo_saldo = saldo_disponible - kg_desechar
+                        nuevo_saldo = round(saldo_disponible - kg_desechar, 2)
                         db.update_row(
                             "produccion_semielaborados", "lote_semielaborado_id", lote_perdida_id,
                             {"kg_saldo": nuevo_saldo},
@@ -1050,12 +1050,18 @@ def render(db, username, rol):
                     f"eliminar también el lote hermano por separado."
                 )
 
-            if kg_saldo_sel < kg_real_sel - 0.001:
+            envasado_df = db.get_df("pasteurizacion_envasado")
+            envasado_rel = (
+                envasado_df[envasado_df["lote_semielaborado_id"] == lote_sel]
+                if not envasado_df.empty else envasado_df
+            )
+
+            if not envasado_rel.empty:
                 st.error(
-                    "❌ Este lote ya tiene kg consumidos en Pasteurización y envasado "
-                    "(el saldo es menor al kg real), así que no se puede eliminar sin dejar "
-                    "inconsistencias en el producto ya envasado. Si de verdad necesitas "
-                    "corregirlo, dímelo para revisarlo con cuidado en vez de borrarlo a ciegas."
+                    "❌ Este lote ya tiene kg consumidos en Pasteurización y envasado, "
+                    "así que no se puede eliminar sin dejar inconsistencias en el producto "
+                    "ya envasado. Si de verdad necesitas corregirlo, dímelo para revisarlo "
+                    "con cuidado en vez de borrarlo a ciegas."
                 )
             else:
                 consumo_rel = db.get_df("consumo_mp_produccion")
@@ -1064,6 +1070,10 @@ def render(db, username, rol):
                 insumos_rel = insumos_rel[insumos_rel["lote_semielaborado_id"] == lote_sel]
                 personal_rel = db.get_df("produccion_personal")
                 personal_rel = personal_rel[personal_rel["lote_semielaborado_id"] == lote_sel]
+                mermas_rel = db.get_df("mermas_semielaborado")
+                mermas_rel = mermas_rel[mermas_rel["lote_semielaborado_id"] == lote_sel]
+                granel_df = db.get_df("stock_a_granel")
+                granel_rel = granel_df[granel_df["lote_origen"] == lote_sel] if not granel_df.empty else granel_df
 
                 st.markdown("**Esto es lo que se va a revertir si lo eliminas:**")
                 if not consumo_rel.empty:
@@ -1074,6 +1084,15 @@ def render(db, username, rol):
                     st.dataframe(insumos_rel[["insumo_id", "cantidad"]], use_container_width=True)
                 if not personal_rel.empty:
                     st.write(f"↩️ Se eliminarán {len(personal_rel)} registro(s) de horas de personal.")
+                if not mermas_rel.empty:
+                    st.write("↩️ Registros de pérdida asociados a este lote que también se eliminarán:")
+                    st.dataframe(mermas_rel[["merma_id", "kg_desechado", "causa"]], use_container_width=True)
+                if not granel_rel.empty:
+                    st.info(
+                        f"ℹ️ Este lote tiene {len(granel_rel)} traslado(s) a stock a granel "
+                        f"({pd.to_numeric(granel_rel['kg_inicial'], errors='coerce').sum():.1f} kg) que ya están "
+                        "en recipientes de cuarto frío — no se eliminan, quedan como stock independiente."
+                    )
 
                 confirmar = st.checkbox(
                     f"Confirmo que quiero eliminar la producción {lote_sel} y revertir todo lo anterior",
@@ -1104,6 +1123,7 @@ def render(db, username, rol):
                         db.delete_rows_where("produccion_personal", "lote_semielaborado_id", lote_sel)
                         # revertir cascara (subproducto) generada por este lote
                         db.delete_rows_where("produccion_cascara", "lote_semielaborado_origen", lote_sel)
+                        db.delete_rows_where("mermas_semielaborado", "lote_semielaborado_id", lote_sel)
                         db.delete_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel)
 
                         log_cambio(
@@ -1111,7 +1131,7 @@ def render(db, username, rol):
                             modulo="Produccion de semielaborados",
                             tabla="produccion_semielaborados",
                             id_registro=lote_sel, accion="eliminacion",
-                            motivo="Eliminado con reversion completa (cubetas, insumos, personal, cascara)",
+                            motivo="Eliminado con reversion completa (cubetas, insumos, personal, cascara, mermas)",
                         )
 
                         st.success(

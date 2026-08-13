@@ -40,7 +40,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         ),
     )
     fila_lote = disponibles.set_index("lote_semielaborado_id").loc[lote_semielaborado_id]
-    kg_disponible = float(fila_lote["kg_saldo"])
+    kg_disponible = round(float(fila_lote["kg_saldo"]), 2)
     costo_unitario_kg = float(fila_lote["costo_unitario_kg"])
 
     presentacion_id = st.selectbox(
@@ -203,7 +203,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         })
 
         db.update_row("produccion_semielaborados", "lote_semielaborado_id", lote_semielaborado_id, {
-            "kg_saldo": kg_disponible - kg_usado,
+            "kg_saldo": round(kg_disponible - kg_usado, 2),
         })
 
         movimiento_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
@@ -393,7 +393,7 @@ def render(db, username, rol):
                     key="granel_lote_sel",
                 )
                 fila_lote = semi_disp.set_index("lote_semielaborado_id").loc[lote_sel]
-                saldo_disp = float(fila_lote["kg_saldo"])
+                saldo_disp = round(float(fila_lote["kg_saldo"]), 2)
                 tipo_producto_gr = str(fila_lote["tipo_producto"])
 
                 if saldo_disp <= 0:
@@ -425,7 +425,7 @@ def render(db, username, rol):
                             "observaciones": obs_gr,
                         })
                         db.update_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel, {
-                            "kg_saldo": saldo_disp - kg_a_trasladar,
+                            "kg_saldo": round(saldo_disp - kg_a_trasladar, 2),
                         })
                         st.success(f"✅ {stock_id}: {kg_a_trasladar:.1f} kg de {tipo_producto_gr} trasladados a recipiente.")
                         st.rerun()
