@@ -14,9 +14,9 @@ from utils.bitacora import log_cambio
 
 def render(db, username, rol):
     st.title("Producción de semielaborados")
-    tab_nueva, tab_inventario, tab_historial, tab_perdida, tab_rendimiento, tab_corregir = st.tabs(
+    tab_nueva, tab_inventario, tab_historial, tab_perdida, tab_ajuste, tab_rendimiento, tab_corregir = st.tabs(
         ["Nueva producción", "Inventario de tanques", "📋 Historial",
-         "⚠️ Registrar pérdida", "Teórico vs. real", "✏️ Corregir / eliminar"]
+         "⚠️ Registrar pérdida", "➕ Ajustar saldo", "Teórico vs. real", "✏️ Corregir / eliminar"]
     )
 
     categorias = db.get_df("categorias_huevo")
@@ -1041,6 +1041,106 @@ def render(db, username, rol):
                         )
                         st.success(f"Pérdida {merma_sel} revertida.")
                         st.rerun()
+
+    with tab_ajuste:
+        st.caption(
+            "La producción de semielaborados se estima por volumen/peso del tanque, y a veces "
+            "esa estimación queda corta — por ejemplo, al envasar salen 108 kg cuando el tanque "
+            "parecía tener solo 100 kg. Usa esto para sumar directamente los kg que faltan al "
+            "saldo del lote, sin repetir todo el proceso de producción."
+        )
+        df_ajuste = db.get_df("produccion_semielaborados")
+        if df_ajuste.empty:
+            st.info("Todavía no hay lotes de semielaborado.")
+        else:
+            df_ajuste["kg_saldo"] = pd.to_numeric(df_ajuste["kg_saldo"], errors="coerce").fillna(0)
+            df_ajuste["kg_real"] = pd.to_numeric(df_ajuste["kg_real"], errors="coerce").fillna(0)
+            lote_ajuste_id = st.selectbox(
+                "Lote semielaborado a corregir", df_ajuste["lote_semielaborado_id"],
+                format_func=lambda x: (
+                    f"{x} — {df_ajuste.set_index('lote_semielaborado_id').loc[x, 'tipo_producto']} "
+                    f"(saldo actual {df_ajuste.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.2f} kg)"
+                ),
+                key="ajuste_lote_sel",
+            )
+            fila_ajuste = df_ajuste.set_index("lote_semielaborado_id").loc[lote_ajuste_id]
+            kg_real_actual = float(fila_ajuste["kg_real"])
+            kg_saldo_actual = float(fila_ajuste["kg_saldo"])
+
+            kg_agregar = st.number_input(
+                "Kg a agregar al saldo", min_value=0.0, step=0.01, key="ajuste_kg_agregar",
+            )
+            motivo_ajuste = st.text_area(
+                "Motivo del ajuste (obligatorio)", "",
+                placeholder="Ej: al envasar salieron 8 kg más de lo que el tanque parecía tener.",
+                key="ajuste_motivo",
+            )
+
+            if kg_agregar > 0:
+                st.caption(
+                    f"Saldo actual {kg_saldo_actual:.2f} kg → nuevo saldo "
+                    f"{round(kg_saldo_actual + kg_agregar, 2):.2f} kg."
+                )
+
+            if st.button("➕ Registrar ajuste"):
+                if kg_agregar <= 0:
+                    st.error("Ingresa una cantidad mayor a 0.")
+                elif not motivo_ajuste.strip():
+                    st.error("Ingresa el motivo del ajuste.")
+                else:
+                    nuevo_kg_real = round(kg_real_actual + kg_agregar, 2)
+                    nuevo_kg_saldo = round(kg_saldo_actual + kg_agregar, 2)
+                    db.update_row(
+                        "produccion_semielaborados", "lote_semielaborado_id", lote_ajuste_id,
+                        {"kg_real": nuevo_kg_real, "kg_saldo": nuevo_kg_saldo},
+                    )
+                    ajuste_id = db.siguiente_id("ajustes_semielaborado", "AJ", datetime.date.today())
+                    db.append_row("ajustes_semielaborado", {
+                        "ajuste_id": ajuste_id,
+                        "fecha": datetime.date.today().isoformat(),
+                        "lote_semielaborado_id": lote_ajuste_id,
+                        "kg_agregado": kg_agregar,
+                        "motivo": motivo_ajuste.strip(),
+                        "usuario": username,
+                        "observaciones": "",
+                    })
+                    log_cambio(
+                        db, username,
+                        modulo="Produccion de semielaborados",
+                        tabla="produccion_semielaborados",
+                        id_registro=lote_ajuste_id, accion="ajuste",
+                        motivo=f"Ajuste {ajuste_id}: +{kg_agregar:.2f} kg — {motivo_ajuste.strip()}",
+                    )
+                    st.success(
+                        f"Ajuste {ajuste_id} registrado — saldo del lote {lote_ajuste_id} "
+                        f"actualizado a {nuevo_kg_saldo:.2f} kg."
+                    )
+                    st.rerun()
+
+        st.divider()
+        st.markdown("##### 📋 Historial de ajustes registrados")
+        df_ajustes_hist = db.get_df("ajustes_semielaborado")
+        if df_ajustes_hist.empty:
+            st.info("No hay ajustes registrados todavía.")
+        else:
+            df_ajustes_vista = df_ajustes_hist.copy()
+            prod_tipos_aj = db.get_df("produccion_semielaborados")
+            if not prod_tipos_aj.empty:
+                df_ajustes_vista = df_ajustes_vista.merge(
+                    prod_tipos_aj[["lote_semielaborado_id", "tipo_producto"]],
+                    on="lote_semielaborado_id", how="left",
+                )
+            columnas_ajustes = [c for c in [
+                "fecha", "lote_semielaborado_id", "tipo_producto",
+                "kg_agregado", "motivo", "usuario",
+            ] if c in df_ajustes_vista.columns]
+            st.dataframe(
+                df_ajustes_vista[columnas_ajustes].sort_values("fecha", ascending=False),
+                use_container_width=True, hide_index=True,
+            )
+            kg_total_agregado = pd.to_numeric(df_ajustes_vista["kg_agregado"], errors="coerce").fillna(0).sum()
+            st.caption(f"Total agregado histórico: **{kg_total_agregado:,.1f} kg** en {len(df_ajustes_vista)} registro(s)")
+
     with tab_rendimiento:
         df = db.get_df("produccion_semielaborados")
         if df.empty:

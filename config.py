@@ -87,6 +87,11 @@ SHEET_SCHEMAS = {
         "causa", "costo_estimado", "usuario", "observaciones",
     ],
 
+    "ajustes_semielaborado": [
+        "ajuste_id", "fecha", "lote_semielaborado_id", "kg_agregado",
+        "motivo", "usuario", "observaciones",
+    ],
+
     "supervision_diaria": [
         "registro_id", "fecha", "personal_id", "hora_entrada", "hora_salida",
         "horas", "horas_nocturnas", "costo_calculado", "usuario", "observaciones",
