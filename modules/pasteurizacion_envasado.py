@@ -460,6 +460,11 @@ def render(db, username, rol):
             c1, c2 = st.columns(2)
             filtro_tipo = c1.selectbox("Tipo de producto", ["Todos"] + sorted(df_hist["tipo_producto"].unique().tolist()), key="hist_tipo")
             filtro_estado = c2.selectbox("Estado", ["Todos", "En stock", "Despachado completo"], key="hist_estado")
+            c3, c4, c5 = st.columns(3)
+            desde = c3.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="hist_pe_desde")
+            hasta = c4.date_input("Hasta", value=datetime.date.today(), key="hist_pe_hasta")
+            lotes_origen = ["Todos"] + sorted(df_hist["lote_origen"].dropna().unique().tolist())
+            filtro_origen = c5.selectbox("Lote de origen", lotes_origen, key="hist_pe_origen")
             df_mostrar = df_hist.copy()
             if filtro_tipo != "Todos":
                 df_mostrar = df_mostrar[df_mostrar["tipo_producto"] == filtro_tipo]
@@ -467,6 +472,12 @@ def render(db, username, rol):
                 df_mostrar = df_mostrar[df_mostrar["unidades_saldo"] > 0]
             elif filtro_estado == "Despachado completo":
                 df_mostrar = df_mostrar[df_mostrar["unidades_saldo"] == 0]
+            df_mostrar = df_mostrar[
+                (df_mostrar["fecha"].astype(str) >= desde.isoformat()) &
+                (df_mostrar["fecha"].astype(str) <= hasta.isoformat())
+            ]
+            if filtro_origen != "Todos":
+                df_mostrar = df_mostrar[df_mostrar["lote_origen"] == filtro_origen]
             cols_hist = ["lote_producto_id", "fecha", "lote_origen", "tipo_producto",
                          "presentacion_id", "estado", "unidades_reales", "unidades_despachadas", "saldo_estado"]
             st.dataframe(
