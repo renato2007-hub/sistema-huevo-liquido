@@ -536,19 +536,26 @@ def render(db, username, rol):
             else:
                 st.caption("💡 No hay lotes en cuarto frío todavía — puedes escribir un lote planificado.")
 
-            hc1, hc2, hc3, hc4, hc5 = st.columns([3, 1, 1, 1, 1])
+            kg_nominal_linea = mapa_kg_nominal.get(pid, 0)
+            upg_linea = mapa_upg.get(pid, 0)
+            producto_txt = f"{linea['tipo_producto']} — {mapa_pres_nombre.get(pid, pid)}"
+
+            hc0, hc1, hc2, hc2b, hc3, hc4, hc5 = st.columns([1.8, 1.8, 0.8, 0.8, 0.8, 1.2, 0.5])
+            hc0.markdown("**Producto**")
             hc1.markdown("**Lote (editable)**")
             hc2.markdown("**Kg**")
+            hc2b.markdown("**Unidades**")
             hc3.markdown("**Gavetas**")
             hc4.markdown("**Obs.**")
             hc5.markdown("**Quitar**")
 
             kg_total_asignado = 0.0
             for idx_a, (_, a) in enumerate(asig_linea.iterrows()):
-                c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
+                c0, c1, c2, c2b, c3, c4, c5 = st.columns([1.8, 1.8, 0.8, 0.8, 0.8, 1.2, 0.5])
                 # Sufijo compuesto (orden + linea + asignacion + indice) para
                 # asegurar unicidad de keys entre ordenes y reruns
                 sk = f"{orden_sel}_{lid}_{a['asignacion_id']}_{idx_a}"
+                c0.markdown(producto_txt)
                 lote_curr = str(a.get("lote_producto_id", "") or "")
                 nuevo_lote = c1.text_input(
                     "Lote", value=lote_curr,
@@ -563,8 +570,20 @@ def render(db, username, rol):
                     label_visibility="collapsed",
                 )
                 kg_total_asignado += nuevo_kg
-                # Gavetas: sugerida (auto) o editable, admite un decimal
-                gav_curr = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+                # Unidades: solo informativa, se deriva del kg asignado (no se
+                # guarda aparte -- si se necesita otro valor, ajusta el kg).
+                unidades_calc = (nuevo_kg / kg_nominal_linea) if kg_nominal_linea > 0 else 0
+                c2b.markdown(f"{unidades_calc:.0f}" if unidades_calc else "—")
+                # Gavetas: sugerida (auto, segun unidades_por_gaveta de la
+                # presentacion) mientras no se haya guardado nada distinto de
+                # 0 para esta fila; despues queda libre para editarla a mano.
+                # Se compara contra gav_guardado (no gav_curr) para que la
+                # sugerencia se guarde sola apenas se muestra, sin necesidad
+                # de que el usuario la toque.
+                gav_guardado = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
+                gav_curr = gav_guardado
+                if gav_curr <= 0 and kg_nominal_linea > 0 and upg_linea > 0:
+                    gav_curr = math.ceil((nuevo_kg / kg_nominal_linea) / upg_linea)
                 nuevo_gav = c3.number_input(
                     "Gavetas", min_value=0.0, step=0.1, value=gav_curr, format="%.1f",
                     key=f"gav_{sk}",
@@ -584,8 +603,9 @@ def render(db, username, rol):
                         # vuelva a incluir sola con un lote sugerido nuevo.
                         st.session_state[pending_chk_key] = False
                     st.rerun()
-                # Auto-guardar si cambio algo
-                if (nuevo_lote != lote_curr or nuevo_kg != kg_curr or nuevo_gav != gav_curr
+                # Auto-guardar si cambio algo (o si la sugerencia de gavetas
+                # todavia no se habia guardado)
+                if (nuevo_lote != lote_curr or nuevo_kg != kg_curr or nuevo_gav != gav_guardado
                         or obs_a != str(a.get("observaciones", "") or "")):
                     db.update_row("orden_salida_asignaciones", "asignacion_id", a["asignacion_id"], {
                         "lote_producto_id": nuevo_lote,

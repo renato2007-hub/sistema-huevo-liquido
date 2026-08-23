@@ -255,10 +255,17 @@ def render(db, username, rol):
             "'Tipo de envase' = PET habilita el selector de color de tapa en "
             "Pasteurización y envasado; 'Funda' no usa tapas."
         )
+        st.caption(
+            "'Unidades por gaveta' = cuántos envases de esta presentación entran en una "
+            "gaveta llena (ej. 8 fundas de 5kg, 9 envases de 3.8kg, 20 envases de 2kg, "
+            "24 envases de 500ml si van en cajas de 6 x 4). Se usa en Orden de salida "
+            "para sugerir automáticamente el número de gavetas."
+        )
         _seccion_simple(db, "presentaciones", "Presentaciones", [
             ("presentacion_id", "texto"), ("nombre", "texto"),
             ("kg_nominal", "numero"), ("tipo_envase", ["PET", "Funda"]),
-            ("costo_envase_unitario", "numero"), ("activo", "bool"),
+            ("costo_envase_unitario", "numero"), ("unidades_por_gaveta", "numero"),
+            ("activo", "bool"),
         ])
     elif seccion == "Tapas (PET)":
         st.caption(
