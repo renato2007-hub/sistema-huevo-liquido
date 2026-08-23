@@ -78,7 +78,7 @@ def _cubetas_de_kg_por_tipo(kg_por_tipo: dict) -> float:
 
 
 def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
-                 cubetas_disponibles, alerta_mp, plan_mp_lista=None, notas="",
+                 cubetas_disponibles, alerta_mp, notas="",
                  turnos_resumen=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
@@ -155,22 +155,6 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
                 f"Disponibles en bodega: {cubetas_disponibles:.0f}")
     el.append(Paragraph(mp_texto, ESTILOS["Normal"]))
     el.append(Spacer(1, 0.3*cm))
-
-    if plan_mp_lista:
-        el.append(Paragraph("Lotes de huevo asignados", ESTILOS["Heading2"]))
-        datos_mp = [[_p(h, negrita=True) for h in ["Lote MP", "Cubetas asignadas"]]]
-        for r in plan_mp_lista:
-            datos_mp.append([_p(r["lote_desc"]), _p(str(r["cubetas"]))])
-        datos_mp.append([_p("TOTAL",negrita=True), _p(str(sum(r["cubetas"] for r in plan_mp_lista)),negrita=True)])
-        tmp = Table(datos_mp, repeatRows=1)
-        tmp.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#f9a825")),
-            ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#dddddd")),
-            ("BOTTOMPADDING",(0,0),(-1,-1),4),
-            ("TOPPADDING",(0,0),(-1,-1),4),
-        ]))
-        el.append(tmp)
-        el.append(Spacer(1, 0.4*cm))
 
     el.append(Spacer(1, 0.5*cm))
 
@@ -689,25 +673,6 @@ def _render_planificar(db, username, rol):
 
     st.write("")
 
-    # PDF — incluye lotes asignados
-    plan_mp_lista = []
-    if not plan_hoy.empty:
-        # Recargar recepciones para armar la descripcion (proveedor + saldo)
-        mapa_desc_lote = {}
-        if not recepciones.empty:
-            recepciones_l = recepciones.copy()
-            recepciones_l["cubetas_saldo"] = pd.to_numeric(recepciones_l["cubetas_saldo"], errors="coerce").fillna(0)
-            for _, rec in recepciones_l.iterrows():
-                mapa_desc_lote[rec["recepcion_id"]] = (
-                    f"{rec['recepcion_id']} — {rec.get('origen_id', '')} — saldo: {int(rec['cubetas_saldo'])} cub."
-                )
-        for _, r in plan_hoy.iterrows():
-            plan_mp_lista.append({
-                "recepcion_id": r["recepcion_id"],
-                "lote_desc": mapa_desc_lote.get(r["recepcion_id"], r["recepcion_id"]),
-                "cubetas": int(r["cubetas_asignadas"]),
-            })
-
     detalle_lista = [
         {
             "pedido_id": row["pedido_id"],
@@ -752,7 +717,7 @@ def _render_planificar(db, username, rol):
     pdf_bytes = _generar_pdf(
         fecha_sel, consolidado, detalle_lista,
         cubetas_necesarias_total, cubetas_disponibles, alerta_mp,
-        plan_mp_lista, notas=notas_input, turnos_resumen=turnos_resumen,
+        notas=notas_input, turnos_resumen=turnos_resumen,
     )
     st.download_button(
         "📄 Descargar plan del día (PDF)",
