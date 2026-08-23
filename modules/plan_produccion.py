@@ -59,8 +59,27 @@ def _cubetas_necesarias(kg_liquido, kg_por_cubeta):
     return kg_liquido / kg_por_cubeta
 
 
+def _cubetas_de_kg_por_tipo(kg_por_tipo: dict) -> float:
+    """Cubetas necesarias para cubrir un conjunto de kg por tipo_producto,
+    reconociendo que clara y yema son co-productos del mismo quiebre de huevo
+    (no se suman aparte -- se toma la que cubra la demanda mayor de las dos).
+    Se usa tanto para el total del día como para el de cada turno por separado."""
+    kg_clara = sum(kg for tipo, kg in kg_por_tipo.items() if tipo in TIPOS_CLARA)
+    kg_yema = sum(kg for tipo, kg in kg_por_tipo.items() if tipo in TIPOS_YEMA)
+    factor_clara = RENDIMIENTO_KG_POR_CUBETA["Clara pasteurizada"]
+    factor_yema = RENDIMIENTO_KG_POR_CUBETA["Yema pasteurizada"]
+    cubetas_clara_yema = max(kg_clara / factor_clara, kg_yema / factor_yema) if (kg_clara > 0 or kg_yema > 0) else 0.0
+    cubetas_otros = sum(
+        kg / RENDIMIENTO_KG_POR_CUBETA.get(tipo, KG_POR_CUBETA_DEFAULT)
+        for tipo, kg in kg_por_tipo.items()
+        if tipo not in TIPOS_CLARA and tipo not in TIPOS_YEMA and kg > 0
+    )
+    return cubetas_clara_yema + cubetas_otros
+
+
 def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
-                 cubetas_disponibles, alerta_mp, plan_mp_lista=None, notas=""):
+                 cubetas_disponibles, alerta_mp, plan_mp_lista=None, notas="",
+                 turnos_resumen=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                              topMargin=1.8*cm, bottomMargin=1.8*cm,
@@ -106,6 +125,31 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
     ]))
     el.append(t)
     el.append(Spacer(1, 0.4*cm))
+
+    if turnos_resumen:
+        el.append(Paragraph("Distribución por turno", ESTILOS["Heading2"]))
+        for tr in turnos_resumen:
+            bloque_turno = [Paragraph(f"<b>{tr['turno']}</b>", ESTILOS["Normal"])]
+            datos_t = [[_p(h, negrita=True) for h in ["Producto", "Kg a producir"]]]
+            for prod, kg in tr["kg_por_producto"].items():
+                datos_t.append([_p(prod), _p(f"{kg:.1f} kg")])
+            datos_t.append([
+                _p("Cubetas necesarias para este turno", negrita=True),
+                _p(f"{tr['cubetas']:.0f}", negrita=True),
+            ])
+            tt = Table(datos_t, repeatRows=1, colWidths=[10*cm, 4*cm])
+            tt.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#6a1b9a")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#f5f5f5")),
+                ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#dddddd")),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("TOPPADDING", (0,0), (-1,-1), 4),
+            ]))
+            bloque_turno.append(tt)
+            bloque_turno.append(Spacer(1, 0.25*cm))
+            el.append(KeepTogether(bloque_turno))
+        el.append(Spacer(1, 0.2*cm))
 
     mp_texto = (f"Cubetas necesarias: {cubetas_necesarias_total:.0f}  |  "
                 f"Disponibles en bodega: {cubetas_disponibles:.0f}")
@@ -344,19 +388,53 @@ def _render_planificar(db, username, rol):
     cubetas_necesarias_total = cubetas_clara_yema + cubetas_otros
     alerta_mp = cubetas_necesarias_total > cubetas_disponibles
 
+    # Resumen por turno: kg por producto y cubetas (con la logica de
+    # co-producto clara/yema aplicada POR TURNO, no solo al total del dia) --
+    # se usa tanto en pantalla como en el PDF.
+    turnos_resumen = []
+    claves_turno = [(t, mapa_turnos.get(t, t)) for t in turnos_del_dia]
+    if hay_sin_asignar:
+        claves_turno.append(("", "Sin asignar"))
+    for clave, nombre in claves_turno:
+        if clave == "":
+            kg_por_tipo_t = {row["producto"]: row["kg_sin_turno"] for row in consolidado}
+        else:
+            kg_por_tipo_t = {row["producto"]: row["kg_por_turno"].get(clave, 0) for row in consolidado}
+        kg_por_tipo_t = {k: v for k, v in kg_por_tipo_t.items() if v > 0}
+        if not kg_por_tipo_t:
+            continue
+        turnos_resumen.append({
+            "turno": nombre,
+            "kg_por_producto": kg_por_tipo_t,
+            "kg_total": sum(kg_por_tipo_t.values()),
+            "cubetas": _cubetas_de_kg_por_tipo(kg_por_tipo_t),
+        })
+    mapa_cubetas_por_turno = {r["turno"]: r["cubetas"] for r in turnos_resumen}
+
     # ── VISTA EN PANTALLA ──────────────────────────────────────────────────────
     st.markdown(f"### 📋 Plan del {fecha_sel.strftime('%d/%m/%Y')}")
 
     # Tabla resumen por turno (si hay al menos un turno asignado)
     if turnos_del_dia or hay_sin_asignar:
         st.markdown("##### 🔀 Distribución por turno")
-        fila_tur = {"Producto": [c["producto"] for c in consolidado]}
+        fila_tur = {"Producto": [c["producto"] for c in consolidado] + ["🥚 Cubetas necesarias"]}
         for t in turnos_del_dia:
-            fila_tur[mapa_turnos.get(t, t)] = [f"{c['kg_por_turno'].get(t, 0):.1f} kg" if c['kg_por_turno'].get(t, 0) > 0 else "—" for c in consolidado]
+            nombre_t = mapa_turnos.get(t, t)
+            fila_tur[nombre_t] = (
+                [f"{c['kg_por_turno'].get(t, 0):.1f} kg" if c['kg_por_turno'].get(t, 0) > 0 else "—" for c in consolidado]
+                + [f"{mapa_cubetas_por_turno.get(nombre_t, 0):.0f}"]
+            )
         if hay_sin_asignar:
-            fila_tur["Sin asignar"] = [f"{c['kg_sin_turno']:.1f} kg" if c['kg_sin_turno'] > 0 else "—" for c in consolidado]
-        fila_tur["Total"] = [f"{c['kg']:.1f} kg" for c in consolidado]
+            fila_tur["Sin asignar"] = (
+                [f"{c['kg_sin_turno']:.1f} kg" if c['kg_sin_turno'] > 0 else "—" for c in consolidado]
+                + [f"{mapa_cubetas_por_turno.get('Sin asignar', 0):.0f}"]
+            )
+        fila_tur["Total"] = [f"{c['kg']:.1f} kg" for c in consolidado] + [f"{cubetas_necesarias_total:.0f}"]
         st.dataframe(pd.DataFrame(fila_tur), use_container_width=True, hide_index=True)
+        st.caption(
+            "Las cubetas de cada turno también aplican la lógica de co-producto "
+            "clara/yema (no se suman por separado dentro del mismo turno)."
+        )
         st.write("")
 
     # ── Asignar turno a las líneas de este día ──────────────────────────────
@@ -674,7 +752,7 @@ def _render_planificar(db, username, rol):
     pdf_bytes = _generar_pdf(
         fecha_sel, consolidado, detalle_lista,
         cubetas_necesarias_total, cubetas_disponibles, alerta_mp,
-        plan_mp_lista, notas=notas_input,
+        plan_mp_lista, notas=notas_input, turnos_resumen=turnos_resumen,
     )
     st.download_button(
         "📄 Descargar plan del día (PDF)",
