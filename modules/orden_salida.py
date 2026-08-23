@@ -35,6 +35,14 @@ def _p(txt, negrita=False, pequeño=False):
     return Paragraph(str(txt) if txt is not None else "", estilo)
 
 
+def _fmt_unidades_por_pres(unidades_por_pres: dict) -> str:
+    """'40 Envase 3.8kg, 20 Envase 2kg' -- para no mostrar un total de
+    unidades mezclando presentaciones distintas sin decir de cuál es cada una."""
+    if not unidades_por_pres:
+        return "—"
+    return ", ".join(f"{u} {p}" for p, u in sorted(unidades_por_pres.items()))
+
+
 def _tipo_linea_a_semielaborado(tipo_linea):
     """Mapea 'Huevo entero pasteurizado' -> ('Huevo entero', True), etc."""
     tipo_str = str(tipo_linea or "").strip().lower()
@@ -760,11 +768,14 @@ def render(db, username, rol):
             kg_nom = mapa_kg_nominal.get(pres_id, 0)
             unid_m = int(round(kg_a / kg_nom)) if kg_nom > 0 else 0
 
+        pres_nombre_u = mapa_pres_nombre.get(pres_id, pres_id) if pres_id else "—"
         if tipo not in totales_prod:
-            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0.0, "unidades": 0}
+            totales_prod[tipo] = {"kg": 0.0, "gavetas": 0.0, "unidades_por_pres": {}}
         totales_prod[tipo]["kg"] += kg_a
         totales_prod[tipo]["gavetas"] += gav
-        totales_prod[tipo]["unidades"] += unid_m
+        totales_prod[tipo]["unidades_por_pres"][pres_nombre_u] = (
+            totales_prod[tipo]["unidades_por_pres"].get(pres_nombre_u, 0) + unid_m
+        )
 
         if pres_id not in totales_pres:
             totales_pres[pres_id] = {"kg": 0.0, "gavetas_sugeridas": 0.0, "unidades": 0}
@@ -776,13 +787,16 @@ def render(db, username, rol):
     if totales_prod:
         st.markdown("##### Totales por producto")
         df_prod = pd.DataFrame([
-            {"Producto": t, "Kg totales": f"{v['kg']:.1f}", "Unidades": v["unidades"], "Gavetas": f"{v['gavetas']:.1f}"}
+            {
+                "Producto": t, "Kg totales": f"{v['kg']:.1f}",
+                "Unidades": _fmt_unidades_por_pres(v["unidades_por_pres"]),
+                "Gavetas": f"{v['gavetas']:.1f}",
+            }
             for t, v in sorted(totales_prod.items())
         ])
         total_kg_p = sum(v["kg"] for v in totales_prod.values())
-        total_unid_p = sum(v["unidades"] for v in totales_prod.values())
         total_gav_p = sum(v["gavetas"] for v in totales_prod.values())
-        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.1f}", total_unid_p, f"{total_gav_p:.1f}"]
+        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.1f}", "—", f"{total_gav_p:.1f}"]
         st.dataframe(df_prod, use_container_width=True, hide_index=True)
     else:
         st.caption("Todavía no hay pedidos incluidos en esta orden.")
@@ -1015,17 +1029,16 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
             datos_tot.append([
                 _p(tipo),
                 _p(f"{v['kg']:.1f}"),
-                _p(str(v["unidades"])),
+                _p(_fmt_unidades_por_pres(v["unidades_por_pres"])),
                 _p(f"{v['gavetas']:.1f}"),
             ])
         # Fila TOTAL GENERAL
         tot_kg = sum(v["kg"] for v in totales_prod.values())
-        tot_unid = sum(v["unidades"] for v in totales_prod.values())
         tot_gav = sum(v["gavetas"] for v in totales_prod.values())
         datos_tot.append([
             _p("TOTAL GENERAL", negrita=True),
             _p(f"{tot_kg:.1f}", negrita=True),
-            _p(str(tot_unid), negrita=True),
+            _p("—"),
             _p(f"{tot_gav:.1f}", negrita=True),
         ])
         tt = Table(datos_tot, repeatRows=1)
