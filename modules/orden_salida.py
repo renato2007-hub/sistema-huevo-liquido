@@ -583,7 +583,7 @@ def render(db, username, rol):
                 gav_guardado = float(pd.to_numeric(a.get("gavetas", 0), errors="coerce") or 0)
                 gav_curr = gav_guardado
                 if gav_curr <= 0 and kg_nominal_linea > 0 and upg_linea > 0:
-                    gav_curr = math.ceil((nuevo_kg / kg_nominal_linea) / upg_linea)
+                    gav_curr = float(math.ceil((nuevo_kg / kg_nominal_linea) / upg_linea))
                 # gav_curr en la key: mientras no haya un valor guardado propio
                 # (gav_guardado 0), la sugerencia recalculada fuerza una key
                 # nueva (y por lo tanto un widget nuevo con el valor correcto)
