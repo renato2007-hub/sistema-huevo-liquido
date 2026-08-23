@@ -30,17 +30,22 @@ ORDEN_PRODUCTOS = [
 
 KG_POR_CUBETA_DEFAULT = 1.724  # kg líquido por cubeta si no hay categoría configurada (fallback)
 
-# Rendimiento de materia prima segun el producto que se este separando:
-# por cada 100 cubetas se obtienen aprox. 150kg de huevo entero, 95kg de
-# clara y 55kg de yema (95+55=150, cuadra con el total de huevo entero).
+# Rendimiento de materia prima segun el producto que se este separando: por
+# cada cubeta salen aprox. 1.50 kg de huevo entero, o (si se separa) 1.05 kg
+# de clara + 0.54 kg de yema al mismo tiempo (mismos valores por defecto que
+# DEFAULTS_RENDIMIENTO en produccion_semielaborados.py -- si cambian ahi,
+# cambiar tambien aqui).
 RENDIMIENTO_KG_POR_CUBETA = {
     "Huevo entero pasteurizado": 1.50,
     "Huevo entero sin pasteurizar": 1.50,
-    "Clara pasteurizada": 0.95,
-    "Clara sin pasteurizar": 0.95,
-    "Yema pasteurizada": 0.55,
-    "Yema sin pasteurizar": 0.55,
+    "Clara pasteurizada": 1.05,
+    "Clara sin pasteurizar": 1.05,
+    "Yema pasteurizada": 0.54,
+    "Yema sin pasteurizar": 0.54,
 }
+
+TIPOS_CLARA = {"Clara pasteurizada", "Clara sin pasteurizar"}
+TIPOS_YEMA = {"Yema pasteurizada", "Yema sin pasteurizar"}
 
 
 def _p(txt, negrita=False, pequeño=False):
@@ -318,7 +323,25 @@ def _render_planificar(db, username, rol):
     consolidado.sort(key=lambda r: ORDEN_PRODUCTOS.index(r["producto"]) if r["producto"] in ORDEN_PRODUCTOS else 99)
 
     kg_total_dia = sum(r["kg"] for r in consolidado)
-    cubetas_necesarias_total = sum(r["cubetas"] for r in consolidado)
+
+    # Clara y yema salen del MISMO quiebre de huevo (co-productos) -- no se
+    # suman sus cubetas por separado como si fueran dos quiebres distintos.
+    # Se necesitan las cubetas que alcancen para cubrir la demanda MAYOR de
+    # las dos; la otra sale "gratis" del mismo quiebre (con sobrante si su
+    # demanda es menor). Huevo entero es un quiebre aparte, sí se suma normal.
+    kg_clara_total = sum(r["kg"] for r in consolidado if r["producto"] in TIPOS_CLARA)
+    kg_yema_total = sum(r["kg"] for r in consolidado if r["producto"] in TIPOS_YEMA)
+    factor_clara = RENDIMIENTO_KG_POR_CUBETA["Clara pasteurizada"]
+    factor_yema = RENDIMIENTO_KG_POR_CUBETA["Yema pasteurizada"]
+    cubetas_clara_yema = 0.0
+    if kg_clara_total > 0 or kg_yema_total > 0:
+        cubetas_clara_yema = max(kg_clara_total / factor_clara, kg_yema_total / factor_yema)
+
+    cubetas_otros = sum(
+        r["cubetas"] for r in consolidado
+        if r["producto"] not in TIPOS_CLARA and r["producto"] not in TIPOS_YEMA
+    )
+    cubetas_necesarias_total = cubetas_clara_yema + cubetas_otros
     alerta_mp = cubetas_necesarias_total > cubetas_disponibles
 
     # ── VISTA EN PANTALLA ──────────────────────────────────────────────────────
@@ -335,6 +358,58 @@ def _render_planificar(db, username, rol):
         fila_tur["Total"] = [f"{c['kg']:.1f} kg" for c in consolidado]
         st.dataframe(pd.DataFrame(fila_tur), use_container_width=True, hide_index=True)
         st.write("")
+
+    # ── Asignar turno a las líneas de este día ──────────────────────────────
+    with st.container(border=True):
+        st.markdown("##### 🔀 Asignar turno de producción")
+        if turnos_cat.empty:
+            st.caption("Configura al menos un turno en Catálogos → Turnos para poder asignarlos aquí.")
+        else:
+            st.caption(
+                "Indica en qué turno se va a producir cada línea de este día — déjalas "
+                "todas en el mismo turno si ese día solo trabajas uno."
+            )
+            opciones_turno_nombre = ["Sin asignar"] + [mapa_turnos.get(str(t), str(t)) for t in turnos_cat["turno_id"]]
+            mapa_nombre_a_id = {v: k for k, v in mapa_turnos.items()}
+
+            editor_df = pedidos_fecha[
+                ["linea_id", "pedido_id", "cliente_nombre", "tipo_producto", "cantidad_kg", "turno"]
+            ].reset_index(drop=True).copy()
+            editor_df["Turno"] = editor_df["turno"].apply(lambda t: mapa_turnos.get(t, "Sin asignar") if t else "Sin asignar")
+            editor_mostrar = editor_df.rename(columns={
+                "pedido_id": "Pedido", "cliente_nombre": "Cliente",
+                "tipo_producto": "Producto", "cantidad_kg": "Kg",
+            })[["Pedido", "Cliente", "Producto", "Kg", "Turno"]]
+
+            editado = st.data_editor(
+                editor_mostrar,
+                column_config={
+                    "Turno": st.column_config.SelectboxColumn("Turno", options=opciones_turno_nombre, required=True),
+                    "Pedido": st.column_config.TextColumn(disabled=True),
+                    "Cliente": st.column_config.TextColumn(disabled=True),
+                    "Producto": st.column_config.TextColumn(disabled=True),
+                    "Kg": st.column_config.NumberColumn(disabled=True, format="%.1f"),
+                },
+                hide_index=True, use_container_width=True,
+                key=f"turno_editor_{fecha_sel.isoformat()}",
+            )
+            if st.button("💾 Guardar turnos", key="btn_guardar_turnos"):
+                cambios = 0
+                for idx in editor_df.index:
+                    linea_id = editor_df.loc[idx, "linea_id"]
+                    turno_anterior = str(editor_df.loc[idx, "turno"] or "")
+                    turno_nuevo_nombre = editado.loc[idx, "Turno"]
+                    turno_nuevo_id = mapa_nombre_a_id.get(turno_nuevo_nombre, "") if turno_nuevo_nombre != "Sin asignar" else ""
+                    if str(turno_nuevo_id) != turno_anterior:
+                        db.update_row("pedidos_lineas", "linea_id", linea_id, {"turno": turno_nuevo_id})
+                        cambios += 1
+                if cambios:
+                    st.success(f"✅ Turno actualizado en {cambios} línea(s).")
+                    st.rerun()
+                else:
+                    st.info("No hubo cambios de turno para guardar.")
+
+    st.write("")
 
     # Alerta MP
     if alerta_mp:
@@ -379,6 +454,24 @@ def _render_planificar(db, username, rol):
         c3.metric("Cubetas disponibles en bodega", f"{cubetas_disponibles:.0f}",
                   delta=f"{cubetas_disponibles - cubetas_necesarias_total:+.0f}",
                   delta_color="normal" if not alerta_mp else "inverse")
+
+        if kg_clara_total > 0 and kg_yema_total > 0:
+            cubetas_suma_ingenua = (kg_clara_total / factor_clara) + (kg_yema_total / factor_yema)
+            kg_clara_producida = cubetas_clara_yema * factor_clara
+            kg_yema_producida = cubetas_clara_yema * factor_yema
+            sobrante_clara = kg_clara_producida - kg_clara_total
+            sobrante_yema = kg_yema_producida - kg_yema_total
+            texto_sobrante = ""
+            if sobrante_clara > 0.5:
+                texto_sobrante = f" (sobran ~{sobrante_clara:.1f} kg de clara respecto a lo pedido hoy)"
+            elif sobrante_yema > 0.5:
+                texto_sobrante = f" (sobran ~{sobrante_yema:.1f} kg de yema respecto a lo pedido hoy)"
+            st.caption(
+                f"ℹ️ Clara y yema salen del mismo quiebre de huevo, no se suman por separado: "
+                f"se necesitan **{cubetas_clara_yema:.0f} cubetas** para cubrir "
+                f"{kg_clara_total:.1f} kg de clara + {kg_yema_total:.1f} kg de yema"
+                f"{texto_sobrante} — no {cubetas_suma_ingenua:.0f} como saldría sumándolas."
+            )
 
     st.write("")
 
