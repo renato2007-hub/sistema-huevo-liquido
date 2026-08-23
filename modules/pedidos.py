@@ -427,21 +427,60 @@ def render(db, username, rol):
             if pendientes.empty:
                 st.success("🎉 No hay pedidos pendientes de producir.")
             else:
-                st.metric("Kg pendientes de producir", f"{pendientes['cantidad_kg'].sum():,.1f}")
+                pendientes = pendientes.copy()
+                sin_fp_bool = pendientes["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
+                pendientes["fp_estado"] = pendientes["fecha_produccion"].where(~sin_fp_bool, "🔴 Sin asignar")
+
+                col_m1, col_m2 = st.columns(2)
+                col_m1.metric("Kg pendientes de producir", f"{pendientes['cantidad_kg'].sum():,.1f}")
+                col_m2.metric("Sin fecha de producción asignada", f"{int(sin_fp_bool.sum())} de {len(pendientes)}")
+                if sin_fp_bool.any():
+                    st.warning(
+                        f"⚠️ {int(sin_fp_bool.sum())} pedido(s) pendiente(s) todavía no tienen "
+                        f"fecha de producción — asígnala más abajo para que aparezcan en el "
+                        f"calendario de producción."
+                    )
+                else:
+                    st.success("✅ Todos los pedidos pendientes ya tienen fecha de producción asignada.")
+
                 cols_pend = ["pedido_id", "cliente_nombre", "tipo_producto",
                              "presentacion_nombre", "unidades", "cantidad_kg",
-                             "fecha_entrega", "fecha_produccion", "estado_display"]
+                             "fecha_entrega", "fp_estado", "estado_display"]
                 cols_pend = [c for c in cols_pend if c in pendientes.columns]
                 st.dataframe(
                     pendientes[cols_pend].rename(columns={
                         "pedido_id": "Pedido", "cliente_nombre": "Cliente",
                         "tipo_producto": "Producto", "presentacion_nombre": "Presentación",
                         "unidades": "Unidades", "cantidad_kg": "Kg",
-                        "fecha_entrega": "Entrega", "fecha_produccion": "Producción",
+                        "fecha_entrega": "Entrega", "fp_estado": "F. producción",
                         "estado_display": "Estado",
                     }),
                     use_container_width=True, hide_index=True,
                 )
+
+                # -- Asignar fecha de produccion a una linea --
+                st.divider()
+                st.markdown("**📅 Asignar fecha de producción**")
+                lineas_sin_fp = pendientes[
+                    pendientes["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
+                ]
+                if lineas_sin_fp.empty:
+                    st.caption("No hay líneas sin fecha de producción asignada.")
+                else:
+                    linea_fp = st.selectbox(
+                        "Línea",
+                        lineas_sin_fp["linea_id"],
+                        format_func=lambda x: lineas_sin_fp.set_index("linea_id").loc[x, "etiqueta"],
+                        key="lin_fp_sel",
+                    )
+                    nueva_fp = st.date_input(
+                        "Fecha de producción", value=datetime.date.today(), key="lin_fp_fecha",
+                    )
+                    if st.button("💾 Asignar fecha", key="btn_lin_fp"):
+                        db.update_row("pedidos_lineas", "linea_id", linea_fp,
+                                      {"fecha_produccion": nueva_fp.isoformat()})
+                        st.success(f"✅ Fecha de producción asignada a la línea {linea_fp}.")
+                        st.rerun()
 
     # ======================== TODOS LOS PEDIDOS ========================
     with tab_todos:
@@ -501,64 +540,36 @@ def render(db, username, rol):
             if no_can.empty:
                 st.info("No hay líneas activas.")
             else:
-                col_a, col_b = st.columns(2)
-
-                # -- Asignar fecha de produccion a una linea --
-                with col_a:
-                    st.markdown("**📅 Asignar fecha de producción**")
-                    lineas_sin_fp = no_can[
-                        no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
-                        & (~no_can["producido_bool"])
-                    ]
-                    if lineas_sin_fp.empty:
-                        st.caption("No hay líneas sin fecha de producción asignada.")
-                    else:
-                        linea_fp = st.selectbox(
-                            "Línea",
-                            lineas_sin_fp["linea_id"],
-                            format_func=lambda x: lineas_sin_fp.set_index("linea_id").loc[x, "etiqueta"],
-                            key="lin_fp_sel",
-                        )
-                        nueva_fp = st.date_input(
-                            "Fecha de producción", value=datetime.date.today(), key="lin_fp_fecha",
-                        )
-                        if st.button("💾 Asignar fecha", key="btn_lin_fp"):
-                            db.update_row("pedidos_lineas", "linea_id", linea_fp,
-                                          {"fecha_produccion": nueva_fp.isoformat()})
-                            st.success(f"✅ Fecha de producción asignada a la línea {linea_fp}.")
-                            st.rerun()
-
                 # -- Marcar linea como producida --
-                with col_b:
-                    st.markdown("**✅ Marcar línea como producida**")
-                    lineas_no_prod = no_can[~no_can["producido_bool"]]
-                    if lineas_no_prod.empty:
-                        st.caption("Todas las líneas ya están producidas.")
-                    else:
-                        linea_pro = st.selectbox(
-                            "Línea",
-                            lineas_no_prod["linea_id"],
-                            format_func=lambda x: lineas_no_prod.set_index("linea_id").loc[x, "etiqueta"],
-                            key="lin_pro_sel",
-                        )
-                        if st.button("✅ Marcar producida", key="btn_lin_pro"):
-                            db.update_row("pedidos_lineas", "linea_id", linea_pro, {"producido": True})
-                            # Si TODAS las lineas del pedido estan producidas, marcar el pedido tambien
-                            pedido_asoc = lineas_no_prod.set_index("linea_id").loc[linea_pro, "pedido_id"]
-                            todas_lineas_del_pedido = lineas[lineas["pedido_id"] == pedido_asoc]
-                            no_producidas_restantes = todas_lineas_del_pedido[
-                                (todas_lineas_del_pedido["linea_id"] != linea_pro)
-                                & (~todas_lineas_del_pedido["producido_bool"])
-                            ]
-                            if no_producidas_restantes.empty:
-                                db.update_row("pedidos", "pedido_id", pedido_asoc, {"producido": True})
-                                st.success(f"✅ Línea marcada y pedido {pedido_asoc} completado.")
-                            else:
-                                st.success(
-                                    f"✅ Línea marcada — quedan {len(no_producidas_restantes)} "
-                                    f"línea(s) del pedido {pedido_asoc} por producir."
-                                )
-                            st.rerun()
+                st.markdown("**✅ Marcar línea como producida**")
+                lineas_no_prod = no_can[~no_can["producido_bool"]]
+                if lineas_no_prod.empty:
+                    st.caption("Todas las líneas ya están producidas.")
+                else:
+                    linea_pro = st.selectbox(
+                        "Línea",
+                        lineas_no_prod["linea_id"],
+                        format_func=lambda x: lineas_no_prod.set_index("linea_id").loc[x, "etiqueta"],
+                        key="lin_pro_sel",
+                    )
+                    if st.button("✅ Marcar producida", key="btn_lin_pro"):
+                        db.update_row("pedidos_lineas", "linea_id", linea_pro, {"producido": True})
+                        # Si TODAS las lineas del pedido estan producidas, marcar el pedido tambien
+                        pedido_asoc = lineas_no_prod.set_index("linea_id").loc[linea_pro, "pedido_id"]
+                        todas_lineas_del_pedido = lineas[lineas["pedido_id"] == pedido_asoc]
+                        no_producidas_restantes = todas_lineas_del_pedido[
+                            (todas_lineas_del_pedido["linea_id"] != linea_pro)
+                            & (~todas_lineas_del_pedido["producido_bool"])
+                        ]
+                        if no_producidas_restantes.empty:
+                            db.update_row("pedidos", "pedido_id", pedido_asoc, {"producido": True})
+                            st.success(f"✅ Línea marcada y pedido {pedido_asoc} completado.")
+                        else:
+                            st.success(
+                                f"✅ Línea marcada — quedan {len(no_producidas_restantes)} "
+                                f"línea(s) del pedido {pedido_asoc} por producir."
+                            )
+                        st.rerun()
 
             # -- Acciones a nivel PEDIDO: urgente + cancelar --
             st.divider()
