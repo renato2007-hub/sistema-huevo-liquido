@@ -30,7 +30,9 @@ def _tanque_ocupado_por_otro(producciones_df, tanque_id, tipo_producto_nuevo):
     df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
     ocupantes = df[
         (df["tanque_id"].astype(str) == str(tanque_id))
-        & (df["kg_saldo"] > 0)
+        # >= 0.1 (no > 0): igual que en "Inventario de tanques", para ignorar
+        # residuos de redondeo (ej. 0.01 kg) que no son producto real.
+        & (df["kg_saldo"] >= 0.1)
         & (df["tipo_producto"] != tipo_producto_nuevo)
     ]
     if ocupantes.empty:
