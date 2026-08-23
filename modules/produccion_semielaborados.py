@@ -434,8 +434,17 @@ def render(db, username, rol):
         # Todo lo teorico/estimado va en un cuadro aparte, para que se note a
         # simple vista que es informativo (calculado con factores) y no tiene
         # nada que ver con lo real que se va a pesar mas abajo.
-        with st.container(border=True):
-            st.markdown("📐 **Valores teóricos (estimados)** — informativo, no es lo que realmente vas a obtener")
+        st.markdown(
+            """<style>
+            div[class*="st-key-caja_teorico"] {
+                border: 3px solid #FF8C00 !important;
+                border-radius: 8px;
+            }
+            </style>""",
+            unsafe_allow_html=True,
+        )
+        with st.container(border=True, key="caja_teorico"):
+            st.markdown("📐 **Valores teóricos (estimados)**")
 
             col_p1, col_p2, col_p3 = st.columns(3)
             col_p1.metric("🥚 Peso del huevo estimado", f"{peso_huevo_g:.1f} g")
