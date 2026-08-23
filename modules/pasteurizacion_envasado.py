@@ -8,6 +8,7 @@ import datetime
 import streamlit as st
 import pandas as pd
 from modules.bodega_envases_insumos import _saldo_actual
+from utils.costing import costo_ponderado
 from utils.permisos import ve_costos
 
 
@@ -16,7 +17,8 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         st.warning("No hay lotes de semielaborado registrados todavía.")
         return
     semielaborados["kg_saldo"] = pd.to_numeric(semielaborados["kg_saldo"], errors="coerce").fillna(0)
-    disponibles = semielaborados[semielaborados["kg_saldo"] > 0]
+    disponibles = semielaborados[semielaborados["kg_saldo"] > 0].copy()
+    disponibles["tipo_producto"] = disponibles["tipo_producto"].astype(str)
     if disponibles.empty:
         st.warning("No hay saldo disponible en tanques de semielaborado.")
         return
@@ -32,16 +34,14 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         "Turno", turnos["turno_id"],
         format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
     )
-    lote_semielaborado_id = st.selectbox(
-        "Lote de semielaborado",
-        disponibles["lote_semielaborado_id"],
-        format_func=lambda x: (
-            f"{x} — saldo {disponibles.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.2f} kg"
-        ),
+    tipos_disponibles = sorted(disponibles["tipo_producto"].unique().tolist())
+    tipo_producto_sel = st.selectbox("Tipo de producto", tipos_disponibles)
+    pool = disponibles[disponibles["tipo_producto"] == tipo_producto_sel].copy()
+    kg_disponible = round(float(pool["kg_saldo"].sum()), 2)
+    st.info(
+        f"📦 **{kg_disponible:.2f} kg disponibles** de {tipo_producto_sel} en tanques "
+        f"({len(pool)} lote(s) — se descontarán FIFO por fecha de producción al guardar)."
     )
-    fila_lote = disponibles.set_index("lote_semielaborado_id").loc[lote_semielaborado_id]
-    kg_disponible = round(float(fila_lote["kg_saldo"]), 2)
-    costo_unitario_kg = float(fila_lote["costo_unitario_kg"])
 
     presentacion_id = st.selectbox(
         "Presentación",
@@ -83,7 +83,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
     kg_usado = st.number_input(
         "Kg a pasteurizar/envasar", min_value=0.0, max_value=kg_disponible, step=0.01,
-        key=f"kg_usado_{lote_semielaborado_id}",
+        value=kg_disponible, key=f"kg_usado_{tipo_producto_sel}",
     )
     unidades_teoricas = int(kg_usado / kg_nominal) if kg_nominal else 0
     st.caption(f"Unidades teóricas a esa presentación: {unidades_teoricas}")
@@ -134,12 +134,12 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
     # Vencimiento según tipo de producto: Clara pasteurizada 20 días,
     # Huevo entero y Yema pasteurizados 15 días.
-    tipo_producto_lote = str(fila_lote.get("tipo_producto", ""))
+    tipo_producto_lote = tipo_producto_sel
     dias_vencimiento = 20 if "clara" in tipo_producto_lote.lower() else 15
     fecha_vencimiento = st.date_input(
         "Fecha de vencimiento del producto",
         value=fecha + datetime.timedelta(days=dias_vencimiento),
-        key=f"past_venc_{lote_semielaborado_id}_{fecha}",
+        key=f"past_venc_{tipo_producto_sel}_{fecha}",
         help=(
             f"Sugerido: {dias_vencimiento} días para {tipo_producto_lote or 'este producto'} "
             f"(Clara: 20 días — Huevo y Yema: 15 días). Puedes ajustarla si hace falta. "
@@ -150,6 +150,40 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
     observaciones = st.text_area("Observaciones", "", key="past_obs")
 
     if st.button("Guardar lote de envasado"):
+        if kg_usado <= 0:
+            st.error("Ingresa una cantidad de kg mayor a cero.")
+            return
+        # ── Asignación FIFO por fecha de producción entre los tanques del pool ──
+        pool_fifo = pool.copy()
+        pool_fifo["fecha_dt"] = pd.to_datetime(pool_fifo["fecha"], errors="coerce")
+        pool_fifo = pool_fifo.sort_values("fecha_dt", na_position="last")
+
+        detalle_tanques = []
+        restante = kg_usado
+        for _, tanque in pool_fifo.iterrows():
+            if restante <= 0:
+                break
+            saldo = float(tanque["kg_saldo"])
+            if saldo <= 0:
+                continue
+            tomar = min(saldo, restante)
+            detalle_tanques.append({
+                "lote_semielaborado_id": tanque["lote_semielaborado_id"],
+                "cantidad_a_tomar": tomar,
+                "costo_cubeta": float(pd.to_numeric(tanque.get("costo_unitario_kg", 0), errors="coerce") or 0),
+            })
+            restante -= tomar
+
+        if restante > 0.01:
+            st.error(
+                f"No hay suficientes kg en tanques de {tipo_producto_sel} para completar el "
+                f"lote. Faltaron {restante:.2f} kg. Ajusta antes de guardar."
+            )
+            return
+
+        lote_semielaborado_id = detalle_tanques[0]["lote_semielaborado_id"]
+        costo_unitario_kg = costo_ponderado(detalle_tanques)
+
         saldo_envase_previo = _saldo_actual(
             db.get_df("movimientos_envases_insumos"), "envase", presentacion_id
         )
@@ -202,9 +236,26 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
             "observaciones": observaciones,
         })
 
-        db.update_row("produccion_semielaborados", "lote_semielaborado_id", lote_semielaborado_id, {
-            "kg_saldo": round(kg_disponible - kg_usado, 2),
-        })
+        for d in detalle_tanques:
+            cantidad = float(d["cantidad_a_tomar"])
+            costo_unit = float(d["costo_cubeta"])
+            consumo_id = db.siguiente_id("consumo_semi_pasteurizacion", "CSP", fecha)
+            db.append_row("consumo_semi_pasteurizacion", {
+                "consumo_id": consumo_id,
+                "fecha": fecha.isoformat(),
+                "lote_semielaborado_id": d["lote_semielaborado_id"],
+                "lote_producto_id": lote_producto_id,
+                "kg_tomado": cantidad,
+                "costo_unitario_aplicado": costo_unit,
+                "costo_total_aplicado": cantidad * costo_unit,
+                "usuario": username,
+            })
+            fila_tanque = disponibles[disponibles["lote_semielaborado_id"] == d["lote_semielaborado_id"]]
+            if not fila_tanque.empty:
+                saldo_actual = float(fila_tanque.iloc[0]["kg_saldo"])
+                db.update_row("produccion_semielaborados", "lote_semielaborado_id", d["lote_semielaborado_id"], {
+                    "kg_saldo": round(saldo_actual - cantidad, 2),
+                })
 
         movimiento_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
         db.append_row("movimientos_envases_insumos", {
@@ -457,13 +508,25 @@ def render(db, username, rol):
             df_hist["saldo_estado"] = df_hist["unidades_saldo"].apply(
                 lambda s: "✅ Despachado completo" if s == 0 else f"🟡 {int(s)} en stock"
             )
+
+            # Tanques de origen reales de cada lote (puede ser más de uno: pool FIFO
+            # multi-tanque). Se incluye siempre el de referencia (lote_origen) por si
+            # el lote se creó antes de este cambio y no tiene detalle.
+            consumo_semi = db.get_df("consumo_semi_pasteurizacion")
+            origenes_por_lote = {}
+            if not consumo_semi.empty:
+                for lpid, grupo in consumo_semi.groupby("lote_producto_id")["lote_semielaborado_id"]:
+                    origenes_por_lote[lpid] = set(grupo.unique().tolist())
+            for _, fila in df_hist[["lote_producto_id", "lote_origen"]].iterrows():
+                origenes_por_lote.setdefault(fila["lote_producto_id"], set()).add(fila["lote_origen"])
+
             c1, c2 = st.columns(2)
             filtro_tipo = c1.selectbox("Tipo de producto", ["Todos"] + sorted(df_hist["tipo_producto"].unique().tolist()), key="hist_tipo")
             filtro_estado = c2.selectbox("Estado", ["Todos", "En stock", "Despachado completo"], key="hist_estado")
             c3, c4, c5 = st.columns(3)
             desde = c3.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="hist_pe_desde")
             hasta = c4.date_input("Hasta", value=datetime.date.today(), key="hist_pe_hasta")
-            lotes_origen = ["Todos"] + sorted(df_hist["lote_origen"].dropna().unique().tolist())
+            lotes_origen = ["Todos"] + sorted({l for tanques in origenes_por_lote.values() for l in tanques})
             filtro_origen = c5.selectbox("Lote de origen", lotes_origen, key="hist_pe_origen")
             df_mostrar = df_hist.copy()
             if filtro_tipo != "Todos":
@@ -477,7 +540,9 @@ def render(db, username, rol):
                 (df_mostrar["fecha"].astype(str) <= hasta.isoformat())
             ]
             if filtro_origen != "Todos":
-                df_mostrar = df_mostrar[df_mostrar["lote_origen"] == filtro_origen]
+                df_mostrar = df_mostrar[df_mostrar["lote_producto_id"].map(
+                    lambda lpid: filtro_origen in origenes_por_lote.get(lpid, set())
+                )]
             cols_hist = ["lote_producto_id", "fecha", "lote_origen", "tipo_producto",
                          "presentacion_id", "estado", "unidades_reales", "unidades_despachadas", "saldo_estado"]
             st.dataframe(

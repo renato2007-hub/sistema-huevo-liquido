@@ -122,6 +122,10 @@ SHEET_SCHEMAS = {
         "consumo_id", "fecha", "recepcion_id", "lote_semielaborado_id",
         "cubetas_usadas", "costo_unitario_aplicado", "costo_total_aplicado", "usuario",
     ],
+    "consumo_semi_pasteurizacion": [
+        "consumo_id", "fecha", "lote_semielaborado_id", "lote_producto_id",
+        "kg_tomado", "costo_unitario_aplicado", "costo_total_aplicado", "usuario",
+    ],
     "produccion_insumos": [
         "detalle_id", "lote_semielaborado_id", "insumo_id", "cantidad", "costo_calculado",
     ],

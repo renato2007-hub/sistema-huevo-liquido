@@ -99,6 +99,7 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
     limpieza = tablas["limpieza_desinfeccion"]
     areas = tablas["areas_limpieza"]
     pasteurizacion = tablas["pasteurizacion_envasado"]
+    consumo_semi = tablas.get("consumo_semi_pasteurizacion", pd.DataFrame())
     presentaciones = tablas["presentaciones"]
     cf_entradas = tablas["cuarto_frio_entradas"]
     cf_salidas = tablas["cuarto_frio_salidas"]
@@ -287,17 +288,35 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 return recepciones_de(lote_origen, _visitados)
         return []
 
+    def origenes_de_producto(lote_producto_id):
+        """Devuelve los lote_semielaborado_id que realmente alimentaron este
+        lote de pasteurizacion/envasado (puede ser mas de uno, si el lote se
+        armo combinando varios tanques del mismo tipo de producto -- ver
+        consumo_semi_pasteurizacion). Si el lote es anterior a ese cambio y no
+        tiene detalle, cae de vuelta al lote de referencia guardado en la
+        propia fila de pasteurizacion_envasado."""
+        if not consumo_semi.empty:
+            origenes = list(
+                consumo_semi[consumo_semi["lote_producto_id"] == lote_producto_id]["lote_semielaborado_id"].unique()
+            )
+            if origenes:
+                return origenes
+        if pasteurizacion.empty:
+            return []
+        fila_past = pasteurizacion[pasteurizacion["lote_producto_id"] == lote_producto_id]
+        return [fila_past.iloc[0]["lote_semielaborado_id"]] if not fila_past.empty else []
+
     # 1. determinar la(s) recepcion(es) raiz segun donde empezo la consulta
     if tipo_lote == "recepcion":
         recepciones_raiz = [lote_id]
     elif tipo_lote == "semielaborado":
         recepciones_raiz = recepciones_de(lote_id)
     elif tipo_lote == "producto":
-        if pasteurizacion.empty:
-            recepciones_raiz = []
-        else:
-            fila_p = pasteurizacion[pasteurizacion["lote_producto_id"] == lote_id]
-            recepciones_raiz = recepciones_de(fila_p.iloc[0]["lote_semielaborado_id"]) if not fila_p.empty else []
+        recepciones_raiz = []
+        for origen in origenes_de_producto(lote_id):
+            for r in recepciones_de(origen):
+                if r not in recepciones_raiz:
+                    recepciones_raiz.append(r)
     else:
         recepciones_raiz = []
 
@@ -380,19 +399,20 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 ({hermano_inverso} if hermano_inverso else set())
             )}
         elif tipo_lote == "producto":
-            # mostrar solo el lote semielaborado padre del producto consultado
-            if not pasteurizacion.empty:
-                fila_past = pasteurizacion[pasteurizacion["lote_producto_id"] == lote_id]
-                if not fila_past.empty:
-                    lote_semi_padre = fila_past.iloc[0]["lote_semielaborado_id"]
-                    hermano_directo = None
-                    if not produccion.empty:
-                        fp_esp = produccion[produccion["lote_semielaborado_id"] == lote_semi_padre]
-                        if not fp_esp.empty:
-                            hermano_directo = _extraer_lote_hermano(fp_esp.iloc[0].get("observaciones", ""))
-                    lotes_semi = {l for l in lotes_semi if l in (
-                        {lote_semi_padre} | ({hermano_directo} if hermano_directo else set())
-                    )}
+            # mostrar solo los lotes semielaborado que realmente alimentaron
+            # el producto consultado (puede ser mas de uno, si se armo
+            # combinando varios tanques), mas sus hermanos co-producto
+            lotes_semi_padre = set(origenes_de_producto(lote_id))
+            hermanos = set()
+            if not produccion.empty:
+                for padre in lotes_semi_padre:
+                    fp_esp = produccion[produccion["lote_semielaborado_id"] == padre]
+                    if not fp_esp.empty:
+                        h = _extraer_lote_hermano(fp_esp.iloc[0].get("observaciones", ""))
+                        if h:
+                            hermanos.add(h)
+            if lotes_semi_padre:
+                lotes_semi = {l for l in lotes_semi if l in (lotes_semi_padre | hermanos)}
 
         for lid in sorted(lotes_semi):
             fp = produccion[produccion["lote_semielaborado_id"] == lid] if not produccion.empty else pd.DataFrame()
@@ -467,7 +487,17 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 "pasteurizaciones": [],
             }
 
-            lotes_past = pasteurizacion[pasteurizacion["lote_semielaborado_id"] == lid] if not pasteurizacion.empty else pd.DataFrame()
+            ids_past_de_lid = set(
+                pasteurizacion[pasteurizacion["lote_semielaborado_id"] == lid]["lote_producto_id"]
+            ) if not pasteurizacion.empty else set()
+            if not consumo_semi.empty:
+                ids_past_de_lid |= set(
+                    consumo_semi[consumo_semi["lote_semielaborado_id"] == lid]["lote_producto_id"]
+                )
+            lotes_past = (
+                pasteurizacion[pasteurizacion["lote_producto_id"].isin(ids_past_de_lid)]
+                if not pasteurizacion.empty else pd.DataFrame()
+            )
             for _, fpast in lotes_past.iterrows():
                 pres_nombre = fpast.get("presentacion_id", "")
                 kg_nominal = 0.0
@@ -480,12 +510,28 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 unidades_reales = float(pd.to_numeric(_val(fpast, "unidades_reales", 0), errors="coerce") or 0)
                 kg_usado_val = float(pd.to_numeric(_val(fpast, "kg_usado", 0), errors="coerce") or 0)
 
+                # Porcion especifica que salio de ESTE tanque (lid) -- puede ser
+                # menor al total del lote de pasteurizacion si este se armo
+                # combinando varios tanques (pool FIFO). Sin detalle (fila
+                # anterior a ese cambio), se asume que todo vino de este tanque.
+                kg_de_este_lote = kg_usado_val
+                if not consumo_semi.empty:
+                    rel_semi = consumo_semi[
+                        (consumo_semi["lote_producto_id"] == fpast["lote_producto_id"]) &
+                        (consumo_semi["lote_semielaborado_id"] == lid)
+                    ]
+                    if not rel_semi.empty:
+                        kg_de_este_lote = float(
+                            pd.to_numeric(rel_semi["kg_tomado"], errors="coerce").fillna(0).sum()
+                        )
+
                 nodo_past = {
                     "lote_id": fpast["lote_producto_id"],
                     "presentacion": pres_nombre,
                     "fecha": str(_val(fpast, "fecha")),
                     "turno": _nombre_turno(fpast.get("turno", "")),
                     "kg_usado": kg_usado_val,
+                    "kg_de_este_lote": kg_de_este_lote,
                     "unidades": unidades_reales,
                     "kg_nominal": kg_nominal,
                     "kg_empacado": unidades_reales * kg_nominal,
@@ -533,14 +579,23 @@ def construir_arbol_trazabilidad(tablas: dict, tipo_lote: str, lote_id: str) -> 
                 nodo_prod["pasteurizaciones"].append(nodo_past)
 
             # ---- balance de masa de distribucion: pasteurizado = empacado = despachado + en cuarto frio ----
-            kg_pasteurizado = sum(p["kg_usado"] for p in nodo_prod["pasteurizaciones"])
-            kg_empacado = sum(p["kg_empacado"] for p in nodo_prod["pasteurizaciones"])
+            # Si un lote de pasteurizacion se armo combinando varios tanques
+            # (pool FIFO), cuarto frio/despachos no distinguen de cual tanque
+            # vino cada unidad -- se prorratea todo por la proporcion de kg
+            # que realmente aporto ESTE tanque (kg_de_este_lote / kg_usado),
+            # para no duplicar masa cuando el mismo lote de pasteurizacion
+            # aparece bajo mas de un tanque padre.
+            def _prop(p):
+                return p["kg_de_este_lote"] / p["kg_usado"] if p["kg_usado"] > 0 else 0.0
+
+            kg_pasteurizado = sum(p["kg_de_este_lote"] for p in nodo_prod["pasteurizaciones"])
+            kg_empacado = sum(p["kg_empacado"] * _prop(p) for p in nodo_prod["pasteurizaciones"])
             kg_despachado = sum(
-                d["cantidad"] * p["kg_nominal"]
+                d["cantidad"] * p["kg_nominal"] * _prop(p)
                 for p in nodo_prod["pasteurizaciones"] for e in p["entradas_cf"] for d in e["despachos"]
             )
             kg_en_cuarto_frio = sum(
-                e["saldo_actual"] * p["kg_nominal"]
+                e["saldo_actual"] * p["kg_nominal"] * _prop(p)
                 for p in nodo_prod["pasteurizaciones"] for e in p["entradas_cf"]
             )
             nodo_prod["balance_distribucion"] = {

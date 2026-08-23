@@ -221,12 +221,16 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                     f"Pasteurización/envasado: {nodo_past['lote_id']} — {nodo_past['presentacion']}",
                     ESTILOS["Normal"],
                 ))
-                bloque2.append(_tabla_pares([
+                filas_past = [
                     ("Fecha", nodo_past["fecha"]),
                     ("Turno", nodo_past.get("turno", "—")),
                     ("Kg usado", nodo_past["kg_usado"]),
-                    ("Unidades envasadas", nodo_past["unidades"]),
-                ]))
+                ]
+                kg_de_este_lote = nodo_past.get("kg_de_este_lote", nodo_past["kg_usado"])
+                if kg_de_este_lote != nodo_past["kg_usado"]:
+                    filas_past.append(("De los cuales, de este tanque", kg_de_este_lote))
+                filas_past.append(("Unidades envasadas", nodo_past["unidades"]))
+                bloque2.append(_tabla_pares(filas_past))
                 el.append(KeepTogether(bloque2))
                 el.append(Spacer(1, 0.15 * cm))
 

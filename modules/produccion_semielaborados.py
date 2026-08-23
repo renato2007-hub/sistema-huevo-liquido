@@ -1215,8 +1215,13 @@ def render(db, username, rol):
                 envasado_df[envasado_df["lote_semielaborado_id"] == lote_sel]
                 if not envasado_df.empty else envasado_df
             )
+            consumo_semi_df = db.get_df("consumo_semi_pasteurizacion")
+            consumo_semi_rel = (
+                consumo_semi_df[consumo_semi_df["lote_semielaborado_id"] == lote_sel]
+                if not consumo_semi_df.empty else consumo_semi_df
+            )
 
-            if not envasado_rel.empty:
+            if not envasado_rel.empty or not consumo_semi_rel.empty:
                 st.error(
                     "❌ Este lote ya tiene kg consumidos en Pasteurización y envasado, "
                     "así que no se puede eliminar sin dejar inconsistencias en el producto "

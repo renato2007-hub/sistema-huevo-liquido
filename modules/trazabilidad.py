@@ -11,6 +11,7 @@ from utils.pdf_trazabilidad import generar_pdf_trazabilidad
 
 NOMBRES_TABLAS = [
     "recepciones_mp", "consumo_mp_produccion", "produccion_semielaborados",
+    "consumo_semi_pasteurizacion",
     "limpieza_desinfeccion", "areas_limpieza", "pasteurizacion_envasado",
     "presentaciones", "cuarto_frio_entradas", "cuarto_frio_salidas",
     "clientes", "vehiculos", "galpones", "proveedores", "categorias_huevo",
