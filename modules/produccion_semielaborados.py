@@ -414,30 +414,6 @@ def render(db, username, rol):
             factor_liquido_total = factor_clara + factor_yema
             factor_liquido = factor_liquido_total
 
-        # Indicador visual del peso del huevo estimado (sanity check)
-        col_p1, col_p2, col_p3 = st.columns(3)
-        col_p1.metric("🥚 Peso del huevo estimado", f"{peso_huevo_g:.1f} g")
-        col_p2.metric("Kg líquido estimado", f"{cubetas_necesarias * factor_liquido_total:.1f} kg")
-        col_p3.metric(
-            "Kg cáscara estimada",
-            f"{cubetas_necesarias * HUEVOS_POR_CUBETA * gr_cascara / 1000:.1f} kg",
-        )
-
-        # Aviso si el peso del huevo estimado se sale de un rango razonable (45-75 g)
-        if peso_huevo_g > 0 and (peso_huevo_g < 45 or peso_huevo_g > 75):
-            st.warning(
-                f"⚠️ El peso del huevo estimado ({peso_huevo_g:.1f} g) está fuera del "
-                f"rango típico (45-75 g). Revisa los factores — algo puede estar mal."
-            )
-
-        st.caption(
-            "ℹ️ El registro de personal y horas se hace en **👥 Personal y turnos** — "
-            "se enlaza por fecha y turno."
-        )
-        filas_personal_horas = []
-        costo_mano_obra_total = 0.0
-        agua_litros = 0.0
-
         # ================== VALORES TEORICOS (basados en factores) ==================
         # Reemplaza el calculo por categoria: ahora se basa en los factores editables.
         # Se mantiene el diccionario 'teorico' para compatibilidad con el resto del codigo.
@@ -455,13 +431,43 @@ def render(db, username, rol):
         # ahora va por lote y proveedor, no por categoria del huevo.
         categoria_id = ""
 
-        st.markdown("**Valores teóricos calculados** (según cubetas y factores)")
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Bruto teórico (kg)", f"{teorico['kg_teorico_bruto']:.2f}", help="Líquido + cáscara")
-        col2.metric("Líquido teórico (kg)", f"{teorico['kg_liquido_teorico']:.2f}", help="Sin cáscara — compara contra lo real")
-        col3.metric("Clara teórica (kg)", f"{teorico['clara_teorica_kg']:.2f}")
-        col4.metric("Yema teórica (kg)", f"{teorico['yema_teorica_kg']:.2f}")
-        col5.metric("Cáscara teórica (kg)", f"{teorico['cascara_teorica_kg']:.2f}")
+        # Todo lo teorico/estimado va en un cuadro aparte, para que se note a
+        # simple vista que es informativo (calculado con factores) y no tiene
+        # nada que ver con lo real que se va a pesar mas abajo.
+        with st.container(border=True):
+            st.markdown("📐 **Valores teóricos (estimados)** — informativo, no es lo que realmente vas a obtener")
+
+            col_p1, col_p2, col_p3 = st.columns(3)
+            col_p1.metric("🥚 Peso del huevo estimado", f"{peso_huevo_g:.1f} g")
+            col_p2.metric("Kg líquido estimado", f"{cubetas_necesarias * factor_liquido_total:.1f} kg")
+            col_p3.metric(
+                "Kg cáscara estimada",
+                f"{cubetas_necesarias * HUEVOS_POR_CUBETA * gr_cascara / 1000:.1f} kg",
+            )
+
+            # Aviso si el peso del huevo estimado se sale de un rango razonable (45-75 g)
+            if peso_huevo_g > 0 and (peso_huevo_g < 45 or peso_huevo_g > 75):
+                st.warning(
+                    f"⚠️ El peso del huevo estimado ({peso_huevo_g:.1f} g) está fuera del "
+                    f"rango típico (45-75 g). Revisa los factores — algo puede estar mal."
+                )
+
+            st.caption(
+                "ℹ️ El registro de personal y horas se hace en **👥 Personal y turnos** — "
+                "se enlaza por fecha y turno."
+            )
+
+            st.markdown("**Valores teóricos calculados** (según cubetas y factores)")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Bruto teórico (kg)", f"{teorico['kg_teorico_bruto']:.2f}", help="Líquido + cáscara")
+            col2.metric("Líquido teórico (kg)", f"{teorico['kg_liquido_teorico']:.2f}", help="Sin cáscara — compara contra lo real")
+            col3.metric("Clara teórica (kg)", f"{teorico['clara_teorica_kg']:.2f}")
+            col4.metric("Yema teórica (kg)", f"{teorico['yema_teorica_kg']:.2f}")
+            col5.metric("Cáscara teórica (kg)", f"{teorico['cascara_teorica_kg']:.2f}")
+
+        filas_personal_horas = []
+        costo_mano_obra_total = 0.0
+        agua_litros = 0.0
 
         st.markdown("**Valores reales obtenidos** (pesar al final del proceso — compara contra el *líquido* teórico de arriba)")
         st.caption(
