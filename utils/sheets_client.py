@@ -47,7 +47,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-CACHE_TTL = 60  # segundos que se reusa una lectura antes de pedirla de nuevo
+CACHE_TTL = 180  # segundos que se reusa una lectura antes de pedirla de nuevo
 REINTENTOS = 5
 ESPERA_ENTRE_REINTENTOS = 3  # segundos (se duplica con backoff exponencial)
 

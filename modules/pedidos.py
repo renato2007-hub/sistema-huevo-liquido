@@ -482,6 +482,27 @@ def render(db, username, rol):
                         st.success(f"✅ Fecha de producción asignada a la línea {linea_fp}.")
                         st.rerun()
 
+                # -- Revertir fecha de produccion ya asignada (por si fue un error) --
+                st.divider()
+                st.markdown("**↩️ Revertir fecha de producción**")
+                lineas_con_fp = pendientes[~sin_fp_bool]
+                if lineas_con_fp.empty:
+                    st.caption("No hay líneas con fecha de producción asignada todavía.")
+                else:
+                    linea_rev = st.selectbox(
+                        "Línea",
+                        lineas_con_fp["linea_id"],
+                        format_func=lambda x: (
+                            f"{lineas_con_fp.set_index('linea_id').loc[x, 'etiqueta']} "
+                            f"— asignada: {lineas_con_fp.set_index('linea_id').loc[x, 'fecha_produccion']}"
+                        ),
+                        key="lin_rev_sel",
+                    )
+                    if st.button("↩️ Quitar fecha de producción", key="btn_lin_rev"):
+                        db.update_row("pedidos_lineas", "linea_id", linea_rev, {"fecha_produccion": ""})
+                        st.success(f"✅ Fecha de producción quitada de la línea {linea_rev} — ya puedes reasignarla.")
+                        st.rerun()
+
     # ======================== TODOS LOS PEDIDOS ========================
     with tab_todos:
         lineas = _cargar_lineas()
