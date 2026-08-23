@@ -226,15 +226,17 @@ def render(db, username, rol):
             st.caption("La yema que salga también quedará como lote propio en el inventario. Si no hubo yema, deja el campo de yema real en 0 y no se creará ese lote.")
             col_t1, col_t2 = st.columns(2)
             tanque_lote = _selector_tanque("Tanque para la clara (principal)", key="prod_tanque_principal", contenedor=col_t1)
-            tanque_coproducto = _selector_tanque("Tanque para la yema (co-producto)", key="prod_tanque_coprod", contenedor=col_t2)
-            for tq, tp in ((tanque_lote, "Clara"), (tanque_coproducto, "Yema")):
-                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
-                if ocupante:
-                    st.error(
-                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
-                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
-                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
-                    )
+            tanque_coproducto = _selector_tanque("Tanque para la yema (co-producto, solo si hay)", key="prod_tanque_coprod", contenedor=col_t2)
+            # El aviso del tanque principal se muestra ya (siempre se va a usar). El del
+            # co-producto se valida solo al guardar, porque hasta no ingresar los kg reales
+            # más abajo no se sabe si en verdad va a haber yema co-producto que guardar.
+            ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tanque_lote, "Clara")
+            if ocupante:
+                st.error(
+                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                    f"no se puede mezclar con 'Clara'. Usa el otro tanque, pasteuriza y vacía este "
+                    f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                )
         elif tipo_producto == "Yema":
             col_c1, col_c2 = st.columns(2)
             codigo_lote = col_c1.text_input("Código de lote — Yema (principal)", value=sugerir_codigo_lote("Yema", fecha))
@@ -250,15 +252,16 @@ def render(db, username, rol):
             st.caption("La clara que salga también quedará como lote propio en el inventario. Si no hubo clara, deja el campo en 0 y no se creará ese lote.")
             col_t1, col_t2 = st.columns(2)
             tanque_lote = _selector_tanque("Tanque para la yema (principal)", key="prod_tanque_principal", contenedor=col_t1)
-            tanque_coproducto = _selector_tanque("Tanque para la clara (co-producto)", key="prod_tanque_coprod", contenedor=col_t2)
-            for tq, tp in ((tanque_lote, "Yema"), (tanque_coproducto, "Clara")):
-                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
-                if ocupante:
-                    st.error(
-                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
-                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
-                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
-                    )
+            tanque_coproducto = _selector_tanque("Tanque para la clara (co-producto, solo si hay)", key="prod_tanque_coprod", contenedor=col_t2)
+            # Igual que en "Clara": el co-producto solo se valida al guardar, no aquí,
+            # porque todavía no se sabe si va a haber clara co-producto real que guardar.
+            ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tanque_lote, "Yema")
+            if ocupante:
+                st.error(
+                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                    f"no se puede mezclar con 'Yema'. Usa el otro tanque, pasteuriza y vacía este "
+                    f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                )
         else:
             codigo_lote = st.text_input(
                 "Código de lote", value=sugerir_codigo_lote(tipo_producto, fecha),
