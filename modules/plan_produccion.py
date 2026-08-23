@@ -436,7 +436,14 @@ def _render_planificar(db, username, rol):
             with st.container(border=True):
                 st.markdown(f"**{row['producto']}**")
                 st.metric("Kg pedidos", f"{row['kg']:,.1f} kg")
-                st.caption(f"🥚 Cubetas necesarias: {row['cubetas']:.0f}")
+                if row["producto"] in TIPOS_CLARA or row["producto"] in TIPOS_YEMA:
+                    co_producto = "yema" if row["producto"] in TIPOS_CLARA else "clara"
+                    st.caption(
+                        f"🥚 Cubetas necesarias: {cubetas_clara_yema:.0f} "
+                        f"(compartidas con {co_producto} — mismo quiebre)"
+                    )
+                else:
+                    st.caption(f"🥚 Cubetas necesarias: {row['cubetas']:.0f}")
                 if kg_en_cf > 0:
                     st.caption(f"✅ {kg_en_cf:.1f} kg ya en cuarto frío → producir {kg_a_producir:.1f} kg adicionales")
                 else:
