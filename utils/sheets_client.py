@@ -123,7 +123,18 @@ class SheetsDB:
 
     def _ws(self, nombre):
         if nombre not in self._ws_cache:
-            self._ws_cache[nombre] = _con_reintentos(self.sh.worksheet, nombre)
+            import gspread.exceptions
+            try:
+                self._ws_cache[nombre] = _con_reintentos(self.sh.worksheet, nombre)
+            except gspread.exceptions.WorksheetNotFound:
+                # La pestana se agrego al esquema (config.py) despues de que este
+                # proceso ya estaba corriendo con SheetsDB cacheada (st.cache_resource
+                # solo corre _asegurar_esquema una vez por proceso) -- se crea aqui
+                # mismo en vez de esperar a que el servidor reinicie.
+                columnas = SHEET_SCHEMAS[nombre]
+                ws = _con_reintentos(self.sh.add_worksheet, title=nombre, rows=2000, cols=len(columnas) + 2)
+                _con_reintentos(ws.append_row, columnas)
+                self._ws_cache[nombre] = ws
         return self._ws_cache[nombre]
 
     def get_df(self, nombre, forzar_actualizacion: bool = False) -> pd.DataFrame:
