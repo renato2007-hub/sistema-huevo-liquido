@@ -584,9 +584,16 @@ def render(db, username, rol):
                 gav_curr = gav_guardado
                 if gav_curr <= 0 and kg_nominal_linea > 0 and upg_linea > 0:
                     gav_curr = math.ceil((nuevo_kg / kg_nominal_linea) / upg_linea)
+                # gav_curr en la key: mientras no haya un valor guardado propio
+                # (gav_guardado 0), la sugerencia recalculada fuerza una key
+                # nueva (y por lo tanto un widget nuevo con el valor correcto)
+                # cada vez que cambie el kg o se configure unidades_por_gaveta
+                # en Catálogos -- si se dejara la key fija, Streamlit ignora el
+                # nuevo "value" mientras el campo ya tenga algo guardado en la
+                # sesión (por eso antes se quedaba pegado en 0).
                 nuevo_gav = c3.number_input(
                     "Gavetas", min_value=0.0, step=0.1, value=gav_curr, format="%.1f",
-                    key=f"gav_{sk}",
+                    key=f"gav_{sk}_{gav_curr:.1f}",
                     label_visibility="collapsed",
                 )
                 obs_a = c4.text_input(
