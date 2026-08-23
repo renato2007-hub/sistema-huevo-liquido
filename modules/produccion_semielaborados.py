@@ -11,6 +11,32 @@ from utils.horas_trabajo import calcular_horas_sesion
 from utils.permisos import ve_costos, es_admin, es_admin_o_jefe_planta
 from utils.bitacora import log_cambio
 
+OPCIONES_TANQUE = ["T1", "T2", ""]
+NOMBRES_TANQUE = {"T1": "Tanque 1", "T2": "Tanque 2", "": "Sin tanque (va directo a granel)"}
+
+
+def _selector_tanque(label, key, contenedor=None):
+    contenedor = contenedor if contenedor is not None else st
+    return contenedor.selectbox(label, OPCIONES_TANQUE, format_func=lambda x: NOMBRES_TANQUE[x], key=key)
+
+
+def _tanque_ocupado_por_otro(producciones_df, tanque_id, tipo_producto_nuevo):
+    """Si tanque_id ya tiene saldo de un tipo de producto DISTINTO al que se
+    quiere guardar, devuelve (tipo_ocupante, kg_ocupante); si no hay conflicto
+    (tanque vacio, sin tanque asignado, o mismo tipo de producto), (None, None)."""
+    if not tanque_id or producciones_df.empty or "tanque_id" not in producciones_df.columns:
+        return None, None
+    df = producciones_df.copy()
+    df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
+    ocupantes = df[
+        (df["tanque_id"].astype(str) == str(tanque_id))
+        & (df["kg_saldo"] > 0)
+        & (df["tipo_producto"] != tipo_producto_nuevo)
+    ]
+    if ocupantes.empty:
+        return None, None
+    return str(ocupantes.iloc[0]["tipo_producto"]), float(ocupantes["kg_saldo"].sum())
+
 
 def render(db, username, rol):
     st.title("Producción de semielaborados")
@@ -97,14 +123,10 @@ def render(db, username, rol):
                 "(esto permite saber después quién estuvo a cargo de cada lote)."
             )
             return
-        c_turno, c_tanque = st.columns(2)
-        turno_id = c_turno.selectbox(
+        turno_id = st.selectbox(
             "Turno", turnos["turno_id"],
             format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
         )
-        tanque_id = c_tanque.selectbox("Tanque", ["T1", "T2"],
-                                        format_func=lambda x: f"Tanque {'1' if x=='T1' else '2'}",
-                                        key="prod_tanque")
         orden_produccion = st.text_input("Orden de producción", "")
         if orden_produccion:
             producciones_existentes = db.get_df("produccion_semielaborados")
@@ -178,6 +200,17 @@ def render(db, username, rol):
                     st.error(f"⚠️ El código '{codigo}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
                 elif codigo in ids_este_turno:
                     st.warning(f"⚠️ El lote '{codigo}' ya fue registrado en este turno — si es el mismo turno, revisa si es un duplicado.")
+            col_t1, col_t2 = st.columns(2)
+            tanque_clara = _selector_tanque("Tanque para la clara", key="prod_tanque_clara", contenedor=col_t1)
+            tanque_yema = _selector_tanque("Tanque para la yema", key="prod_tanque_yema", contenedor=col_t2)
+            for tq, tp in ((tanque_clara, "Clara"), (tanque_yema, "Yema")):
+                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
+                if ocupante:
+                    st.error(
+                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
+                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                    )
         elif tipo_producto == "Clara":
             col_c1, col_c2 = st.columns(2)
             codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha))
@@ -191,6 +224,17 @@ def render(db, username, rol):
             elif codigo_coproducto in ids_este_turno:
                 st.warning(f"⚠️ El co-producto '{codigo_coproducto}' ya fue registrado en este turno.")
             st.caption("La yema que salga también quedará como lote propio en el inventario. Si no hubo yema, deja el campo de yema real en 0 y no se creará ese lote.")
+            col_t1, col_t2 = st.columns(2)
+            tanque_lote = _selector_tanque("Tanque para la clara (principal)", key="prod_tanque_principal", contenedor=col_t1)
+            tanque_coproducto = _selector_tanque("Tanque para la yema (co-producto)", key="prod_tanque_coprod", contenedor=col_t2)
+            for tq, tp in ((tanque_lote, "Clara"), (tanque_coproducto, "Yema")):
+                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
+                if ocupante:
+                    st.error(
+                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
+                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                    )
         elif tipo_producto == "Yema":
             col_c1, col_c2 = st.columns(2)
             codigo_lote = col_c1.text_input("Código de lote — Yema (principal)", value=sugerir_codigo_lote("Yema", fecha))
@@ -204,6 +248,17 @@ def render(db, username, rol):
             elif codigo_coproducto in ids_este_turno:
                 st.warning(f"⚠️ El co-producto '{codigo_coproducto}' ya fue registrado en este turno.")
             st.caption("La clara que salga también quedará como lote propio en el inventario. Si no hubo clara, deja el campo en 0 y no se creará ese lote.")
+            col_t1, col_t2 = st.columns(2)
+            tanque_lote = _selector_tanque("Tanque para la yema (principal)", key="prod_tanque_principal", contenedor=col_t1)
+            tanque_coproducto = _selector_tanque("Tanque para la clara (co-producto)", key="prod_tanque_coprod", contenedor=col_t2)
+            for tq, tp in ((tanque_lote, "Yema"), (tanque_coproducto, "Clara")):
+                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
+                if ocupante:
+                    st.error(
+                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
+                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                    )
         else:
             codigo_lote = st.text_input(
                 "Código de lote", value=sugerir_codigo_lote(tipo_producto, fecha),
@@ -213,6 +268,15 @@ def render(db, username, rol):
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe — usa otro o ve a '✏️ Corregir / eliminar' si fue un error.")
             elif codigo_lote in ids_este_turno:
                 st.warning(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno — si quieres continuar en otro turno, cambia el turno arriba.")
+            tanque_lote = _selector_tanque("Tanque", key="prod_tanque_principal")
+            tanque_coproducto = ""
+            ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tanque_lote, tipo_producto)
+            if ocupante:
+                st.error(
+                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                    f"no se puede mezclar con '{tipo_producto}'. Usa el otro tanque, pasteuriza y vacía "
+                    f"este primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                )
 
         # Solo recepciones activas (nueva columna 'estado' en la parte 1)
         if "estado" in recepciones.columns:
@@ -515,6 +579,28 @@ def render(db, username, rol):
                     st.error(f"⚠️ El lote '{codigo_lote}' ya fue registrado en este turno ({turno_id}). No se puede duplicar en el mismo turno — si es otra producción, usa otro código o cambia el turno.")
                     return
 
+            # No mezclar productos distintos en un mismo tanque físico.
+            if tipo_producto == "Clara y yema":
+                pares_tanque = [(tanque_clara, "Clara"), (tanque_yema, "Yema")]
+            elif tipo_producto in ("Clara", "Yema"):
+                pares_tanque = [(tanque_lote, tipo_producto)]
+                kg_coprod_check = yema_real_kg if tipo_producto == "Clara" else clara_real_kg
+                tipo_coprod_check = "Yema" if tipo_producto == "Clara" else "Clara"
+                if kg_coprod_check > 0 and codigo_coproducto:
+                    pares_tanque.append((tanque_coproducto, tipo_coprod_check))
+            else:
+                pares_tanque = [(tanque_lote, tipo_producto)]
+
+            for tq, tp in pares_tanque:
+                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
+                if ocupante:
+                    st.error(
+                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
+                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                    )
+                    return
+
             # ================== FIFO ESTRICTO POR FECHA ==================
             # Descuenta las cubetas de las recepciones activas, la mas antigua
             # primero. Genera un registro en consumo_mp_produccion por cada
@@ -623,7 +709,6 @@ def render(db, username, rol):
                 "kg_teorico_bruto": teorico["kg_teorico_bruto"],
                 "agua_litros": agua_litros,
                 "turno": turno_id,
-                "tanque_id": tanque_id,
                 "usuario": username,
             }
 
@@ -641,6 +726,7 @@ def render(db, username, rol):
                     **base_row,
                     "lote_semielaborado_id": codigo_clara,
                     "tipo_producto": "Clara",
+                    "tanque_id": tanque_clara,
                     "kg_liquido_teorico": teorico["clara_teorica_kg"],
                     "kg_real": clara_real_kg,
                     "clara_teorica_kg": teorico["clara_teorica_kg"],
@@ -662,6 +748,7 @@ def render(db, username, rol):
                     **base_row,
                     "lote_semielaborado_id": codigo_yema,
                     "tipo_producto": "Yema",
+                    "tanque_id": tanque_yema,
                     "kg_liquido_teorico": teorico["yema_teorica_kg"],
                     "kg_real": yema_real_kg,
                     "clara_teorica_kg": 0,
@@ -709,6 +796,7 @@ def render(db, username, rol):
                     **base_row,
                     "lote_semielaborado_id": codigo_lote,
                     "tipo_producto": tipo_producto,
+                    "tanque_id": tanque_lote,
                     "kg_liquido_teorico": teorico["kg_liquido_teorico"],
                     "kg_real": kg_real,
                     "clara_teorica_kg": teorico["clara_teorica_kg"],
@@ -735,6 +823,7 @@ def render(db, username, rol):
                         **base_row,
                         "lote_semielaborado_id": codigo_coproducto,
                         "tipo_producto": tipo_coproducto,
+                        "tanque_id": tanque_coproducto,
                         "kg_liquido_teorico": 0,
                         "kg_real": kg_coproducto,
                         "clara_teorica_kg": 0,
@@ -797,7 +886,7 @@ def render(db, username, rol):
                 t = disp[cols_t].copy()
                 t["kg_saldo"] = t["kg_saldo"].round(1)
                 if "tanque_id" in t.columns:
-                    t["tanque_id"] = t["tanque_id"].fillna("Sin asignar")
+                    t["tanque_id"] = t["tanque_id"].fillna("").replace("", "Sin tanque (en granel)")
                 st.dataframe(t, use_container_width=True, hide_index=True)
 
                 st.write("")
