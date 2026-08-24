@@ -149,10 +149,36 @@ def render(db, username, rol):
         else:
             df = salidas.copy()
             df["kg"] = pd.to_numeric(df["kg"], errors="coerce").fillna(0)
+
+            # Lote de origen (SR/R/TK): el que se usa en planta, no el codigo
+            # CASC-xxx -- viene de produccion_cascara via cascara_id_origen.
+            if not prod_cascara.empty and "cascara_id" in prod_cascara.columns:
+                df = df.merge(
+                    prod_cascara[["cascara_id", "lote_semielaborado_origen"]].rename(
+                        columns={"cascara_id": "cascara_id_origen"}
+                    ),
+                    on="cascara_id_origen", how="left",
+                )
+            else:
+                df["lote_semielaborado_origen"] = ""
+            df["lote_semielaborado_origen"] = df["lote_semielaborado_origen"].fillna("—")
+
+            c1, c2 = st.columns(2)
+            desde = c1.date_input(
+                "Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="cas_hist_desde",
+            )
+            hasta = c2.date_input("Hasta", value=datetime.date.today(), key="cas_hist_hasta")
+            df = df[
+                (df["fecha"].astype(str) >= desde.isoformat())
+                & (df["fecha"].astype(str) <= hasta.isoformat())
+            ]
+
             df = df.sort_values("fecha", ascending=False)
             st.dataframe(
-                df[[c for c in ["salida_id", "fecha", "cascara_id_origen", "kg",
-                                "destino", "usuario", "observaciones"] if c in df.columns]],
+                df[[c for c in ["salida_id", "fecha", "cascara_id_origen", "lote_semielaborado_origen",
+                                "kg", "destino", "usuario", "observaciones"] if c in df.columns]].rename(
+                    columns={"lote_semielaborado_origen": "Lote de origen (SR/R/TK)"}
+                ),
                 use_container_width=True, hide_index=True,
             )
-            st.metric("Total enviado (histórico)", f"{df['kg'].sum():,.1f} kg")
+            st.metric("Total enviado (en el rango filtrado)", f"{df['kg'].sum():,.1f} kg")
