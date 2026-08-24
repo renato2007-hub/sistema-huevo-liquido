@@ -527,6 +527,12 @@ def render(db, username, rol):
                 ["Todos"] + sorted(lineas["cliente_nombre"].dropna().unique().tolist()),
                 key="lin_cli",
             )
+            c4, c5 = st.columns(2)
+            desde_ped = c4.date_input(
+                "Desde (fecha del pedido)",
+                value=datetime.date.today() - datetime.timedelta(days=30), key="lin_desde",
+            )
+            hasta_ped = c5.date_input("Hasta (fecha del pedido)", value=datetime.date.today(), key="lin_hasta")
 
             df_mostrar = lineas.copy()
             if filtro_estado != "Cancelados":
@@ -541,6 +547,10 @@ def render(db, username, rol):
                 df_mostrar = df_mostrar[df_mostrar["tipo_producto"] == filtro_producto]
             if filtro_cliente != "Todos":
                 df_mostrar = df_mostrar[df_mostrar["cliente_nombre"] == filtro_cliente]
+            df_mostrar = df_mostrar[
+                (df_mostrar["fecha_pedido"].astype(str) >= desde_ped.isoformat())
+                & (df_mostrar["fecha_pedido"].astype(str) <= hasta_ped.isoformat())
+            ]
 
             cols_show = ["pedido_id", "cliente_nombre", "tipo_producto",
                          "presentacion_nombre", "unidades", "cantidad_kg",
