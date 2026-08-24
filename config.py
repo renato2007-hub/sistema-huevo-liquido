@@ -43,6 +43,7 @@ SHEET_SCHEMAS = {
     "registro_diesel": [
         "diesel_id", "fecha", "uso", "galones", "costo_galon",
         "costo_total", "mj_total", "usuario", "observaciones",
+        "nivel_inicio", "nivel_fin", "galones_agregados",
     ],
     "registro_electricidad": [
         "elec_id", "anio", "mes", "kwh", "costo_total", "mj_total", "usuario", "observaciones",

@@ -17,11 +17,44 @@ USOS_DIESEL         = ["Caldero", "Transporte MP"]
 MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
           "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
 
+CAPACIDAD_TANQUE_DIESEL = 16.0  # galones -- tanque (medidor visual) del caldero
+
 
 def _num(df, col):
     if df.empty or col not in df.columns:
         return pd.Series(dtype=float)
     return pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+
+def _gauge_diesel(titulo, nivel, capacidad):
+    """Barra vertical tipo medidor de tanque (mismo estilo que los tanques de
+    semielaborado), para ver de un vistazo qué tan lleno está el tanque de
+    diésel del caldero al momento de la lectura."""
+    import plotly.graph_objects as go
+    nivel = max(0.0, min(float(nivel), capacidad))
+    libre = capacidad - nivel
+    pct = (nivel / capacidad * 100) if capacidad else 0
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[titulo], y=[nivel], marker_color="#f9a825",
+        text=[f"{nivel:.1f} gal"], textposition="inside", hoverinfo="skip",
+    ))
+    if libre > 0:
+        fig.add_trace(go.Bar(
+            x=[titulo], y=[libre], marker_color="#f0f0f0",
+            text=[f"{libre:.1f} gal libre"], textposition="inside",
+            textfont={"color": "#aaa"}, hoverinfo="skip",
+        ))
+    fig.update_layout(
+        barmode="stack", height=160,
+        title={"text": f"{titulo}: {nivel:.1f}/{capacidad:.0f} gal ({pct:.0f}%)", "x": 0.5, "font": {"size": 12}},
+        showlegend=False,
+        margin={"l": 5, "r": 5, "t": 35, "b": 5},
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        yaxis={"range": [0, capacidad], "showgrid": False, "showticklabels": False},
+        xaxis={"showticklabels": False},
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 def _filtrar(df, desde, hasta):
@@ -47,9 +80,57 @@ def render(db, username, rol):
                 st.markdown("##### ⛽ Registrar consumo de diésel")
                 fecha_d  = st.date_input("Fecha", value=datetime.date.today(), key="d_fecha")
                 uso_d    = st.selectbox("Uso", USOS_DIESEL, key="d_uso")
-                galones  = st.number_input("Galones usados", min_value=0.0, step=0.1, key="d_galones")
                 costo_gl = st.number_input("Costo por galón ($)", min_value=0.0, step=0.01, key="d_costo_galon")
-                obs_d    = st.text_input("Observaciones (opcional)", "", key="d_obs")
+
+                nivel_inicio = 0.0
+                nivel_fin = 0.0
+                galones_agregados = 0.0
+                niveles_invalidos = False
+
+                if uso_d == "Caldero":
+                    st.caption(
+                        f"Tanque del caldero (medidor visual, ~{CAPACIDAD_TANQUE_DIESEL:.0f} gal). "
+                        "Anota el nivel al arrancar el caldero y de nuevo al terminar el turno — "
+                        "el sistema calcula solo cuánto se consumió."
+                    )
+                    nivel_inicio = st.number_input(
+                        "Nivel al inicio del turno (gal)", min_value=0.0,
+                        max_value=CAPACIDAD_TANQUE_DIESEL, step=0.1, key="d_nivel_inicio",
+                    )
+                    _gauge_diesel("Inicio de turno", nivel_inicio, CAPACIDAD_TANQUE_DIESEL)
+
+                    if nivel_inicio <= CAPACIDAD_TANQUE_DIESEL / 3:
+                        st.warning(
+                            f"🟡 El tanque está en el tercio inferior (≤ {CAPACIDAD_TANQUE_DIESEL / 3:.1f} gal) "
+                            "— hay que agregarle diésel."
+                        )
+
+                    se_agrego = st.checkbox(
+                        "¿Se agregó diésel al tanque durante el turno?", key="d_se_agrego",
+                    )
+                    if se_agrego:
+                        galones_agregados = st.number_input(
+                            "Galones agregados al tanque", min_value=0.0, step=0.1, key="d_gal_agregados",
+                        )
+
+                    nivel_fin = st.number_input(
+                        "Nivel al final del turno (gal)", min_value=0.0,
+                        max_value=CAPACIDAD_TANQUE_DIESEL, step=0.1, key="d_nivel_fin",
+                    )
+                    _gauge_diesel("Final de turno", nivel_fin, CAPACIDAD_TANQUE_DIESEL)
+
+                    galones = round(nivel_inicio + galones_agregados - nivel_fin, 2)
+                    if galones < 0:
+                        niveles_invalidos = True
+                        st.error(
+                            f"Los niveles no cuadran: con {nivel_inicio:.1f} gal al inicio + "
+                            f"{galones_agregados:.1f} agregados no se puede terminar en "
+                            f"{nivel_fin:.1f} gal (es más de lo que había disponible). Revisa las lecturas."
+                        )
+                else:
+                    galones = st.number_input("Galones usados", min_value=0.0, step=0.1, key="d_galones")
+
+                obs_d = st.text_input("Observaciones (opcional)", "", key="d_obs")
 
                 costo_total_d = galones * costo_gl
                 mj_total_d    = galones * MJ_POR_GALON_DIESEL
@@ -61,8 +142,10 @@ def render(db, username, rol):
                     )
 
                 if st.button("💾 Registrar", type="primary", use_container_width=True, key="d_guardar"):
-                    if galones <= 0:
-                        st.error("Ingresa una cantidad de galones mayor a cero.")
+                    if niveles_invalidos:
+                        st.error("Corrige los niveles del tanque antes de guardar.")
+                    elif galones <= 0:
+                        st.error("Ingresa una cantidad de galones mayor a cero (o revisa los niveles del tanque).")
                     elif costo_gl <= 0:
                         st.error("Ingresa el costo por galón.")
                     else:
@@ -77,6 +160,9 @@ def render(db, username, rol):
                             "mj_total":     mj_total_d,
                             "usuario":      username,
                             "observaciones":obs_d,
+                            "nivel_inicio": nivel_inicio,
+                            "nivel_fin": nivel_fin,
+                            "galones_agregados": galones_agregados,
                         })
                         st.success(f"✅ {did}: {galones:.2f} gal ({uso_d}) registrados.")
                         st.rerun()
@@ -100,17 +186,25 @@ def render(db, username, rol):
                 if df_dh.empty:
                     st.info("Sin registros en ese período.")
                 else:
-                    for col in ["galones","costo_total","mj_total"]:
-                        df_dh[col] = pd.to_numeric(df_dh[col], errors="coerce").fillna(0)
+                    for col in ["galones","costo_total","mj_total","nivel_inicio","nivel_fin","galones_agregados"]:
+                        if col in df_dh.columns:
+                            df_dh[col] = pd.to_numeric(df_dh[col], errors="coerce").fillna(0)
 
                     m1,m2,m3 = st.columns(3)
                     m1.metric("Total galones", f"{df_dh['galones'].sum():,.2f} gal")
                     m2.metric("Total MJ", f"{df_dh['mj_total'].sum():,.1f} MJ")
                     m3.metric("Costo total", f"${df_dh['costo_total'].sum():,.2f}")
 
+                    cols_hist_d = [c for c in [
+                        "fecha", "uso", "nivel_inicio", "galones_agregados", "nivel_fin",
+                        "galones", "costo_galon", "costo_total", "mj_total", "observaciones",
+                    ] if c in df_dh.columns]
                     st.dataframe(
-                        df_dh[["fecha","uso","galones","costo_galon","costo_total","mj_total","observaciones"]]
-                        .sort_values("fecha", ascending=False),
+                        df_dh[cols_hist_d].rename(columns={
+                            "nivel_inicio": "Nivel inicio (gal)",
+                            "galones_agregados": "Gal. agregados",
+                            "nivel_fin": "Nivel fin (gal)",
+                        }).sort_values("fecha", ascending=False),
                         use_container_width=True, hide_index=True,
                     )
 
