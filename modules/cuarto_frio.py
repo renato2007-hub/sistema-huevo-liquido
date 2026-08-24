@@ -156,16 +156,24 @@ def render(db, username, rol):
                     # a mano entre todos los clientes es lento.
                     clientes["ciudad"] = clientes["ciudad"].fillna("").astype(str).str.strip() if "ciudad" in clientes.columns else ""
                     ciudades_disponibles = sorted({c for c in clientes["ciudad"] if c})
-                    ciudades_sel = st.multiselect(
-                        "🏙️ Filtrar clientes por ciudad de entrega (opcional — elige una o varias)",
-                        ciudades_disponibles, key="desp_ciudades",
-                    ) if ciudades_disponibles else []
-                    if ciudades_sel:
-                        clientes_form = clientes[clientes["ciudad"].isin(ciudades_sel)]
-                        if clientes_form.empty:
-                            st.warning("No hay clientes configurados en esa(s) ciudad(es).")
-                    else:
+                    if not ciudades_disponibles:
+                        st.caption(
+                            "🏙️ Todavía ningún cliente tiene ciudad configurada — "
+                            "carga la ciudad de cada uno en Catálogos → Clientes "
+                            "para poder filtrar aquí."
+                        )
                         clientes_form = clientes
+                    else:
+                        ciudades_sel = st.multiselect(
+                            "🏙️ Filtrar clientes por ciudad de entrega (opcional — elige una o varias)",
+                            ciudades_disponibles, key="desp_ciudades",
+                        )
+                        if ciudades_sel:
+                            clientes_form = clientes[clientes["ciudad"].isin(ciudades_sel)]
+                            if clientes_form.empty:
+                                st.warning("No hay clientes configurados en esa(s) ciudad(es).")
+                        else:
+                            clientes_form = clientes
 
                     ca, cb, cc, cd = st.columns([2, 3, 1, 2])
                     cliente_sel = ca.selectbox("Cliente", ["— Elige —"] + list(clientes_form["nombre"]), key="desp_cliente")
