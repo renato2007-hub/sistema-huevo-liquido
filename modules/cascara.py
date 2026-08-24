@@ -87,7 +87,11 @@ def render(db, username, rol):
                     key="cas_lote",
                 )
                 fila = disponibles.set_index("cascara_id").loc[cascara_id]
-                saldo = float(fila["kg_saldo"])
+                # Redondeado a 1 decimal desde ya -- igual que el ":.1f" del
+                # combo de arriba, para que "Kg a enviar" muestre el mismo
+                # numero que el "saldo X kg" del lote elegido (si no, se ven
+                # como si no coincidieran por mostrar distinta precision).
+                saldo = round(float(fila["kg_saldo"]), 1)
 
                 # key con el cascara_id: si no, al cambiar de lote Streamlit
                 # reusaba el valor del widget anterior (mismo key fijo) en vez
@@ -96,7 +100,7 @@ def render(db, username, rol):
                 # sin enviar (el lote no desaparecia del selector).
                 kg_enviar = st.number_input(
                     "Kg a enviar", min_value=0.0, max_value=saldo, step=0.1,
-                    value=saldo, key=f"cas_kg_{cascara_id}",
+                    value=saldo, format="%.1f", key=f"cas_kg_{cascara_id}",
                 )
                 destino = st.text_input(
                     "Destino", value="Planta biomateriales circulares", key="cas_dest",
