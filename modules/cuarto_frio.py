@@ -151,8 +151,24 @@ def render(db, username, rol):
                 if not opciones_entrada:
                     st.warning("No hay saldo disponible (o todo ya está comprometido en la carga actual).")
                 else:
+                    # Filtro de ciudad(es) para achicar la lista de clientes --
+                    # util cuando la carga reparte en varias ciudades y buscar
+                    # a mano entre todos los clientes es lento.
+                    clientes["ciudad"] = clientes["ciudad"].fillna("").astype(str).str.strip() if "ciudad" in clientes.columns else ""
+                    ciudades_disponibles = sorted({c for c in clientes["ciudad"] if c})
+                    ciudades_sel = st.multiselect(
+                        "🏙️ Filtrar clientes por ciudad de entrega (opcional — elige una o varias)",
+                        ciudades_disponibles, key="desp_ciudades",
+                    ) if ciudades_disponibles else []
+                    if ciudades_sel:
+                        clientes_form = clientes[clientes["ciudad"].isin(ciudades_sel)]
+                        if clientes_form.empty:
+                            st.warning("No hay clientes configurados en esa(s) ciudad(es).")
+                    else:
+                        clientes_form = clientes
+
                     ca, cb, cc, cd = st.columns([2, 3, 1, 2])
-                    cliente_sel = ca.selectbox("Cliente", ["— Elige —"] + list(clientes["nombre"]), key="desp_cliente")
+                    cliente_sel = ca.selectbox("Cliente", ["— Elige —"] + list(clientes_form["nombre"]), key="desp_cliente")
                     entrada_sel = cb.selectbox("Lote / Presentación", opciones_entrada, key="desp_entrada")
                     cantidad_sel = cc.number_input("Cant.", min_value=1, step=1, key="desp_cantidad")
                     pedido_sel = cd.selectbox("Pedido (opcional)", opciones_pedido, key="desp_pedido")

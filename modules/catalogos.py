@@ -306,8 +306,14 @@ def render(db, username, rol):
             ("costo_hora", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Clientes":
+        st.caption(
+            "'Ciudad' se usa en Despacho a cliente para filtrar el selector de "
+            "clientes por ciudad de entrega — escríbela igual entre clientes de "
+            "la misma ciudad (ej. siempre 'Quito', no a veces 'quito')."
+        )
         _seccion_simple(db, "clientes", "Clientes", [
-            ("cliente_id", "texto"), ("nombre", "texto"), ("contacto", "texto"), ("activo", "bool"),
+            ("cliente_id", "texto"), ("nombre", "texto"),
+            ("contacto", "texto"), ("activo", "bool"), ("ciudad", "texto"),
         ])
     elif seccion == "Vehículos":
         _seccion_simple(db, "vehiculos", "Vehículos de reparto", [

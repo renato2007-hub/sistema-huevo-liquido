@@ -120,6 +120,20 @@ class SheetsDB:
                 primer_fila = _con_reintentos(ws.row_values, 1)
                 if not primer_fila:
                     _con_reintentos(ws.append_row, columnas)
+                elif len(columnas) > len(primer_fila) and columnas[:len(primer_fila)] == primer_fila:
+                    # El esquema creció con columnas nuevas AL FINAL (ej. se
+                    # agregó un campo a un catálogo que ya tenía datos). Si no
+                    # se agregan aquí los encabezados que faltan, append_row/
+                    # update_row (que escriben por posición según SHEET_SCHEMAS)
+                    # quedarían desalineados con las columnas reales de la hoja
+                    # y pisarían datos de otra columna existente. Solo se
+                    # autocompleta cuando las columnas ya existentes coinciden
+                    # tal cual como prefijo -- si el esquema se reordenó o
+                    # insertó algo en medio, no se toca nada (hace falta migrar
+                    # a mano).
+                    faltantes = columnas[len(primer_fila):]
+                    rango = rowcol_to_a1(1, len(primer_fila) + 1)
+                    _con_reintentos(ws.update, values=[faltantes], range_name=rango, raw=True)
 
     def _ws(self, nombre):
         if nombre not in self._ws_cache:

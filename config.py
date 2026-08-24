@@ -73,7 +73,7 @@ SHEET_SCHEMAS = {
         "producido", "orden_produccion_vinculada", "observaciones", "turno",
     ],
     "personal": ["personal_id", "nombre", "cargo", "tipo_personal", "costo_hora", "genero", "activo"],
-    "clientes": ["cliente_id", "nombre", "contacto", "activo"],
+    "clientes": ["cliente_id", "nombre", "contacto", "activo", "ciudad"],
     "vehiculos": ["vehiculo_id", "placa", "descripcion", "conductor", "activo"],
     "areas_limpieza": ["area_id", "nombre", "activo"],
     "materiales_limpieza": ["material_id", "nombre", "unidad", "activo"],
