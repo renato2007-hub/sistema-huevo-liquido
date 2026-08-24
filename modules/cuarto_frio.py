@@ -115,6 +115,11 @@ def render(db, username, rol):
                 if not pasteurizado.empty and "lote_producto_id" in pasteurizado.columns and "lote_semielaborado_id" in pasteurizado.columns:
                     mapa_lote_origen = dict(zip(pasteurizado["lote_producto_id"], pasteurizado["lote_semielaborado_id"]))
 
+                mapa_kg_nominal = dict(zip(
+                    presentaciones["presentacion_id"],
+                    pd.to_numeric(presentaciones["kg_nominal"], errors="coerce").fillna(0),
+                )) if not presentaciones.empty else {}
+
                 opciones_entrada = []
                 mapa_entrada = {}
                 mapa_entrada_info = {}
@@ -123,6 +128,7 @@ def render(db, username, rol):
                     if saldo_libre <= 0:
                         continue
                     lote_origen = mapa_lote_origen.get(r.get("lote_producto_id", ""), r.get("lote_origen", ""))
+                    kg_nominal_r = mapa_kg_nominal.get(r["presentacion_id"], 0)
                     etiqueta = f"{r['presentacion_nombre']} | lote: {lote_origen or r['entrada_id']} | disponible: {saldo_libre} | vence: {str(r['fecha_vencimiento'])[:10]}"
                     opciones_entrada.append(etiqueta)
                     mapa_entrada[etiqueta] = r["entrada_id"]
@@ -130,6 +136,7 @@ def render(db, username, rol):
                         "presentacion": r["presentacion_nombre"],
                         "lote_origen": lote_origen or r["entrada_id"],
                         "saldo_libre": saldo_libre,
+                        "kg_libre": saldo_libre * kg_nominal_r,
                     }
 
                 mapa_cliente_id = dict(zip(clientes["nombre"], clientes["cliente_id"]))
@@ -149,6 +156,14 @@ def render(db, username, rol):
                     entrada_sel = cb.selectbox("Lote / Presentación", opciones_entrada, key="desp_entrada")
                     cantidad_sel = cc.number_input("Cant.", min_value=1, step=1, key="desp_cantidad")
                     pedido_sel = cd.selectbox("Pedido (opcional)", opciones_pedido, key="desp_pedido")
+
+                    # Stock disponible del lote/presentación elegido -- para
+                    # cargar viendo en la misma línea cuánto queda, sin tener
+                    # que leerlo del texto del combo de arriba.
+                    info_sel = mapa_entrada_info.get(mapa_entrada.get(entrada_sel), {})
+                    cs1, cs2 = st.columns(2)
+                    cs1.metric("📦 Unidades disponibles", f"{info_sel.get('saldo_libre', 0):,}")
+                    cs2.metric("⚖️ Kg disponibles", f"{info_sel.get('kg_libre', 0):,.1f} kg")
 
                     if st.button("➕ Agregar a la carga", use_container_width=True):
                         if cliente_sel == "— Elige —":
