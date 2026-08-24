@@ -192,10 +192,10 @@ def render(db, username, rol):
         if tipo_producto == "Clara y yema":
             col_codigo1, col_codigo2 = st.columns(2)
             codigo_clara = col_codigo1.text_input(
-                "Código de lote — Clara", value=sugerir_codigo_lote("Clara", fecha),
+                "Código de lote — Clara", value=sugerir_codigo_lote("Clara", fecha, ids_existentes),
             )
             codigo_yema = col_codigo2.text_input(
-                "Código de lote — Yema", value=sugerir_codigo_lote("Yema", fecha),
+                "Código de lote — Yema", value=sugerir_codigo_lote("Yema", fecha, ids_existentes),
             )
             for codigo in (codigo_clara, codigo_yema):
                 if codigo in ids_existentes:
@@ -222,8 +222,8 @@ def render(db, username, rol):
                         )
         elif tipo_producto == "Clara":
             col_c1, col_c2 = st.columns(2)
-            codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha))
-            codigo_coproducto = col_c2.text_input("Código de lote — Yema (co-producto)", value=sugerir_codigo_lote("Yema", fecha))
+            codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha, ids_existentes))
+            codigo_coproducto = col_c2.text_input("Código de lote — Yema (co-producto)", value=sugerir_codigo_lote("Yema", fecha, ids_existentes))
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
             elif codigo_lote in ids_este_turno:
@@ -248,8 +248,8 @@ def render(db, username, rol):
                 )
         elif tipo_producto == "Yema":
             col_c1, col_c2 = st.columns(2)
-            codigo_lote = col_c1.text_input("Código de lote — Yema (principal)", value=sugerir_codigo_lote("Yema", fecha))
-            codigo_coproducto = col_c2.text_input("Código de lote — Clara (co-producto)", value=sugerir_codigo_lote("Clara", fecha))
+            codigo_lote = col_c1.text_input("Código de lote — Yema (principal)", value=sugerir_codigo_lote("Yema", fecha, ids_existentes))
+            codigo_coproducto = col_c2.text_input("Código de lote — Clara (co-producto)", value=sugerir_codigo_lote("Clara", fecha, ids_existentes))
             if codigo_lote in ids_existentes:
                 st.error(f"⚠️ El código '{codigo_lote}' ya existe.")
             elif codigo_lote in ids_este_turno:
@@ -273,7 +273,7 @@ def render(db, username, rol):
                 )
         else:
             codigo_lote = st.text_input(
-                "Código de lote", value=sugerir_codigo_lote(tipo_producto, fecha),
+                "Código de lote", value=sugerir_codigo_lote(tipo_producto, fecha, ids_existentes),
             )
             codigo_coproducto = ""
             if codigo_lote in ids_existentes:

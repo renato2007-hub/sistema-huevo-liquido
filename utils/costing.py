@@ -70,16 +70,28 @@ PREFIJOS_LOTE_SEMIELABORADO = {
 }
 
 
-def sugerir_codigo_lote(tipo_producto: str, fecha) -> str:
+def sugerir_codigo_lote(tipo_producto: str, fecha, ids_existentes=None) -> str:
     """
     Sugiere un codigo de lote inicial siguiendo la convencion de planta:
     SR = huevo entero, R = clara, TK = yema, seguido de la fecha en formato
     DDMMAA (ej. SR190626 para huevo entero producido el 19/06/2026).
     Es solo una SUGERENCIA editable -- quien registra el dato decide el
     codigo final, puede cambiarlo libremente en el formulario.
+
+    Si se pasa ids_existentes (codigos ya usados) y el codigo base ya existe
+    -- por ejemplo, un segundo lote del mismo producto el mismo dia -- prueba
+    con -2, -3, etc. hasta encontrar uno libre, en vez de reofrecer siempre
+    el mismo codigo ya tomado (que antes obligaba a editarlo a mano cada vez
+    y llevaba a errores de "ya existe" confusos).
     """
     prefijo = PREFIJOS_LOTE_SEMIELABORADO.get(tipo_producto, "SR")
-    return f"{prefijo}{fecha.strftime('%d%m%y')}"
+    base = f"{prefijo}{fecha.strftime('%d%m%y')}"
+    if not ids_existentes or base not in ids_existentes:
+        return base
+    n = 2
+    while f"{base}-{n}" in ids_existentes:
+        n += 1
+    return f"{base}-{n}"
 
 
 def rendimiento_teorico(cubetas: float, categoria) -> dict:
