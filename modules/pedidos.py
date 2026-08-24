@@ -592,6 +592,32 @@ def render(db, username, rol):
                             )
                         st.rerun()
 
+                # -- Revertir fecha de produccion (por si fue un error) --
+                st.markdown("**↩️ Revertir fecha de producción**")
+                lineas_con_fp_todos = no_can[
+                    (~no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"]))
+                    & (~no_can["producido_bool"])
+                ]
+                if lineas_con_fp_todos.empty:
+                    st.caption("No hay líneas activas con fecha de producción asignada.")
+                else:
+                    linea_rev_todos = st.selectbox(
+                        "Línea",
+                        lineas_con_fp_todos["linea_id"],
+                        format_func=lambda x: (
+                            f"{lineas_con_fp_todos.set_index('linea_id').loc[x, 'etiqueta']} "
+                            f"— asignada: {lineas_con_fp_todos.set_index('linea_id').loc[x, 'fecha_produccion']}"
+                        ),
+                        key="lin_rev_todos_sel",
+                    )
+                    if st.button("↩️ Quitar fecha de producción", key="btn_lin_rev_todos"):
+                        db.update_row("pedidos_lineas", "linea_id", linea_rev_todos, {"fecha_produccion": ""})
+                        st.success(
+                            f"✅ Fecha de producción quitada de la línea {linea_rev_todos} — "
+                            f"ya puedes reasignarla desde Pendientes de producir."
+                        )
+                        st.rerun()
+
             # -- Acciones a nivel PEDIDO: urgente + cancelar --
             st.divider()
             st.markdown("##### ⚡ Acciones a nivel pedido (afecta todas sus líneas)")
