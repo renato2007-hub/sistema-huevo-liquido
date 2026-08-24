@@ -499,9 +499,14 @@ def render(db, username, rol):
                         key="lin_rev_sel",
                     )
                     if st.button("↩️ Quitar fecha de producción", key="btn_lin_rev"):
-                        db.update_row("pedidos_lineas", "linea_id", linea_rev, {"fecha_produccion": ""})
-                        st.success(f"✅ Fecha de producción quitada de la línea {linea_rev} — ya puedes reasignarla.")
-                        st.rerun()
+                        if db.update_row("pedidos_lineas", "linea_id", linea_rev, {"fecha_produccion": ""}):
+                            st.success(f"✅ Fecha de producción quitada de la línea {linea_rev} — ya puedes reasignarla.")
+                            st.rerun()
+                        else:
+                            st.error(
+                                f"⚠️ No se pudo encontrar la línea '{linea_rev}' para actualizarla -- "
+                                f"no se aplicó ningún cambio."
+                            )
 
     # ======================== TODOS LOS PEDIDOS ========================
     with tab_todos:
@@ -616,27 +621,37 @@ def render(db, username, rol):
                     )
                     if st.button("↩️ Quitar fecha de producción", key="btn_lin_rev_todos"):
                         fila_rev = lineas_con_fp_todos.set_index("linea_id").loc[linea_rev_todos]
+                        estaba_producida = bool(fila_rev["producido_bool"])
                         cambios_rev = {"fecha_produccion": ""}
-                        if fila_rev["producido_bool"]:
+                        if estaba_producida:
                             # Tambien se desmarca como producida -- si no, la
                             # linea queda sin fecha pero invisible en
                             # "Pendientes de producir" (que excluye producidas).
                             cambios_rev["producido"] = False
-                        db.update_row("pedidos_lineas", "linea_id", linea_rev_todos, cambios_rev)
-                        if fila_rev["producido_bool"]:
-                            # Si el pedido completo se habia marcado producido
-                            # por tener todas sus lineas listas, tambien se
-                            # revierte -- ya no es cierto con esta linea de vuelta.
-                            pedido_asoc_rev = fila_rev["pedido_id"]
-                            db.update_row("pedidos", "pedido_id", pedido_asoc_rev, {"producido": False})
-                        msg_rev = (
-                            f"✅ Fecha de producción quitada de la línea {linea_rev_todos} — "
-                            f"ya puedes reasignarla desde Pendientes de producir."
+                        actualizado_rev = db.update_row(
+                            "pedidos_lineas", "linea_id", linea_rev_todos, cambios_rev
                         )
-                        if fila_rev["producido_bool"]:
-                            msg_rev += " También se desmarcó como producida (y el pedido, si estaba completo)."
-                        st.success(msg_rev)
-                        st.rerun()
+                        if not actualizado_rev:
+                            st.error(
+                                f"⚠️ No se pudo encontrar la línea '{linea_rev_todos}' para actualizarla "
+                                f"-- no se aplicó ningún cambio. Puede haber un ID duplicado o inconsistente "
+                                f"en pedidos_lineas; revísalo antes de seguir."
+                            )
+                        else:
+                            if estaba_producida:
+                                # Si el pedido completo se habia marcado producido
+                                # por tener todas sus lineas listas, tambien se
+                                # revierte -- ya no es cierto con esta linea de vuelta.
+                                pedido_asoc_rev = fila_rev["pedido_id"]
+                                db.update_row("pedidos", "pedido_id", pedido_asoc_rev, {"producido": False})
+                            msg_rev = (
+                                f"✅ Fecha de producción quitada de la línea {linea_rev_todos} — "
+                                f"ya puedes reasignarla desde Pendientes de producir."
+                            )
+                            if estaba_producida:
+                                msg_rev += " También se desmarcó como producida (y el pedido, si estaba completo)."
+                            st.success(msg_rev)
+                            st.rerun()
 
             # -- Acciones a nivel PEDIDO: urgente + cancelar --
             st.divider()
