@@ -436,12 +436,15 @@ def render(db, username, rol):
             resumen_unid = inv_kg.groupby(["tipo_producto", "presentacion_nombre"])["saldo"].sum().reset_index()
             resumen_unid = resumen_unid[resumen_unid["saldo"] > 0].sort_values(["tipo_producto", "presentacion_nombre"])
             if not resumen_unid.empty:
-                cols_u = st.columns(len(resumen_unid))
-                for col, (_, fila) in zip(cols_u, resumen_unid.iterrows()):
-                    col.metric(
-                        f"{fila['tipo_producto']}\n{fila['presentacion_nombre']}",
-                        f"{int(fila['saldo'])} unid."
-                    )
+                TARJETAS_POR_FILA = 4
+                filas_unid = list(resumen_unid.iterrows())
+                for inicio in range(0, len(filas_unid), TARJETAS_POR_FILA):
+                    cols_u = st.columns(TARJETAS_POR_FILA)
+                    for col, (_, fila) in zip(cols_u, filas_unid[inicio:inicio + TARJETAS_POR_FILA]):
+                        col.metric(
+                            f"{fila['tipo_producto']} — {fila['presentacion_nombre']}",
+                            f"{int(fila['saldo'])} unid."
+                        )
 
     with tab_granel_cf:
         stock_df = db.get_df("stock_a_granel")
