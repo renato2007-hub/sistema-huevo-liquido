@@ -147,38 +147,48 @@ def render(db, username, rol):
         if salidas.empty:
             st.info("No hay salidas registradas todavía.")
         else:
-            df = salidas.copy()
+            df = salidas.copy().rename(columns={"fecha": "fecha_salida"})
             df["kg"] = pd.to_numeric(df["kg"], errors="coerce").fillna(0)
 
-            # Lote de origen (SR/R/TK): el que se usa en planta, no el codigo
-            # CASC-xxx -- viene de produccion_cascara via cascara_id_origen.
+            # Fecha en que se GENERÓ la cáscara (produccion_cascara.fecha) y
+            # lote de origen (SR/R/TK) -- la trazabilidad real va por cuándo
+            # se produjo, no por cuándo alguien se acordó de sacarla.
             if not prod_cascara.empty and "cascara_id" in prod_cascara.columns:
                 df = df.merge(
-                    prod_cascara[["cascara_id", "lote_semielaborado_origen"]].rename(
-                        columns={"cascara_id": "cascara_id_origen"}
+                    prod_cascara[["cascara_id", "fecha", "lote_semielaborado_origen"]].rename(
+                        columns={"cascara_id": "cascara_id_origen", "fecha": "fecha_generacion"}
                     ),
                     on="cascara_id_origen", how="left",
                 )
             else:
+                df["fecha_generacion"] = ""
                 df["lote_semielaborado_origen"] = ""
             df["lote_semielaborado_origen"] = df["lote_semielaborado_origen"].fillna("—")
+            df["fecha_generacion"] = df["fecha_generacion"].fillna("—")
 
             c1, c2 = st.columns(2)
             desde = c1.date_input(
-                "Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="cas_hist_desde",
+                "Desde (fecha en que se generó la cáscara)",
+                value=datetime.date.today() - datetime.timedelta(days=30), key="cas_hist_desde",
             )
-            hasta = c2.date_input("Hasta", value=datetime.date.today(), key="cas_hist_hasta")
+            hasta = c2.date_input(
+                "Hasta (fecha en que se generó la cáscara)",
+                value=datetime.date.today(), key="cas_hist_hasta",
+            )
             df = df[
-                (df["fecha"].astype(str) >= desde.isoformat())
-                & (df["fecha"].astype(str) <= hasta.isoformat())
+                (df["fecha_generacion"].astype(str) >= desde.isoformat())
+                & (df["fecha_generacion"].astype(str) <= hasta.isoformat())
             ]
 
-            df = df.sort_values("fecha", ascending=False)
+            df = df.sort_values("fecha_generacion", ascending=False)
             st.dataframe(
-                df[[c for c in ["salida_id", "fecha", "cascara_id_origen", "lote_semielaborado_origen",
-                                "kg", "destino", "usuario", "observaciones"] if c in df.columns]].rename(
-                    columns={"lote_semielaborado_origen": "Lote de origen (SR/R/TK)"}
-                ),
+                df[[c for c in ["salida_id", "fecha_generacion", "lote_semielaborado_origen",
+                                "cascara_id_origen", "fecha_salida", "kg", "destino",
+                                "usuario", "observaciones"] if c in df.columns]].rename(columns={
+                    "fecha_generacion": "Fecha generación",
+                    "lote_semielaborado_origen": "Lote de origen (SR/R/TK)",
+                    "fecha_salida": "Fecha salida",
+                }),
                 use_container_width=True, hide_index=True,
             )
             st.metric("Total enviado (en el rango filtrado)", f"{df['kg'].sum():,.1f} kg")
