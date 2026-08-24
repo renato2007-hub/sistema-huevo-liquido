@@ -262,7 +262,7 @@ def render(db, username, rol):
                 except (ValueError, TypeError):
                     fecha_entrega_default = datetime.date.today()
                 fecha_entrega_extra = c5.date_input(
-                    "Fecha de entrega", value=fecha_entrega_default, key="extra_fe",
+                    "Fecha de entrega", value=fecha_entrega_default, key=f"extra_fe_{pedido_extra_id}",
                 )
                 fecha_produccion_extra = c6.date_input(
                     "Fecha de producción (opcional)", value=datetime.date.today(), key="extra_fp",

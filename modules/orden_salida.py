@@ -691,7 +691,12 @@ def render(db, username, rol):
             lote_extra = colm5.text_input("Lote", "", key="man_lote", placeholder="Escribe el lote")
             upg_extra = mapa_upg.get(str(pres_extra_m), 0)
             gav_default = math.ceil(unid_extra_m / upg_extra) if upg_extra > 0 else 0
-            gav_extra = colm6.number_input("Gavetas", min_value=0, step=1, value=int(gav_default), key="man_gav")
+            # key con el valor sugerido: si cambia la presentacion o las
+            # unidades (y por lo tanto la sugerencia), fuerza un campo nuevo
+            # en vez de quedarse pegado a la sugerencia de la seleccion anterior.
+            gav_extra = colm6.number_input(
+                "Gavetas", min_value=0, step=1, value=int(gav_default), key=f"man_gav_{gav_default}",
+            )
             obs_extra_m = st.text_input("Observaciones", "", key="man_obs")
             colm7, _ = st.columns(2)
             colm7.metric("Kg calculados", f"{kg_extra_m:.1f} kg")

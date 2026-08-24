@@ -581,7 +581,7 @@ def _render_planificar(db, username, rol):
                 cant_a_usar = st.number_input(
                     f"Cubetas a usar (recomendadas por el plan: **{cant_default}**)",
                     min_value=0, max_value=total_bodega, step=1,
-                    value=cant_default, key="pmp_cant_total",
+                    value=cant_default, key=f"pmp_cant_total_{fecha_sel.isoformat()}",
                 )
 
                 # Simular el descuento FIFO en vivo (no persiste — solo para mostrar)

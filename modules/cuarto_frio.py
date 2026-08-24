@@ -549,7 +549,7 @@ def render(db, username, rol):
                 key="granel_accion_sel",
             )
             fila_stock = stock_activo2.set_index("stock_id").loc[stock_sel]
-            kg_disp_stock = float(fila_stock["kg_saldo"])
+            kg_disp_stock = round(float(fila_stock["kg_saldo"]), 1)
             tipo_stock = str(fila_stock["tipo_producto"])
             lote_origen_stock = str(fila_stock["lote_origen"])
 
@@ -562,7 +562,7 @@ def render(db, username, rol):
             kg_accion = st.number_input(
                 f"Kg a procesar (máx {kg_disp_stock:.1f} kg)",
                 min_value=min(0.1, kg_disp_stock), max_value=kg_disp_stock, value=kg_disp_stock, step=0.1,
-                key="granel_kg_accion",
+                format="%.1f", key=f"granel_kg_accion_{stock_sel}",
             )
 
             if accion == "🔄 Pasar a producción (próximo turno)":

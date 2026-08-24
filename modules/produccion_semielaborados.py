@@ -512,22 +512,27 @@ def render(db, username, rol):
             default_yema = teorico["yema_teorica_kg"]
         default_cascara = teorico["cascara_teorica_kg"]
 
+        # Las 4 keys incluyen tipo_producto: sin eso, al cambiar "Producto a
+        # obtener" (ej. de Clara a Yema) Streamlit reusaba el valor ya escrito
+        # para el producto anterior en vez de mostrar el nuevo teórico -- se
+        # podia terminar guardando kg reales que en realidad eran del producto
+        # que se tenia seleccionado antes.
         kg_real_input = st.number_input(
             "Kg reales obtenidos (huevo entero o suma líquida)",
             min_value=0.0, step=0.1, value=float(round(default_liquido, 2)),
-            key="prod_kg_real_input",
+            key=f"prod_kg_real_input_{tipo_producto}",
         )
         clara_real_kg = st.number_input(
             "Clara real (kg)", min_value=0.0, step=0.1,
-            value=float(round(default_clara, 2)), key="prod_clara_real",
+            value=float(round(default_clara, 2)), key=f"prod_clara_real_{tipo_producto}",
         )
         yema_real_kg = st.number_input(
             "Yema real (kg)", min_value=0.0, step=0.1,
-            value=float(round(default_yema, 2)), key="prod_yema_real",
+            value=float(round(default_yema, 2)), key=f"prod_yema_real_{tipo_producto}",
         )
         cascara_real_kg = st.number_input(
             "Cáscara real (kg)", min_value=0.0, step=0.1,
-            value=float(round(default_cascara, 2)), key="prod_cascara_real",
+            value=float(round(default_cascara, 2)), key=f"prod_cascara_real_{tipo_producto}",
         )
 
         # kg_real para el SALDO DEL TANQUE depende del tipo de producto que se va a almacenar:
