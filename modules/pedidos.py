@@ -597,31 +597,31 @@ def render(db, username, rol):
                             )
                         st.rerun()
 
-                # -- Revertir fecha de produccion (por si fue un error) --
-                # Sin filtrar por producido_bool: cualquier linea activa con
-                # fecha asignada se puede revertir, sin importar si ya se
-                # marco como producida o si la fecha es futura -- ambas cosas
-                # pueden ser el propio error que se esta corrigiendo.
-                st.markdown("**↩️ Revertir fecha de producción**")
-                lineas_con_fp_todos = no_can[
-                    ~no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
-                ]
+                # -- Revertir fecha de produccion / marca de producido (por si fue un error) --
+                # Muestra la linea si tiene fecha asignada O si quedo marcada
+                # producida (aunque ya no tenga fecha -- puede pasar si se
+                # revirtio la fecha antes de que existiera este arreglo, y
+                # el "producido" se quedo a medias sin desmarcar).
+                st.markdown("**↩️ Revertir fecha de producción / marca de producido**")
+                tiene_fp_todos = ~no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
+                lineas_con_fp_todos = no_can[tiene_fp_todos | no_can["producido_bool"]]
                 if lineas_con_fp_todos.empty:
-                    st.caption("No hay líneas activas con fecha de producción asignada.")
+                    st.caption("No hay líneas con fecha de producción o marca de producido para revertir.")
                 else:
                     linea_rev_todos = st.selectbox(
                         "Línea",
                         lineas_con_fp_todos["linea_id"],
                         format_func=lambda x: (
                             f"{lineas_con_fp_todos.set_index('linea_id').loc[x, 'etiqueta']} "
-                            f"— asignada: {lineas_con_fp_todos.set_index('linea_id').loc[x, 'fecha_produccion']}"
+                            f"— fecha: {lineas_con_fp_todos.set_index('linea_id').loc[x, 'fecha_produccion'] or 'sin asignar'}"
                             + (" (✅ producido)" if lineas_con_fp_todos.set_index('linea_id').loc[x, 'producido_bool'] else "")
                         ),
                         key="lin_rev_todos_sel",
                     )
-                    if st.button("↩️ Quitar fecha de producción", key="btn_lin_rev_todos"):
+                    if st.button("↩️ Revertir esta línea", key="btn_lin_rev_todos"):
                         fila_rev = lineas_con_fp_todos.set_index("linea_id").loc[linea_rev_todos]
                         estaba_producida = bool(fila_rev["producido_bool"])
+                        tenia_fecha = str(fila_rev["fecha_produccion"] or "").strip() not in ("", "nan", "None")
                         cambios_rev = {"fecha_produccion": ""}
                         if estaba_producida:
                             # Tambien se desmarca como producida -- si no, la
@@ -644,13 +644,15 @@ def render(db, username, rol):
                                 # revierte -- ya no es cierto con esta linea de vuelta.
                                 pedido_asoc_rev = fila_rev["pedido_id"]
                                 db.update_row("pedidos", "pedido_id", pedido_asoc_rev, {"producido": False})
-                            msg_rev = (
-                                f"✅ Fecha de producción quitada de la línea {linea_rev_todos} — "
+                            partes_msg = []
+                            if tenia_fecha:
+                                partes_msg.append("se quitó la fecha de producción")
+                            if estaba_producida:
+                                partes_msg.append("se desmarcó como producida (y el pedido, si estaba completo)")
+                            st.success(
+                                f"✅ Línea {linea_rev_todos}: " + " y ".join(partes_msg) + " — "
                                 f"ya puedes reasignarla desde Pendientes de producir."
                             )
-                            if estaba_producida:
-                                msg_rev += " También se desmarcó como producida (y el pedido, si estaba completo)."
-                            st.success(msg_rev)
                             st.rerun()
 
             # -- Acciones a nivel PEDIDO: urgente + cancelar --
