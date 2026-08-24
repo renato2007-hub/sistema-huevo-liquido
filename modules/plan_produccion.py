@@ -46,6 +46,18 @@ RENDIMIENTO_KG_POR_CUBETA = {
 
 TIPOS_CLARA = {"Clara pasteurizada", "Clara sin pasteurizar"}
 TIPOS_YEMA = {"Yema pasteurizada", "Yema sin pasteurizar"}
+PRODUCTOS_BASE = ["Huevo entero", "Clara", "Yema"]
+
+
+def _tipo_base(tipo_pedido: str) -> str:
+    """'Clara pasteurizada' / 'Clara sin pasteurizar' -> 'Clara' -- el tanque
+    de semielaborado no distingue pasteurizado/sin-pasteurizar, esa decision
+    se toma recien al pasteurizar, no al quebrar el huevo."""
+    tipo_str = str(tipo_pedido)
+    for base in PRODUCTOS_BASE:
+        if tipo_str.startswith(base):
+            return base
+    return tipo_str
 
 
 def _p(txt, negrita=False, pequeño=False):
@@ -79,7 +91,7 @@ def _cubetas_de_kg_por_tipo(kg_por_tipo: dict) -> float:
 
 def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
                  cubetas_disponibles, alerta_mp, notas="",
-                 turnos_resumen=None):
+                 turnos_resumen=None, plan_pasteurizacion=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter,
                              topMargin=1.8*cm, bottomMargin=1.8*cm,
@@ -149,6 +161,40 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
             bloque_turno.append(tt)
             bloque_turno.append(Spacer(1, 0.25*cm))
             el.append(KeepTogether(bloque_turno))
+        el.append(Spacer(1, 0.2*cm))
+
+    if plan_pasteurizacion:
+        el.append(Paragraph("Plan de pasteurización por turno", ESTILOS["Heading2"]))
+        el.append(Paragraph(
+            "Parte del saldo real en tanques al momento de armar el plan; "
+            "lo pendiente de un turno se suma al disponible del siguiente.",
+            ESTILOS["Normal"],
+        ))
+        el.append(Spacer(1, 0.15*cm))
+        for tp in plan_pasteurizacion:
+            bloque_p = [Paragraph(f"<b>{tp['turno']}</b>", ESTILOS["Normal"])]
+            datos_p = [[_p(h, negrita=True) for h in
+                        ["Producto", "Disponible", "A pasteurizar", "Pendiente", "Nota"]]]
+            for fila in tp["filas"]:
+                datos_p.append([
+                    _p(fila["producto"]),
+                    _p(f"{fila['disponible']:.1f} kg"),
+                    _p(f"{fila['a_pasteurizar']:.1f} kg"),
+                    _p(f"{fila['pendiente']:.1f} kg" if fila["pendiente"] >= 0.1 else "—"),
+                    _p(fila["nota"] or "—", pequeño=True),
+                ])
+            tp_tabla = Table(datos_p, repeatRows=1, colWidths=[3*cm, 2.5*cm, 2.8*cm, 2.5*cm, 6.2*cm])
+            tp_tabla.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#c62828")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("GRID", (0,0), (-1,-1), 0.3, colors.HexColor("#dddddd")),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f5f5f5")]),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("TOPPADDING", (0,0), (-1,-1), 4),
+            ]))
+            bloque_p.append(tp_tabla)
+            bloque_p.append(Spacer(1, 0.25*cm))
+            el.append(KeepTogether(bloque_p))
         el.append(Spacer(1, 0.2*cm))
 
     mp_texto = (f"Cubetas necesarias: {cubetas_necesarias_total:.0f}  |  "
@@ -323,7 +369,15 @@ def _render_planificar(db, username, rol):
         pedidos_fecha["turno"] = ""
     pedidos_fecha["turno"] = pedidos_fecha["turno"].fillna("").astype(str).str.strip()
 
-    turnos_del_dia = sorted([t for t in pedidos_fecha["turno"].unique() if t and t.lower() not in ("nan", "none")])
+    turnos_con_lineas = {t for t in pedidos_fecha["turno"].unique() if t and t.lower() not in ("nan", "none")}
+    # Orden cronologico (hora_inicio), no alfabetico por turno_id -- importa
+    # para la simulacion corrida de pasteurizacion turno 1 -> turno 2.
+    if not turnos_cat.empty and "hora_inicio" in turnos_cat.columns:
+        orden_turnos_cat = turnos_cat.sort_values("hora_inicio")["turno_id"].astype(str).tolist()
+        turnos_del_dia = [t for t in orden_turnos_cat if t in turnos_con_lineas]
+        turnos_del_dia += sorted(turnos_con_lineas - set(turnos_del_dia))
+    else:
+        turnos_del_dia = sorted(turnos_con_lineas)
     hay_sin_asignar = (pedidos_fecha["turno"] == "").any() or (pedidos_fecha["turno"].str.lower().isin(["nan", "none"])).any()
 
     consolidado = []
@@ -544,6 +598,85 @@ def _render_planificar(db, username, rol):
 
     st.write("")
 
+    # ── Plan de pasteurización por turno ────────────────────────────────────
+    # Separado del plan de QUIEBRE de arriba: cuanto se quiebra y cuanto se
+    # pasteuriza no tienen que coincidir en el mismo turno (a veces un turno
+    # solo termina de quebrar lo que dejo el anterior, o pasteuriza solo
+    # parte y deja el resto para completar despues). Es puramente
+    # informativo -- no escribe nada en Produccion de semielaborados ni en
+    # Pasteurizacion y envasado, solo ayuda a armar la orden del dia.
+    plan_pasteurizacion = []
+    if turnos_del_dia:
+        st.markdown("##### 🔥 Plan de pasteurización por turno")
+        st.caption(
+            "Parte del saldo REAL que hay ahora mismo en los tanques. Por defecto "
+            "sugiere pasteurizar todo lo disponible en cada turno; si dejas algo "
+            "pendiente, se acumula como disponible para el siguiente turno y te "
+            "pide una nota corta de por qué."
+        )
+
+        inventario_tanque_real = {}
+        if not produccion.empty:
+            prod_saldo = produccion.copy()
+            prod_saldo["kg_saldo"] = pd.to_numeric(prod_saldo["kg_saldo"], errors="coerce").fillna(0)
+            prod_saldo = prod_saldo[prod_saldo["kg_saldo"] >= 0.1]
+            inventario_tanque_real = prod_saldo.groupby("tipo_producto")["kg_saldo"].sum().to_dict()
+
+        # Demanda de quiebre por turno, agregada a producto BASE (une las
+        # variantes pasteurizado/sin-pasteurizar de un mismo tanque).
+        demanda_quiebre_turno_base = {}
+        for t in turnos_del_dia:
+            por_base = {}
+            for row in consolidado:
+                base = _tipo_base(row["producto"])
+                kg_t = row["kg_por_turno"].get(t, 0)
+                if kg_t > 0:
+                    por_base[base] = por_base.get(base, 0) + kg_t
+            demanda_quiebre_turno_base[t] = por_base
+
+        disponible_acumulado = dict(inventario_tanque_real)
+        for t in turnos_del_dia:
+            filas_turno = []
+            with st.container(border=True):
+                st.markdown(f"**{mapa_turnos.get(t, t)}**")
+                hubo_filas = False
+                for base in PRODUCTOS_BASE:
+                    quiebre_turno = demanda_quiebre_turno_base.get(t, {}).get(base, 0)
+                    disponible_acumulado[base] = disponible_acumulado.get(base, 0) + quiebre_turno
+                    disp = round(disponible_acumulado[base], 1)
+                    if disp < 0.1:
+                        continue
+                    hubo_filas = True
+                    st.caption(
+                        f"**{base}** — disponible: {disp:.1f} kg "
+                        f"(nuevo de este turno: {quiebre_turno:.1f} kg)"
+                    )
+                    key_base = f"pastplan_{fecha_sel.isoformat()}_{t}_{base}"
+                    a_pasteurizar = st.number_input(
+                        f"Kg de {base} a pasteurizar en {mapa_turnos.get(t, t)}",
+                        min_value=0.0, max_value=disp, value=disp, step=0.5,
+                        key=key_base, label_visibility="collapsed",
+                    )
+                    pendiente = round(disp - a_pasteurizar, 1)
+                    nota = ""
+                    if pendiente >= 0.1:
+                        nota = st.text_input(
+                            f"🟡 Quedan {pendiente:.1f} kg de {base} pendientes — ¿por qué / para qué se completan?",
+                            key=f"pastplan_nota_{fecha_sel.isoformat()}_{t}_{base}",
+                            placeholder="ej. se completa con el quiebre de mañana",
+                        )
+                    filas_turno.append({
+                        "producto": base, "disponible": disp, "quiebre_nuevo": quiebre_turno,
+                        "a_pasteurizar": a_pasteurizar, "pendiente": pendiente, "nota": nota,
+                    })
+                    disponible_acumulado[base] = pendiente
+                if not hubo_filas:
+                    st.caption("Nada disponible para pasteurizar en este turno.")
+            if filas_turno:
+                plan_pasteurizacion.append({"turno": mapa_turnos.get(t, t), "filas": filas_turno})
+
+        st.write("")
+
     # ── Asignación de lotes de MP ────────────────────────────────────────────
     with st.container(border=True):
         st.markdown("##### 🥚 Asignación de lotes de huevo para este día (FIFO automático)")
@@ -718,6 +851,7 @@ def _render_planificar(db, username, rol):
         fecha_sel, consolidado, detalle_lista,
         cubetas_necesarias_total, cubetas_disponibles, alerta_mp,
         notas=notas_input, turnos_resumen=turnos_resumen,
+        plan_pasteurizacion=plan_pasteurizacion,
     )
     st.download_button(
         "📄 Descargar plan del día (PDF)",
