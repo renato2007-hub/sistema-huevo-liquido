@@ -127,11 +127,19 @@ def render(db, username, rol):
                         cambios = {"kg_saldo": nuevo_saldo}
                         if nuevo_saldo < 0.1:
                             cambios["estado"] = "enviado"
-                        db.update_row("produccion_cascara", "cascara_id", cascara_id, cambios)
-                        st.success(
-                            f"✅ Salida {salida_id} registrada — {kg_enviar:.1f} kg "
-                            f"del lote {cascara_id} enviados a {destino}."
-                        )
+                        actualizado = db.update_row("produccion_cascara", "cascara_id", cascara_id, cambios)
+                        if not actualizado:
+                            st.error(
+                                f"⚠️ La salida {salida_id} quedó registrada, pero no se pudo "
+                                f"encontrar el lote '{cascara_id}' para descontarle el saldo — "
+                                f"revísalo a mano en Catálogos/la hoja antes de seguir, porque "
+                                f"va a seguir apareciendo con el saldo viejo."
+                            )
+                        else:
+                            st.success(
+                                f"✅ Salida {salida_id} registrada — {kg_enviar:.1f} kg "
+                                f"del lote {cascara_id} enviados a {destino}."
+                            )
                         st.rerun()
 
     # ============================ HISTORIAL ============================
