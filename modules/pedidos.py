@@ -593,10 +593,13 @@ def render(db, username, rol):
                         st.rerun()
 
                 # -- Revertir fecha de produccion (por si fue un error) --
+                # Sin filtrar por producido_bool: cualquier linea activa con
+                # fecha asignada se puede revertir, sin importar si ya se
+                # marco como producida o si la fecha es futura -- ambas cosas
+                # pueden ser el propio error que se esta corrigiendo.
                 st.markdown("**↩️ Revertir fecha de producción**")
                 lineas_con_fp_todos = no_can[
-                    (~no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"]))
-                    & (~no_can["producido_bool"])
+                    ~no_can["fecha_produccion"].astype(str).str.strip().isin(["", "nan", "None"])
                 ]
                 if lineas_con_fp_todos.empty:
                     st.caption("No hay líneas activas con fecha de producción asignada.")
@@ -607,6 +610,7 @@ def render(db, username, rol):
                         format_func=lambda x: (
                             f"{lineas_con_fp_todos.set_index('linea_id').loc[x, 'etiqueta']} "
                             f"— asignada: {lineas_con_fp_todos.set_index('linea_id').loc[x, 'fecha_produccion']}"
+                            + (" (✅ producido)" if lineas_con_fp_todos.set_index('linea_id').loc[x, 'producido_bool'] else "")
                         ),
                         key="lin_rev_todos_sel",
                     )
