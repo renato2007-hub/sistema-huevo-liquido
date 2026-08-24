@@ -89,9 +89,14 @@ def render(db, username, rol):
                 fila = disponibles.set_index("cascara_id").loc[cascara_id]
                 saldo = float(fila["kg_saldo"])
 
+                # key con el cascara_id: si no, al cambiar de lote Streamlit
+                # reusaba el valor del widget anterior (mismo key fijo) en vez
+                # de mostrar el saldo del lote recien elegido -- por eso el kg
+                # no coincidia con el lote, y a veces quedaba un saldo residual
+                # sin enviar (el lote no desaparecia del selector).
                 kg_enviar = st.number_input(
                     "Kg a enviar", min_value=0.0, max_value=saldo, step=0.1,
-                    value=saldo, key="cas_kg",
+                    value=saldo, key=f"cas_kg_{cascara_id}",
                 )
                 destino = st.text_input(
                     "Destino", value="Planta biomateriales circulares", key="cas_dest",
@@ -116,7 +121,7 @@ def render(db, username, rol):
                         })
                         nuevo_saldo = saldo - kg_enviar
                         cambios = {"kg_saldo": nuevo_saldo}
-                        if nuevo_saldo < 0.01:
+                        if nuevo_saldo < 0.1:
                             cambios["estado"] = "enviado"
                         db.update_row("produccion_cascara", "cascara_id", cascara_id, cambios)
                         st.success(
