@@ -17,7 +17,8 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         st.warning("No hay lotes de semielaborado registrados todavía.")
         return
     semielaborados["kg_saldo"] = pd.to_numeric(semielaborados["kg_saldo"], errors="coerce").fillna(0)
-    disponibles = semielaborados[semielaborados["kg_saldo"] > 0].copy()
+    # >= 0.1 (no > 0): ignora residuos de redondeo de operaciones anteriores.
+    disponibles = semielaborados[semielaborados["kg_saldo"] >= 0.1].copy()
     disponibles["tipo_producto"] = disponibles["tipo_producto"].astype(str)
     if disponibles.empty:
         st.warning("No hay saldo disponible en tanques de semielaborado.")
@@ -430,7 +431,7 @@ def render(db, username, rol):
             st.info("No hay lotes de semielaborado todavía.")
         else:
             semi["kg_saldo"] = pd.to_numeric(semi["kg_saldo"], errors="coerce").fillna(0)
-            semi_disp = semi[semi["kg_saldo"] > 0]
+            semi_disp = semi[semi["kg_saldo"] >= 0.1]
             if semi_disp.empty:
                 st.info("No hay kg disponibles en tanques para trasladar.")
             else:

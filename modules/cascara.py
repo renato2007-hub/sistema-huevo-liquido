@@ -28,7 +28,7 @@ def render(db, username, rol):
             df = prod_cascara.copy()
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
             df["kg"] = pd.to_numeric(df["kg"], errors="coerce").fillna(0)
-            inv = df[df["kg_saldo"] > 0].copy()
+            inv = df[df["kg_saldo"] >= 0.1].copy()
 
             total_producido = float(df["kg"].sum())
             total_saldo = float(inv["kg_saldo"].sum())
@@ -65,7 +65,7 @@ def render(db, username, rol):
         else:
             df = prod_cascara.copy()
             df["kg_saldo"] = pd.to_numeric(df["kg_saldo"], errors="coerce").fillna(0)
-            disponibles = df[df["kg_saldo"] > 0].copy()
+            disponibles = df[df["kg_saldo"] >= 0.1].copy()
 
             if disponibles.empty:
                 st.info("No hay saldo de cáscara disponible para enviar.")

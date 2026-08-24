@@ -457,7 +457,9 @@ def render(db, username, rol):
         else:
             stock_df["kg_saldo"] = pd.to_numeric(stock_df["kg_saldo"], errors="coerce").fillna(0)
             stock_df["kg_inicial"] = pd.to_numeric(stock_df["kg_inicial"], errors="coerce").fillna(0)
-            stock_activo = stock_df[stock_df["kg_saldo"] > 0].copy()
+            # >= 0.1 (no > 0): ignora residuos de redondeo (ej. 1.4e-14) que
+            # quedan cuando en realidad ya se despachó/uso todo el recipiente.
+            stock_activo = stock_df[stock_df["kg_saldo"] >= 0.1].copy()
 
             if stock_activo.empty:
                 st.success("No hay stock a granel activo — todo fue procesado o desechado.")
@@ -491,7 +493,7 @@ def render(db, username, rol):
         stock_df2 = db.get_df("stock_a_granel")
         if not stock_df2.empty:
             stock_df2["kg_saldo"] = pd.to_numeric(stock_df2["kg_saldo"], errors="coerce").fillna(0)
-            stock_activo2 = stock_df2[stock_df2["kg_saldo"] > 0]
+            stock_activo2 = stock_df2[stock_df2["kg_saldo"] >= 0.1]
         else:
             stock_activo2 = pd.DataFrame()
 

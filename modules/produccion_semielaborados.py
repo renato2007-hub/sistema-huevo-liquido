@@ -1010,8 +1010,10 @@ def render(db, username, rol):
                 (df_mostrar["fecha"].astype(str) <= hasta.isoformat())
             ]
 
+            # < 0.1 (no == 0): un lote practicamente vacio puede tener un
+            # residuo de redondeo (ej. 1.4e-14) en vez de un cero exacto.
             df_mostrar["estado"] = df_mostrar["kg_saldo"].apply(
-                lambda s: "✅ Despachado/usado" if s == 0 else f"🟡 {s:.1f} kg en tanque"
+                lambda s: "✅ Despachado/usado" if s < 0.1 else f"🟡 {s:.1f} kg en tanque"
             )
 
             columnas_hist = ["lote_semielaborado_id", "fecha", "tipo_producto", "kg_real", "estado"]
@@ -1024,8 +1026,8 @@ def render(db, username, rol):
             )
             st.caption(
                 f"Total: {len(df_mostrar)} lote(s) | "
-                f"En tanque: {(df_mostrar['kg_saldo'] > 0).sum()} | "
-                f"Despachados/usados: {(df_mostrar['kg_saldo'] == 0).sum()} | "
+                f"En tanque: {(df_mostrar['kg_saldo'] >= 0.1).sum()} | "
+                f"Despachados/usados: {(df_mostrar['kg_saldo'] < 0.1).sum()} | "
                 f"Kg producidos: {df_mostrar['kg_real'].sum():,.1f} kg"
             )
 
@@ -1039,7 +1041,7 @@ def render(db, username, rol):
             st.info("Todavía no hay lotes de semielaborado.")
         else:
             df_disp["kg_saldo"] = pd.to_numeric(df_disp["kg_saldo"], errors="coerce").fillna(0)
-            disponibles_perdida = df_disp[df_disp["kg_saldo"] > 0]
+            disponibles_perdida = df_disp[df_disp["kg_saldo"] >= 0.1]
             if disponibles_perdida.empty:
                 st.info("No hay lotes con saldo disponible para registrar pérdida.")
             else:
