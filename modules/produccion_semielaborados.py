@@ -205,14 +205,21 @@ def render(db, username, rol):
             col_t1, col_t2 = st.columns(2)
             tanque_clara = _selector_tanque("Tanque para la clara", key="prod_tanque_clara", contenedor=col_t1)
             tanque_yema = _selector_tanque("Tanque para la yema", key="prod_tanque_yema", contenedor=col_t2)
-            for tq, tp in ((tanque_clara, "Clara"), (tanque_yema, "Yema")):
-                ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
-                if ocupante:
-                    st.error(
-                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
-                        f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
-                        f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
-                    )
+            if tanque_clara and tanque_clara == tanque_yema:
+                st.error(
+                    f"⚠️ Elegiste {NOMBRES_TANQUE[tanque_clara]} para clara Y para yema — "
+                    f"no se pueden mezclar dos productos distintos en el mismo tanque. Usa un "
+                    f"tanque diferente para uno de los dos, o 'Sin tanque' para el que sobra."
+                )
+            else:
+                for tq, tp in ((tanque_clara, "Clara"), (tanque_yema, "Yema")):
+                    ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
+                    if ocupante:
+                        st.error(
+                            f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                            f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
+                            f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
+                        )
         elif tipo_producto == "Clara":
             col_c1, col_c2 = st.columns(2)
             codigo_lote = col_c1.text_input("Código de lote — Clara (principal)", value=sugerir_codigo_lote("Clara", fecha))
@@ -611,6 +618,23 @@ def render(db, username, rol):
             else:
                 pares_tanque = [(tanque_lote, tipo_producto)]
 
+            # Los productos de ESTE mismo guardado tampoco se pueden mandar al
+            # mismo tanque entre si (ej. Clara y Yema ambas a Tanque 1) -- el
+            # chequeo de abajo solo mira lo que ya existia ANTES de guardar.
+            tanques_usados = {}
+            for tq, tp in pares_tanque:
+                if not tq:
+                    continue
+                if tq in tanques_usados and tanques_usados[tq] != tp:
+                    st.error(
+                        f"⚠️ Elegiste {NOMBRES_TANQUE[tq]} para '{tanques_usados[tq]}' y también "
+                        f"para '{tp}' — no se pueden mezclar dos productos distintos en el mismo "
+                        f"tanque. Usa un tanque diferente para uno de los dos, o 'Sin tanque' para "
+                        f"el que sobra."
+                    )
+                    return
+                tanques_usados[tq] = tp
+
             for tq, tp in pares_tanque:
                 ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
                 if ocupante:
@@ -804,11 +828,11 @@ def render(db, username, rol):
 
                 if ve_costos(rol):
                     st.success(
-                        f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados — "
+                        f"✅ Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados correctamente — "
                         f"costo/kg clara {costo_unit_clara:,.2f}, costo/kg yema {costo_unit_yema:,.2f}"
                     )
                 else:
-                    st.success(f"Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados.")
+                    st.success(f"✅ Lotes {codigo_clara} (clara) y {codigo_yema} (yema) guardados correctamente.")
                 st.rerun()
             else:
                 costo_unitario_kg = costo_total / kg_real if kg_real > 0 else 0
@@ -885,9 +909,9 @@ def render(db, username, rol):
                     msg_lotes += f" + co-producto {codigo_coproducto} ({tipo_coproducto}, {kg_coproducto:.1f} kg)"
 
                 if ve_costos(rol):
-                    st.success(f"Lote {msg_lotes} guardado — costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}")
+                    st.success(f"✅ Lote {msg_lotes} guardado correctamente — costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}")
                 else:
-                    st.success(f"Lote {msg_lotes} guardado.")
+                    st.success(f"✅ Lote {msg_lotes} guardado correctamente.")
                 st.rerun()
 
     with tab_inventario:
