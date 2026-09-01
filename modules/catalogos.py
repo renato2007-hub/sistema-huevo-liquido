@@ -304,10 +304,15 @@ def render(db, username, rol):
             ("liner_id", "texto"), ("nombre", "texto"), ("costo_unitario", "numero"), ("activo", "bool"),
         ])
     elif seccion == "Personal":
+        st.caption(
+            "'Género' es opcional (F, M, o en blanco si prefieres no indicarlo) — "
+            "solo se usa para el desglose de horas por género en el Dashboard."
+        )
         _seccion_simple(db, "personal", "Personal de producción", [
             ("personal_id", "texto"), ("nombre", "texto"), ("cargo", "texto"),
             ("tipo_personal", ["Fijo", "Ocasional"]),
             ("costo_hora", "numero"), ("activo", "bool"),
+            ("genero", ["", "F", "M"]),
         ])
     elif seccion == "Clientes":
         st.caption(
