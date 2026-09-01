@@ -251,7 +251,9 @@ def render(db, username, rol):
                 key="ajuste_item",
             )
             tipo_mov = c2.selectbox("Movimiento", ["entrada", "salida", "merma"], key="ajuste_mov")
-            cantidad = c3.number_input("Cantidad", min_value=1, step=1, key="ajuste_cant")
+            cantidad = c3.number_input(
+                "Cantidad", min_value=0.01, step=0.01, format="%.2f", key="ajuste_cant",
+            )
             motivo   = c4.text_input("Motivo del ajuste", "", key="ajuste_motivo")
 
             fecha_aj = st.date_input("Fecha del ajuste", value=datetime.date.today(), key="ajuste_fecha")
@@ -281,5 +283,5 @@ def render(db, username, rol):
                         "observaciones": f"Ajuste manual: {motivo}",
                     })
                     accion = "ingresadas" if tipo_mov == "entrada" else "descontadas"
-                    st.success(f"✅ {cantidad} unidades {accion} de {item_sel} — motivo: {motivo}")
+                    st.success(f"✅ {cantidad:.2f} unidades {accion} de {item_sel} — motivo: {motivo}")
                     st.rerun()
