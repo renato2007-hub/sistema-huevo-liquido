@@ -27,11 +27,14 @@ def _p(texto, negrita=False):
     return Paragraph(str(texto), estilo)
 
 
-def generar_pdf_horas_personal(filas: list, desde: datetime.date, hasta: datetime.date) -> bytes:
+def generar_pdf_horas_personal(filas: list, desde: datetime.date, hasta: datetime.date,
+                                mostrar_costo: bool = True) -> bytes:
     """
     filas: lista de dicts, uno por persona, con claves: nombre, cargo,
     tipo_personal, trabajo (bool), horas_normales, horas_extras,
     horas_dobles, horas_compensadas, horas_nocturnas, horas_totales, costo.
+    mostrar_costo: si es False, el PDF no incluye la columna "Costo" -- para
+    roles que no deben ver el costo de mano de obra.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -52,11 +55,13 @@ def generar_pdf_horas_personal(filas: list, desde: datetime.date, hasta: datetim
 
     encabezados = [
         "Nombre", "Cargo", "Tipo", "¿Trabajó?", "Normales", "Extras",
-        "Dobles", "Compensadas", "Nocturnas", "Total h", "Costo",
+        "Dobles", "Compensadas", "Nocturnas", "Total h",
     ]
+    if mostrar_costo:
+        encabezados.append("Costo")
     datos = [[_p(h, negrita=True) for h in encabezados]]
     for f in filas:
-        datos.append([
+        fila = [
             _p(f["nombre"]),
             _p(f.get("cargo", "")),
             _p(f.get("tipo_personal", "")),
@@ -67,8 +72,10 @@ def generar_pdf_horas_personal(filas: list, desde: datetime.date, hasta: datetim
             _p(f"{f['horas_compensadas']:.1f}"),
             _p(f"{f.get('horas_nocturnas', 0):.1f}"),
             _p(f"{f['horas_totales']:.1f}"),
-            _p(f"{f['costo']:,.2f}"),
-        ])
+        ]
+        if mostrar_costo:
+            fila.append(_p(f"{f['costo']:,.2f}"))
+        datos.append(fila)
 
     tabla = Table(datos, repeatRows=1)
     estilos_tabla = [

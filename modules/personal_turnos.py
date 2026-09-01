@@ -9,7 +9,7 @@ import pandas as pd
 
 from utils.horas_trabajo import calcular_horas_sesion, clasificar_horas_por_dia, feriados_como_set, compensaciones_como_set
 from utils.pdf_horas_personal import generar_pdf_horas_personal
-from utils.permisos import ve_costos
+from utils.permisos import es_admin
 
 
 def render(db, username, rol):
@@ -179,13 +179,13 @@ def render(db, username, rol):
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Total horas", f"{total_horas:,.1f} h")
                 m2.metric("Horas nocturnas", f"{total_noct:,.1f} h")
-                if ve_costos(rol):
+                if es_admin(rol):
                     m3.metric("Costo mano de obra", f"${total_costo:,.2f}")
 
                 st.write("")
                 cols_mostrar = ["fecha", "nombre", "cargo", "turno_nombre",
                                 "hora_entrada", "hora_salida", "horas", "horas_nocturnas"]
-                if ve_costos(rol):
+                if es_admin(rol):
                     cols_mostrar.append("costo_calculado")
                 st.dataframe(
                     df_filtrado[[c for c in cols_mostrar if c in df_filtrado.columns]].sort_values(["fecha","nombre"]),
@@ -243,7 +243,9 @@ def render(db, username, rol):
                     per_pdf[col] = per_pdf[col].fillna(0)
                 per_pdf["trabajo"] = per_pdf["horas_totales"] > 0
                 registros = per_pdf.reset_index().to_dict("records")
-                pdf_bytes = generar_pdf_horas_personal(registros, desde_pdf, hasta_pdf)
+                pdf_bytes = generar_pdf_horas_personal(
+                    registros, desde_pdf, hasta_pdf, mostrar_costo=es_admin(rol),
+                )
                 st.download_button(
                     "📄 Descargar reporte PDF",
                     data=pdf_bytes,
