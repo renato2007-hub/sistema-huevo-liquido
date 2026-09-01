@@ -475,15 +475,20 @@ def render(db, username, rol):
             resumen_unid = inv_kg.groupby(["tipo_producto", "presentacion_nombre"])["saldo"].sum().reset_index()
             resumen_unid = resumen_unid[resumen_unid["saldo"] > 0].sort_values(["tipo_producto", "presentacion_nombre"])
             if not resumen_unid.empty:
-                TARJETAS_POR_FILA = 4
-                filas_unid = list(resumen_unid.iterrows())
-                for inicio in range(0, len(filas_unid), TARJETAS_POR_FILA):
-                    cols_u = st.columns(TARJETAS_POR_FILA)
-                    for col, (_, fila) in zip(cols_u, filas_unid[inicio:inicio + TARJETAS_POR_FILA]):
-                        col.metric(
-                            f"{fila['tipo_producto']} — {fila['presentacion_nombre']}",
-                            f"{int(fila['saldo'])} unid."
-                        )
+                # Tabla en vez de tarjetas st.metric: con varias combinaciones de
+                # producto/presentación, la fuente grande de metric() se ve
+                # llamativa pero cuesta leer el número exacto -- una tabla
+                # muestra las cantidades en tamaño normal y alineadas.
+                resumen_unid = resumen_unid.copy()
+                resumen_unid["saldo"] = resumen_unid["saldo"].astype(int)
+                st.dataframe(
+                    resumen_unid.rename(columns={
+                        "tipo_producto": "Producto",
+                        "presentacion_nombre": "Presentación",
+                        "saldo": "Unidades",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
 
     with tab_granel_cf:
         stock_df = db.get_df("stock_a_granel")
