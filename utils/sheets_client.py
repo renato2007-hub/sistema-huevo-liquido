@@ -159,9 +159,21 @@ class SheetsDB:
                 return df_cacheado.copy()
 
         ws = self._ws(nombre)
-        registros = _con_reintentos(ws.get_all_records, value_render_option=ValueRenderOption.unformatted)
         columnas = SHEET_SCHEMAS[nombre]
-        df = pd.DataFrame(columns=columnas) if not registros else pd.DataFrame(registros)
+        try:
+            registros = _con_reintentos(ws.get_all_records, value_render_option=ValueRenderOption.unformatted)
+            df = pd.DataFrame(columns=columnas) if not registros else pd.DataFrame(registros)
+        except gspread.exceptions.GSpreadException:
+            # get_all_records() exige encabezados unicos en la fila 1 real de
+            # la hoja; si quedaron duplicados (por una edicion manual, por
+            # ejemplo) tumbaria toda la app. En vez de eso, se leen las
+            # celdas crudas y se arman las columnas POR POSICION segun
+            # SHEET_SCHEMAS -- exactamente como append_row/update_row ya
+            # escriben -- para no depender de los nombres de encabezado.
+            valores = _con_reintentos(ws.get_values, value_render_option=ValueRenderOption.unformatted)
+            filas = valores[1:] if len(valores) > 1 else []
+            filas_normalizadas = [(fila + [""] * len(columnas))[:len(columnas)] for fila in filas]
+            df = pd.DataFrame(filas_normalizadas, columns=columnas) if filas_normalizadas else pd.DataFrame(columns=columnas)
         self._data_cache[nombre] = (ahora, df)
         return df.copy()
 
