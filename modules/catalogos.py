@@ -101,7 +101,11 @@ def _seccion_simple(db, nombre_sheet, titulo, campos):
         with st.form(f"form_editar_{nombre_sheet}_{id_seleccionado}"):
             nuevos_valores = {}
             for col, tipo in campos:
-                valor_actual = fila_actual[col]
+                # .get() en vez de fila_actual[col]: si el esquema (config.py)
+                # tiene una columna que la hoja real de Google Sheets todavia
+                # no tiene (por una migracion que no se aplico), no revienta
+                # la pantalla entera -- ese campo simplemente aparece vacio.
+                valor_actual = fila_actual.get(col, "")
                 if col == id_col:
                     st.text_input(
                         col, value=str(valor_actual), disabled=True,
