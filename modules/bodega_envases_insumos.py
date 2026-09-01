@@ -238,6 +238,8 @@ def render(db, username, rol):
             "Liner de aluminio": (liners, "liner_id"),
         }[tipo_ajuste]
         df_cat, id_col = cat_ajuste
+        # Las tapas no tienen columna "nombre" -- se identifican por "color".
+        col_nombre_ajuste = "color" if tipo_ajuste == "Tapa (PET)" else "nombre"
 
         if df_cat.empty:
             st.info(f"No hay {tipo_ajuste.lower()}s configurados en Catálogos.")
@@ -245,7 +247,7 @@ def render(db, username, rol):
             c1, c2, c3, c4 = st.columns([2, 1, 1, 2])
             item_sel = c1.selectbox(
                 "Ítem", df_cat[id_col],
-                format_func=lambda x: df_cat.set_index(id_col).loc[x, "nombre"],
+                format_func=lambda x: df_cat.set_index(id_col).loc[x, col_nombre_ajuste],
                 key="ajuste_item",
             )
             tipo_mov = c2.selectbox("Movimiento", ["entrada", "salida", "merma"], key="ajuste_mov")
