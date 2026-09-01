@@ -74,13 +74,15 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
         costo_tapa_unitario = float(tapas.set_index("tapa_id").loc[tapa_id, "costo_unitario"])
 
     if etiquetas.empty:
-        st.warning("No hay etiquetas configuradas en Catálogos → Etiquetas.")
-        return
+        st.caption("No hay etiquetas configuradas en Catálogos → Etiquetas — puedes seguir con 'Sin etiqueta'.")
+    opciones_etiqueta = [""] + list(etiquetas["etiqueta_id"])
     etiqueta_id = st.selectbox(
-        "Etiqueta", etiquetas["etiqueta_id"],
-        format_func=lambda x: etiquetas.set_index("etiqueta_id").loc[x, "nombre"],
+        "Etiqueta", opciones_etiqueta,
+        format_func=lambda x: "Sin etiqueta" if x == "" else etiquetas.set_index("etiqueta_id").loc[x, "nombre"],
     )
-    costo_etiqueta_unitario = float(etiquetas.set_index("etiqueta_id").loc[etiqueta_id, "costo_unitario"])
+    costo_etiqueta_unitario = (
+        float(etiquetas.set_index("etiqueta_id").loc[etiqueta_id, "costo_unitario"]) if etiqueta_id else 0.0
+    )
 
     kg_usado = st.number_input(
         "Kg a pasteurizar/envasar", min_value=0.0, max_value=kg_disponible, step=0.01,
@@ -296,27 +298,28 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
                 "observaciones": lote_producto_id,
             })
 
-        saldo_etiqueta_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "etiqueta", etiqueta_id)
-        if unidades_reales > saldo_etiqueta_previo:
-            st.warning(
-                f"⚠️ Hay {saldo_etiqueta_previo:.0f} etiquetas de este tipo en bodega, pero estás "
-                f"usando {unidades_reales:.0f}. Se va a guardar igual, pero revisa si falta "
-                f"registrar una compra de etiquetas."
-            )
-        movimiento_etiqueta_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
-        db.append_row("movimientos_envases_insumos", {
-            "movimiento_id": movimiento_etiqueta_id,
-            "fecha": fecha.isoformat(),
-            "item_tipo": "etiqueta",
-            "item_id": etiqueta_id,
-            "tipo_movimiento": "salida",
-            "cantidad": unidades_reales,
-            "costo_unitario": costo_etiqueta_unitario,
-            "costo_total": costo_etiquetas,
-            "modulo_destino": "Pasteurización y envasado",
-            "usuario": username,
-            "observaciones": lote_producto_id,
-        })
+        if etiqueta_id:
+            saldo_etiqueta_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "etiqueta", etiqueta_id)
+            if unidades_reales > saldo_etiqueta_previo:
+                st.warning(
+                    f"⚠️ Hay {saldo_etiqueta_previo:.0f} etiquetas de este tipo en bodega, pero estás "
+                    f"usando {unidades_reales:.0f}. Se va a guardar igual, pero revisa si falta "
+                    f"registrar una compra de etiquetas."
+                )
+            movimiento_etiqueta_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha)
+            db.append_row("movimientos_envases_insumos", {
+                "movimiento_id": movimiento_etiqueta_id,
+                "fecha": fecha.isoformat(),
+                "item_tipo": "etiqueta",
+                "item_id": etiqueta_id,
+                "tipo_movimiento": "salida",
+                "cantidad": unidades_reales,
+                "costo_unitario": costo_etiqueta_unitario,
+                "costo_total": costo_etiquetas,
+                "modulo_destino": "Pasteurización y envasado",
+                "usuario": username,
+                "observaciones": lote_producto_id,
+            })
 
         if usa_carton and cantidad_cartones > 0:
             saldo_carton_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "carton", carton_id)
