@@ -60,18 +60,22 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
     if not pasteurizado:
         st.caption("⚠️ Se va a registrar como **sin pasteurizar** — clara/huevo crudo directo del tanque.")
 
+    # La tapa ya no esta atada solo a envases PET -- algunas presentaciones
+    # en funda (ej. Funda 5.0Kg) tambien pueden llevar tapa (ej. "Tapas
+    # blancas"), asi que queda como selector opcional para cualquier
+    # presentacion, con "Sin tapa" quien no la necesite.
     es_pet = str(fila_pres.get("tipo_envase", "")).strip() == "PET"
-    tapa_id = ""
-    costo_tapa_unitario = 0.0
-    if es_pet:
-        if tapas.empty:
-            st.warning("Esta presentación es PET pero no hay tapas configuradas en Catálogos → Tapas (PET).")
-            return
-        tapa_id = st.selectbox(
-            "Color de tapa", tapas["tapa_id"],
-            format_func=lambda x: tapas.set_index("tapa_id").loc[x, "color"],
-        )
-        costo_tapa_unitario = float(tapas.set_index("tapa_id").loc[tapa_id, "costo_unitario"])
+    if tapas.empty:
+        st.caption("No hay tapas configuradas en Catálogos → Tapas — puedes seguir con 'Sin tapa'.")
+    opciones_tapa = [""] + list(tapas["tapa_id"])
+    tapa_id = st.selectbox(
+        "Tapa", opciones_tapa,
+        format_func=lambda x: "Sin tapa" if x == "" else tapas.set_index("tapa_id").loc[x, "color"],
+        index=(1 if es_pet and not tapas.empty else 0),
+    )
+    costo_tapa_unitario = (
+        float(tapas.set_index("tapa_id").loc[tapa_id, "costo_unitario"]) if tapa_id else 0.0
+    )
 
     if etiquetas.empty:
         st.caption("No hay etiquetas configuradas en Catálogos → Etiquetas — puedes seguir con 'Sin etiqueta'.")
@@ -198,7 +202,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
             )
         costo_semielaborado = kg_usado * costo_unitario_kg
         costo_envases = unidades_reales * costo_envase_unitario
-        costo_tapas = unidades_reales * costo_tapa_unitario if es_pet else 0.0
+        costo_tapas = unidades_reales * costo_tapa_unitario if tapa_id else 0.0
         costo_etiquetas = unidades_reales * costo_etiqueta_unitario
         costo_cartones = cantidad_cartones * costo_carton_unitario if usa_carton else 0.0
         costo_liners = unidades_reales * costo_liner_unitario if usa_liner else 0.0
@@ -275,7 +279,7 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
             "observaciones": lote_producto_id,
         })
 
-        if es_pet:
+        if tapa_id:
             saldo_tapa_previo = _saldo_actual(db.get_df("movimientos_envases_insumos"), "tapa", tapa_id)
             if unidades_reales > saldo_tapa_previo:
                 st.warning(
