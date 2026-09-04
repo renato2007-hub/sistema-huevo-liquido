@@ -9,7 +9,8 @@ import streamlit as st
 import pandas as pd
 from modules.bodega_envases_insumos import _saldo_actual
 from utils.costing import costo_ponderado
-from utils.permisos import ve_costos
+from utils.permisos import ve_costos, puede_corregir_produccion
+from utils.bitacora import log_cambio
 
 
 def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos, tapas, etiquetas, cartones, liners):
@@ -398,12 +399,128 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
 
 
+def _render_corregir(db, username, rol, semielaborados, presentaciones):
+    if not puede_corregir_produccion(rol):
+        st.error("🔒 Esta función está disponible solo para administrador, jefe de planta y supervisor.")
+        return
+    st.caption(
+        "Si te equivocaste al registrar un lote de envasado, NO lo vuelvas a registrar "
+        "encima — elimínalo aquí primero (esto devuelve automáticamente los kg al tanque "
+        "de semielaborado y los envases/tapas/etiquetas/cartones/liners a bodega), y luego "
+        "regístralo de nuevo bien en 'Nuevo lote envasado'."
+    )
+    df_prod = db.get_df("pasteurizacion_envasado")
+    if df_prod.empty:
+        st.info("No hay lotes de envasado registrados todavía.")
+        return
+
+    lote_sel = st.selectbox(
+        "Selecciona el lote a corregir", df_prod["lote_producto_id"], key="corregir_envasado_select",
+    )
+    fila_sel = df_prod[df_prod["lote_producto_id"] == lote_sel].iloc[0]
+    presentacion_nombre = lote_sel
+    if not presentaciones.empty and fila_sel["presentacion_id"] in presentaciones["presentacion_id"].values:
+        presentacion_nombre = presentaciones.set_index("presentacion_id").loc[
+            fila_sel["presentacion_id"], "nombre"
+        ]
+    st.write(
+        f"**Fecha:** {fila_sel['fecha']} — **Presentación:** {presentacion_nombre} — "
+        f"**Unidades reales:** {fila_sel['unidades_reales']}"
+    )
+
+    cf_entradas = db.get_df("cuarto_frio_entradas")
+    entrada_rel = (
+        cf_entradas[cf_entradas["lote_producto_id"] == lote_sel]
+        if not cf_entradas.empty else cf_entradas
+    )
+    saldo_cf = 0.0
+    cantidad_cf = 0.0
+    if not entrada_rel.empty:
+        saldo_cf = float(pd.to_numeric(entrada_rel.iloc[0]["saldo"], errors="coerce") or 0)
+        cantidad_cf = float(pd.to_numeric(entrada_rel.iloc[0]["cantidad"], errors="coerce") or 0)
+
+    if not entrada_rel.empty and saldo_cf < cantidad_cf:
+        despachado = cantidad_cf - saldo_cf
+        st.error(
+            f"❌ Este lote ya tiene {despachado:.0f} unidad(es) despachada(s) desde cuarto frío, "
+            "así que no se puede eliminar sin dejar inconsistencias en despachos ya hechos. "
+            "Si de verdad necesitas corregirlo, dímelo para revisarlo con cuidado en vez de "
+            "borrarlo a ciegas."
+        )
+        return
+
+    consumo_semi = db.get_df("consumo_semi_pasteurizacion")
+    consumo_rel = (
+        consumo_semi[consumo_semi["lote_producto_id"] == lote_sel]
+        if not consumo_semi.empty else consumo_semi
+    )
+    movimientos = db.get_df("movimientos_envases_insumos")
+    movimientos_rel = (
+        movimientos[
+            (movimientos["observaciones"].astype(str) == str(lote_sel))
+            & (movimientos["modulo_destino"] == "Pasteurización y envasado")
+        ]
+        if not movimientos.empty else movimientos
+    )
+
+    st.markdown("**Esto es lo que se va a revertir si lo eliminas:**")
+    if not consumo_rel.empty:
+        st.write("↩️ Kg que vuelven a los tanques de semielaborado:")
+        st.dataframe(consumo_rel[["lote_semielaborado_id", "kg_tomado"]], use_container_width=True)
+    if not movimientos_rel.empty:
+        st.write("↩️ Envases/tapas/etiquetas/cartones/liners que vuelven a bodega:")
+        st.dataframe(movimientos_rel[["item_tipo", "item_id", "cantidad"]], use_container_width=True)
+    if not entrada_rel.empty:
+        st.write(f"↩️ Se eliminará la entrada a cuarto frío {entrada_rel.iloc[0]['entrada_id']}.")
+
+    confirmar = st.checkbox(
+        f"Confirmo que quiero eliminar el lote {lote_sel} y revertir todo lo anterior",
+        key="confirmar_eliminar_envasado",
+    )
+    if st.button("🗑️ Eliminar este lote y revertir"):
+        if not confirmar:
+            st.error("Marca la casilla de confirmación antes de eliminar.")
+            return
+
+        semi_actual = db.get_df("produccion_semielaborados")
+        for _, c in consumo_rel.iterrows():
+            fila_t = semi_actual[semi_actual["lote_semielaborado_id"] == c["lote_semielaborado_id"]]
+            if not fila_t.empty:
+                saldo_actual = float(pd.to_numeric(fila_t.iloc[0]["kg_saldo"], errors="coerce") or 0)
+                db.update_row("produccion_semielaborados", "lote_semielaborado_id", c["lote_semielaborado_id"], {
+                    "kg_saldo": round(saldo_actual + float(c["kg_tomado"]), 2),
+                })
+        db.delete_rows_where("consumo_semi_pasteurizacion", "lote_producto_id", lote_sel)
+
+        for mid in movimientos_rel["movimiento_id"]:
+            db.delete_row("movimientos_envases_insumos", "movimiento_id", mid)
+
+        if not entrada_rel.empty:
+            db.delete_row("cuarto_frio_entradas", "entrada_id", entrada_rel.iloc[0]["entrada_id"])
+
+        db.delete_row("pasteurizacion_envasado", "lote_producto_id", lote_sel)
+
+        log_cambio(
+            db, username,
+            modulo="Pasteurización y envasado",
+            tabla="pasteurizacion_envasado",
+            id_registro=lote_sel, accion="eliminacion",
+            motivo="Eliminado con reversion completa (tanques, envases/insumos, entrada a cuarto frío)",
+        )
+
+        st.success(
+            f"Lote {lote_sel} eliminado y todo revertido — ya puedes volver a registrarlo "
+            f"correctamente en 'Nuevo lote envasado'."
+        )
+        st.rerun()
+
+
 def render(db, username, rol):
     st.title("Pasteurización y envasado")
     # La pestaña "Producto terminado disponible" se eliminó: con el ingreso
     # automático a cuarto frío, esa información vive en Cuarto frío → Inventario actual.
-    tab_nueva, tab_granel, tab_historial = st.tabs(
-        ["Nuevo lote envasado", "📦 Pasar a granel", "📋 Historial"]
+    tab_nueva, tab_granel, tab_historial, tab_corregir = st.tabs(
+        ["Nuevo lote envasado", "📦 Pasar a granel", "📋 Historial", "✏️ Corregir / eliminar"]
     )
 
     semielaborados = db.get_df("produccion_semielaborados")
@@ -562,3 +679,6 @@ def render(db, username, rol):
                 f"En stock: {(df_mostrar['unidades_saldo'] > 0).sum()} | "
                 f"Despachados: {(df_mostrar['unidades_saldo'] == 0).sum()}"
             )
+
+    with tab_corregir:
+        _render_corregir(db, username, rol, semielaborados, presentaciones)

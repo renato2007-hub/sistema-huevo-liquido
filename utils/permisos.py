@@ -78,6 +78,13 @@ def es_admin_o_jefe_planta(rol) -> bool:
     return rol_normalizado(rol) in ("admin", "jefe_planta")
 
 
+def puede_corregir_produccion(rol) -> bool:
+    """Admin, jefe de planta y supervisor: son quienes registran la
+    producción diaria, así que también pueden corregir sus propios errores
+    de ingreso."""
+    return rol_normalizado(rol) in ("admin", "jefe_planta", "supervisor")
+
+
 def puede_editar_pedidos(rol) -> bool:
     return rol_normalizado(rol) in ("admin", "gerencia")
 
