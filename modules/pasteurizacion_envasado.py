@@ -10,7 +10,7 @@ import pandas as pd
 from modules.bodega_envases_insumos import _saldo_actual
 from utils.costing import costo_ponderado
 from utils.permisos import ve_costos, puede_corregir_produccion
-from utils.bitacora import log_cambio
+from utils.bitacora import log_cambio, log_cambios_multiples
 
 
 def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos, tapas, etiquetas, cartones, liners):
@@ -399,40 +399,491 @@ def _render_nuevo_lote(db, username, rol, semielaborados, presentaciones, turnos
 
 
 
-def _render_corregir(db, username, rol, semielaborados, presentaciones):
-    if not puede_corregir_produccion(rol):
-        st.error("🔒 Esta función está disponible solo para administrador, jefe de planta y supervisor.")
-        return
-    st.caption(
-        "Si te equivocaste al registrar un lote de envasado, NO lo vuelvas a registrar "
-        "encima — elimínalo aquí primero (esto devuelve automáticamente los kg al tanque "
-        "de semielaborado y los envases/tapas/etiquetas/cartones/liners a bodega), y luego "
-        "regístralo de nuevo bien en 'Nuevo lote envasado'."
-    )
+def _elegir_lote_historial(db, key_prefix):
+    """Filtro de fechas (por defecto últimos 5 días) + selector de lote.
+    Devuelve (lote_sel, df_prod) o (None, df_prod) si no hay nada que elegir."""
     df_prod = db.get_df("pasteurizacion_envasado")
     df_prod = df_prod[df_prod["lote_producto_id"].astype(str).str.strip() != ""]
     if df_prod.empty:
         st.info("No hay lotes de envasado registrados todavía.")
-        return
+        return None, df_prod
 
     c1, c2 = st.columns(2)
     desde = c1.date_input(
-        "Desde", value=datetime.date.today() - datetime.timedelta(days=5), key="corregir_envasado_desde",
+        "Desde", value=datetime.date.today() - datetime.timedelta(days=5), key=f"{key_prefix}_desde",
     )
-    hasta = c2.date_input("Hasta", value=datetime.date.today(), key="corregir_envasado_hasta")
+    hasta = c2.date_input("Hasta", value=datetime.date.today(), key=f"{key_prefix}_hasta")
     df_filtrado = df_prod[
         (df_prod["fecha"].astype(str) >= desde.isoformat())
         & (df_prod["fecha"].astype(str) <= hasta.isoformat())
     ]
     if df_filtrado.empty:
-        st.warning("No hay lotes en ese rango de fechas — amplía el rango para encontrar el lote a corregir.")
-        return
+        st.warning("No hay lotes en ese rango de fechas — amplía el rango para encontrar el lote.")
+        return None, df_prod
 
     lote_sel = st.selectbox(
-        "Selecciona el lote a corregir",
+        "Selecciona el lote",
         df_filtrado.sort_values("fecha", ascending=False)["lote_producto_id"],
-        key="corregir_envasado_select",
+        key=f"{key_prefix}_select",
     )
+    return lote_sel, df_prod
+
+
+def _render_editar_lote(db, username, rol, semielaborados, presentaciones, turnos, tapas, etiquetas, cartones, liners):
+    if not puede_corregir_produccion(rol):
+        st.error("🔒 Esta función está disponible solo para administrador, jefe de planta y supervisor.")
+        return
+    st.caption(
+        "Corrige un dato mal digitado (kg, unidades, presentación, tapa/etiqueta/cartón/liner, "
+        "turno, vencimiento, observaciones) sin tener que eliminar y volver a registrar todo el lote."
+    )
+    lote_sel, df_prod = _elegir_lote_historial(db, "editar_envasado")
+    if lote_sel is None:
+        return
+    fila_sel = df_prod[df_prod["lote_producto_id"] == lote_sel].iloc[0]
+
+    cf_entradas = db.get_df("cuarto_frio_entradas")
+    entrada_rel = (
+        cf_entradas[cf_entradas["lote_producto_id"] == lote_sel]
+        if not cf_entradas.empty else cf_entradas
+    )
+    saldo_cf = 0.0
+    cantidad_cf = 0.0
+    if not entrada_rel.empty:
+        saldo_cf = float(pd.to_numeric(entrada_rel.iloc[0]["saldo"], errors="coerce") or 0)
+        cantidad_cf = float(pd.to_numeric(entrada_rel.iloc[0]["cantidad"], errors="coerce") or 0)
+    ya_despachado = not entrada_rel.empty and saldo_cf < cantidad_cf
+
+    fecha_lote = pd.to_datetime(fila_sel["fecha"]).date()
+    turno_actual = fila_sel.get("turno", "")
+    observaciones_actual = str(fila_sel.get("observaciones", ""))
+    pasteurizado_actual = str(fila_sel.get("pasteurizado", "")).upper() in ("TRUE", "1", "SI", "SÍ")
+    fecha_venc_actual = (
+        pd.to_datetime(entrada_rel.iloc[0]["fecha_vencimiento"]).date()
+        if not entrada_rel.empty else fecha_lote
+    )
+
+    if ya_despachado:
+        despachado = cantidad_cf - saldo_cf
+        st.warning(
+            f"⚠️ Este lote ya tiene {despachado:.0f} unidad(es) despachada(s) desde cuarto frío, "
+            "así que solo puedes corregir turno, vencimiento, observaciones y si se pasteurizó o "
+            "no. Para cambiar kg, unidades, presentación, tapa, etiqueta, cartón o liner de un "
+            "lote ya despachado, avísame para revisarlo con cuidado en vez de tocarlo a ciegas."
+        )
+        turno_id = st.selectbox(
+            "Turno", turnos["turno_id"],
+            format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
+            index=(list(turnos["turno_id"]).index(turno_actual) if turno_actual in list(turnos["turno_id"]) else 0),
+            key="editar_env_turno_desp",
+        )
+        pasteurizado = st.checkbox("🔥 Este lote se pasteuriza", value=pasteurizado_actual, key="editar_env_past_desp")
+        fecha_vencimiento = st.date_input("Fecha de vencimiento", value=fecha_venc_actual, key="editar_env_venc_desp")
+        observaciones = st.text_area("Observaciones", observaciones_actual, key="editar_env_obs_desp")
+
+        if st.button("💾 Guardar cambios", key="editar_env_guardar_desp"):
+            db.update_row("pasteurizacion_envasado", "lote_producto_id", lote_sel, {
+                "turno": turno_id,
+                "pasteurizado": pasteurizado,
+                "observaciones": observaciones,
+            })
+            if not entrada_rel.empty:
+                db.update_row("cuarto_frio_entradas", "entrada_id", entrada_rel.iloc[0]["entrada_id"], {
+                    "fecha_vencimiento": fecha_vencimiento.isoformat(),
+                })
+            log_cambios_multiples(
+                db, username,
+                modulo="Pasteurización y envasado", tabla="pasteurizacion_envasado",
+                id_registro=lote_sel,
+                cambios={
+                    "turno": (turno_actual, turno_id),
+                    "pasteurizado": (pasteurizado_actual, pasteurizado),
+                    "observaciones": (observaciones_actual, observaciones),
+                    "fecha_vencimiento": (fecha_venc_actual.isoformat(), fecha_vencimiento.isoformat()),
+                },
+                motivo="Corrección de datos en historial (lote ya con despachos)",
+            )
+            st.success(f"Lote {lote_sel} actualizado.")
+            st.rerun()
+        return
+
+    # ── Lote sin despachar: se puede corregir cualquier dato, revirtiendo y
+    # reaplicando el consumo/movimientos con los valores nuevos, pero
+    # conservando el mismo lote_producto_id. ──────────────────────────────
+    consumo_semi = db.get_df("consumo_semi_pasteurizacion")
+    consumo_rel = (
+        consumo_semi[consumo_semi["lote_producto_id"] == lote_sel]
+        if not consumo_semi.empty else consumo_semi
+    )
+    tipo_producto_lote = ""
+    if not semielaborados.empty and not consumo_rel.empty:
+        origenes = consumo_rel["lote_semielaborado_id"].unique().tolist()
+        fila_tipo = semielaborados[semielaborados["lote_semielaborado_id"].isin(origenes)]
+        if not fila_tipo.empty:
+            tipo_producto_lote = str(fila_tipo.iloc[0]["tipo_producto"])
+
+    if not tipo_producto_lote or semielaborados.empty or presentaciones.empty:
+        st.error(
+            "No se pudo determinar el tanque de origen o falta configuración de presentaciones "
+            "para editar este lote de forma segura. Avísame para revisarlo manualmente."
+        )
+        return
+
+    # Kg reales disponibles para reasignar = saldo actual de los tanques del
+    # mismo tipo + lo que este lote ya tenía tomado (se revierte al guardar).
+    semi_virtual = semielaborados.copy()
+    semi_virtual["kg_saldo"] = pd.to_numeric(semi_virtual["kg_saldo"], errors="coerce").fillna(0)
+    for _, c in consumo_rel.iterrows():
+        semi_virtual.loc[
+            semi_virtual["lote_semielaborado_id"] == c["lote_semielaborado_id"], "kg_saldo"
+        ] += float(c["kg_tomado"])
+    pool = semi_virtual[
+        (semi_virtual["tipo_producto"].astype(str) == tipo_producto_lote) & (semi_virtual["kg_saldo"] >= 0.1)
+    ].copy()
+    kg_disponible = round(float(pool["kg_saldo"].sum()), 2)
+    st.info(f"📦 **{kg_disponible:.2f} kg disponibles** de {tipo_producto_lote} en tanques (incluye lo ya tomado por este lote).")
+
+    presentacion_id = st.selectbox(
+        "Presentación", presentaciones["presentacion_id"],
+        format_func=lambda x: presentaciones.set_index("presentacion_id").loc[x, "nombre"],
+        index=(
+            list(presentaciones["presentacion_id"]).index(fila_sel["presentacion_id"])
+            if fila_sel["presentacion_id"] in list(presentaciones["presentacion_id"]) else 0
+        ),
+        key="editar_env_presentacion",
+    )
+    fila_pres = presentaciones.set_index("presentacion_id").loc[presentacion_id]
+    kg_nominal = float(fila_pres["kg_nominal"])
+    costo_envase_unitario = float(fila_pres["costo_envase_unitario"])
+
+    pasteurizado = st.checkbox("🔥 Este lote se pasteuriza", value=pasteurizado_actual, key="editar_env_past")
+
+    opciones_tapa = [""] + list(tapas["tapa_id"])
+    tapa_actual = fila_sel.get("tapa_id", "") or ""
+    tapa_id = st.selectbox(
+        "Tapa", opciones_tapa,
+        format_func=lambda x: "Sin tapa" if x == "" else tapas.set_index("tapa_id").loc[x, "color"],
+        index=(opciones_tapa.index(tapa_actual) if tapa_actual in opciones_tapa else 0),
+        key="editar_env_tapa",
+    )
+    costo_tapa_unitario = float(tapas.set_index("tapa_id").loc[tapa_id, "costo_unitario"]) if tapa_id else 0.0
+
+    opciones_etiqueta = [""] + list(etiquetas["etiqueta_id"])
+    etiqueta_actual = fila_sel.get("etiqueta_id", "") or ""
+    etiqueta_id = st.selectbox(
+        "Etiqueta", opciones_etiqueta,
+        format_func=lambda x: "Sin etiqueta" if x == "" else etiquetas.set_index("etiqueta_id").loc[x, "nombre"],
+        index=(opciones_etiqueta.index(etiqueta_actual) if etiqueta_actual in opciones_etiqueta else 0),
+        key="editar_env_etiqueta",
+    )
+    costo_etiqueta_unitario = float(etiquetas.set_index("etiqueta_id").loc[etiqueta_id, "costo_unitario"]) if etiqueta_id else 0.0
+
+    kg_usado_actual = float(pd.to_numeric(fila_sel["kg_usado"], errors="coerce") or 0)
+    kg_usado = st.number_input(
+        "Kg a pasteurizar/envasar", min_value=0.0, max_value=max(kg_disponible, kg_usado_actual), step=0.01,
+        value=kg_usado_actual, key="editar_env_kg",
+    )
+    unidades_teoricas = int(kg_usado / kg_nominal) if kg_nominal else 0
+    st.caption(f"Unidades teóricas a esa presentación: {unidades_teoricas}")
+    unidades_reales_actual = int(pd.to_numeric(fila_sel["unidades_reales"], errors="coerce") or 0)
+    unidades_reales = st.number_input(
+        "Unidades reales obtenidas", min_value=0, step=1, value=unidades_reales_actual, key="editar_env_unidades",
+    )
+
+    carton_actual = fila_sel.get("carton_id", "") or ""
+    usa_carton = st.checkbox(
+        "📦 Este lote se empaca en cartones", value=bool(carton_actual), key="editar_env_usa_carton",
+    )
+    carton_id = ""
+    cantidad_cartones = 0
+    costo_carton_unitario = 0.0
+    if usa_carton:
+        if cartones.empty:
+            st.warning("No hay cartones configurados en Catálogos → Cartones.")
+            return
+        carton_id = st.selectbox(
+            "Tipo de cartón", cartones["carton_id"],
+            format_func=lambda x: cartones.set_index("carton_id").loc[x, "nombre"],
+            index=(list(cartones["carton_id"]).index(carton_actual) if carton_actual in list(cartones["carton_id"]) else 0),
+            key="editar_env_carton",
+        )
+        costo_carton_unitario = float(cartones.set_index("carton_id").loc[carton_id, "costo_unitario"])
+        cantidad_actual = int(pd.to_numeric(fila_sel.get("cantidad_cartones", 0), errors="coerce") or 0)
+        cantidad_cartones = st.number_input(
+            "Cantidad de cartones usados", min_value=0, step=1, value=cantidad_actual, key="editar_env_cant_carton",
+        )
+
+    liner_actual = fila_sel.get("liner_id", "") or ""
+    usa_liner = st.checkbox(
+        "🔘 Este lote usa liner de aluminio", value=bool(liner_actual), key="editar_env_usa_liner",
+    )
+    liner_id = ""
+    costo_liner_unitario = 0.0
+    if usa_liner:
+        if liners.empty:
+            st.warning("No hay liners configurados en Catálogos → Liners de aluminio.")
+            return
+        liner_id = st.selectbox(
+            "Tipo de liner", liners["liner_id"],
+            format_func=lambda x: liners.set_index("liner_id").loc[x, "nombre"],
+            index=(list(liners["liner_id"]).index(liner_actual) if liner_actual in list(liners["liner_id"]) else 0),
+            key="editar_env_liner",
+        )
+        costo_liner_unitario = float(liners.set_index("liner_id").loc[liner_id, "costo_unitario"])
+
+    turno_id = st.selectbox(
+        "Turno", turnos["turno_id"],
+        format_func=lambda x: turnos.set_index("turno_id").loc[x, "nombre"],
+        index=(list(turnos["turno_id"]).index(turno_actual) if turno_actual in list(turnos["turno_id"]) else 0),
+        key="editar_env_turno",
+    )
+    fecha_vencimiento = st.date_input("Fecha de vencimiento", value=fecha_venc_actual, key="editar_env_venc")
+    observaciones = st.text_area("Observaciones", observaciones_actual, key="editar_env_obs")
+
+    if st.button("💾 Guardar cambios", type="primary", key="editar_env_guardar"):
+        if kg_usado <= 0:
+            st.error("Ingresa una cantidad de kg mayor a cero.")
+            return
+        pool_fifo = pool.copy()
+        pool_fifo["fecha_dt"] = pd.to_datetime(pool_fifo["fecha"], errors="coerce")
+        pool_fifo = pool_fifo.sort_values("fecha_dt", na_position="last")
+
+        detalle_tanques = []
+        restante = kg_usado
+        for _, tanque in pool_fifo.iterrows():
+            if restante <= 0:
+                break
+            saldo = float(tanque["kg_saldo"])
+            if saldo <= 0:
+                continue
+            tomar = min(saldo, restante)
+            detalle_tanques.append({
+                "lote_semielaborado_id": tanque["lote_semielaborado_id"],
+                "cantidad_a_tomar": tomar,
+                "costo_cubeta": float(pd.to_numeric(tanque.get("costo_unitario_kg", 0), errors="coerce") or 0),
+            })
+            restante -= tomar
+
+        if restante > 0.01:
+            st.error(
+                f"No hay suficientes kg en tanques de {tipo_producto_lote} para completar el "
+                f"lote. Faltaron {restante:.2f} kg. Ajusta antes de guardar."
+            )
+            return
+
+        # ── Revertir consumo, movimientos y entrada a cuarto frío actuales ──
+        semi_actual = db.get_df("produccion_semielaborados")
+        for _, c in consumo_rel.iterrows():
+            fila_t = semi_actual[semi_actual["lote_semielaborado_id"] == c["lote_semielaborado_id"]]
+            if not fila_t.empty:
+                saldo_actual = float(pd.to_numeric(fila_t.iloc[0]["kg_saldo"], errors="coerce") or 0)
+                db.update_row("produccion_semielaborados", "lote_semielaborado_id", c["lote_semielaborado_id"], {
+                    "kg_saldo": round(saldo_actual + float(c["kg_tomado"]), 2),
+                })
+        db.delete_rows_where("consumo_semi_pasteurizacion", "lote_producto_id", lote_sel)
+
+        movimientos = db.get_df("movimientos_envases_insumos")
+        movimientos_rel = (
+            movimientos[
+                (movimientos["observaciones"].astype(str) == str(lote_sel))
+                & (movimientos["modulo_destino"] == "Pasteurización y envasado")
+            ]
+            if not movimientos.empty else movimientos
+        )
+        for mid in movimientos_rel["movimiento_id"]:
+            db.delete_row("movimientos_envases_insumos", "movimiento_id", mid)
+
+        if not entrada_rel.empty:
+            db.delete_row("cuarto_frio_entradas", "entrada_id", entrada_rel.iloc[0]["entrada_id"])
+
+        # ── Reaplicar con los valores corregidos ─────────────────────────
+        lote_semielaborado_id = detalle_tanques[0]["lote_semielaborado_id"]
+        costo_unitario_kg = costo_ponderado(detalle_tanques)
+        costo_semielaborado = kg_usado * costo_unitario_kg
+        costo_envases = unidades_reales * costo_envase_unitario
+        costo_tapas = unidades_reales * costo_tapa_unitario if tapa_id else 0.0
+        costo_etiquetas = unidades_reales * costo_etiqueta_unitario
+        costo_cartones = cantidad_cartones * costo_carton_unitario if usa_carton else 0.0
+        costo_liners = unidades_reales * costo_liner_unitario if usa_liner else 0.0
+        costo_total = (
+            costo_semielaborado + costo_envases + costo_tapas
+            + costo_etiquetas + costo_cartones + costo_liners
+        )
+        costo_unitario = costo_total / unidades_reales if unidades_reales > 0 else 0
+
+        db.update_row("pasteurizacion_envasado", "lote_producto_id", lote_sel, {
+            "lote_semielaborado_id": lote_semielaborado_id,
+            "presentacion_id": presentacion_id,
+            "kg_usado": kg_usado,
+            "unidades_teoricas": unidades_teoricas,
+            "unidades_reales": unidades_reales,
+            "pasteurizado": pasteurizado,
+            "costo_semielaborado": costo_semielaborado,
+            "costo_envases": costo_envases,
+            "tapa_id": tapa_id,
+            "costo_tapas": costo_tapas,
+            "etiqueta_id": etiqueta_id,
+            "costo_etiquetas": costo_etiquetas,
+            "carton_id": carton_id,
+            "cantidad_cartones": cantidad_cartones,
+            "costo_cartones": costo_cartones,
+            "liner_id": liner_id,
+            "costo_liners": costo_liners,
+            "costo_total": costo_total,
+            "costo_unitario": costo_unitario,
+            "unidades_saldo": 0,
+            "turno": turno_id,
+            "observaciones": observaciones,
+        })
+
+        for d in detalle_tanques:
+            cantidad = float(d["cantidad_a_tomar"])
+            costo_unit = float(d["costo_cubeta"])
+            consumo_id = db.siguiente_id("consumo_semi_pasteurizacion", "CSP", fecha_lote)
+            db.append_row("consumo_semi_pasteurizacion", {
+                "consumo_id": consumo_id,
+                "fecha": fecha_lote.isoformat(),
+                "lote_semielaborado_id": d["lote_semielaborado_id"],
+                "lote_producto_id": lote_sel,
+                "kg_tomado": cantidad,
+                "costo_unitario_aplicado": costo_unit,
+                "costo_total_aplicado": cantidad * costo_unit,
+                "usuario": username,
+            })
+            semi_ahora = db.get_df("produccion_semielaborados")
+            fila_tanque = semi_ahora[semi_ahora["lote_semielaborado_id"] == d["lote_semielaborado_id"]]
+            if not fila_tanque.empty:
+                saldo_actual = float(pd.to_numeric(fila_tanque.iloc[0]["kg_saldo"], errors="coerce") or 0)
+                db.update_row("produccion_semielaborados", "lote_semielaborado_id", d["lote_semielaborado_id"], {
+                    "kg_saldo": round(saldo_actual - cantidad, 2),
+                })
+
+        movimiento_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha_lote)
+        db.append_row("movimientos_envases_insumos", {
+            "movimiento_id": movimiento_id,
+            "fecha": fecha_lote.isoformat(),
+            "item_tipo": "envase",
+            "item_id": presentacion_id,
+            "tipo_movimiento": "salida",
+            "cantidad": unidades_reales,
+            "costo_unitario": costo_envase_unitario,
+            "costo_total": costo_envases,
+            "modulo_destino": "Pasteurización y envasado",
+            "usuario": username,
+            "observaciones": lote_sel,
+        })
+        if tapa_id:
+            movimiento_tapa_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha_lote)
+            db.append_row("movimientos_envases_insumos", {
+                "movimiento_id": movimiento_tapa_id,
+                "fecha": fecha_lote.isoformat(),
+                "item_tipo": "tapa",
+                "item_id": tapa_id,
+                "tipo_movimiento": "salida",
+                "cantidad": unidades_reales,
+                "costo_unitario": costo_tapa_unitario,
+                "costo_total": costo_tapas,
+                "modulo_destino": "Pasteurización y envasado",
+                "usuario": username,
+                "observaciones": lote_sel,
+            })
+        if etiqueta_id:
+            movimiento_etiqueta_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha_lote)
+            db.append_row("movimientos_envases_insumos", {
+                "movimiento_id": movimiento_etiqueta_id,
+                "fecha": fecha_lote.isoformat(),
+                "item_tipo": "etiqueta",
+                "item_id": etiqueta_id,
+                "tipo_movimiento": "salida",
+                "cantidad": unidades_reales,
+                "costo_unitario": costo_etiqueta_unitario,
+                "costo_total": costo_etiquetas,
+                "modulo_destino": "Pasteurización y envasado",
+                "usuario": username,
+                "observaciones": lote_sel,
+            })
+        if usa_carton and cantidad_cartones > 0:
+            movimiento_carton_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha_lote)
+            db.append_row("movimientos_envases_insumos", {
+                "movimiento_id": movimiento_carton_id,
+                "fecha": fecha_lote.isoformat(),
+                "item_tipo": "carton",
+                "item_id": carton_id,
+                "tipo_movimiento": "salida",
+                "cantidad": cantidad_cartones,
+                "costo_unitario": costo_carton_unitario,
+                "costo_total": costo_cartones,
+                "modulo_destino": "Pasteurización y envasado",
+                "usuario": username,
+                "observaciones": lote_sel,
+            })
+        if usa_liner:
+            movimiento_liner_id = db.siguiente_id("movimientos_envases_insumos", "ENV", fecha_lote)
+            db.append_row("movimientos_envases_insumos", {
+                "movimiento_id": movimiento_liner_id,
+                "fecha": fecha_lote.isoformat(),
+                "item_tipo": "liner",
+                "item_id": liner_id,
+                "tipo_movimiento": "salida",
+                "cantidad": unidades_reales,
+                "costo_unitario": costo_liner_unitario,
+                "costo_total": costo_liners,
+                "modulo_destino": "Pasteurización y envasado",
+                "usuario": username,
+                "observaciones": lote_sel,
+            })
+
+        entrada_id = db.siguiente_id("cuarto_frio_entradas", "CF", fecha_lote)
+        db.append_row("cuarto_frio_entradas", {
+            "entrada_id": entrada_id,
+            "fecha": fecha_lote.isoformat(),
+            "lote_producto_id": lote_sel,
+            "presentacion_id": presentacion_id,
+            "cantidad": unidades_reales,
+            "costo_unitario": costo_unitario,
+            "fecha_vencimiento": fecha_vencimiento.isoformat(),
+            "saldo": unidades_reales,
+            "usuario": username,
+        })
+
+        log_cambios_multiples(
+            db, username,
+            modulo="Pasteurización y envasado", tabla="pasteurizacion_envasado",
+            id_registro=lote_sel,
+            cambios={
+                "presentacion_id": (fila_sel["presentacion_id"], presentacion_id),
+                "kg_usado": (kg_usado_actual, kg_usado),
+                "unidades_reales": (unidades_reales_actual, unidades_reales),
+                "tapa_id": (tapa_actual, tapa_id),
+                "etiqueta_id": (etiqueta_actual, etiqueta_id),
+                "carton_id": (carton_actual, carton_id),
+                "cantidad_cartones": (fila_sel.get("cantidad_cartones", 0), cantidad_cartones),
+                "liner_id": (liner_actual, liner_id),
+                "turno": (turno_actual, turno_id),
+                "pasteurizado": (pasteurizado_actual, pasteurizado),
+                "observaciones": (observaciones_actual, observaciones),
+                "fecha_vencimiento": (fecha_venc_actual.isoformat(), fecha_vencimiento.isoformat()),
+            },
+            motivo="Corrección de datos en historial (reasignación FIFO y costos recalculados)",
+        )
+
+        st.success(f"Lote {lote_sel} actualizado — {unidades_reales:.0f} unidades, costo unitario {costo_unitario:,.2f}.")
+        st.rerun()
+
+
+def _render_eliminar_lote(db, username, rol, semielaborados, presentaciones):
+    if not puede_corregir_produccion(rol):
+        st.error("🔒 Esta función está disponible solo para administrador, jefe de planta y supervisor.")
+        return
+    st.caption(
+        "Si prefieres no editar el lote campo por campo, puedes eliminarlo por completo "
+        "(esto devuelve automáticamente los kg al tanque de semielaborado y los "
+        "envases/tapas/etiquetas/cartones/liners a bodega), y luego registrarlo de nuevo "
+        "en 'Nuevo lote envasado'."
+    )
+    lote_sel, df_prod = _elegir_lote_historial(db, "eliminar_envasado")
+    if lote_sel is None:
+        return
     fila_sel = df_prod[df_prod["lote_producto_id"] == lote_sel].iloc[0]
     presentacion_nombre = lote_sel
     if not presentaciones.empty and fila_sel["presentacion_id"] in presentaciones["presentacion_id"].values:
@@ -535,8 +986,8 @@ def render(db, username, rol):
     st.title("Pasteurización y envasado")
     # La pestaña "Producto terminado disponible" se eliminó: con el ingreso
     # automático a cuarto frío, esa información vive en Cuarto frío → Inventario actual.
-    tab_nueva, tab_granel, tab_historial, tab_corregir = st.tabs(
-        ["Nuevo lote envasado", "📦 Pasar a granel", "📋 Historial", "✏️ Corregir / eliminar"]
+    tab_nueva, tab_granel, tab_historial, tab_editar, tab_eliminar = st.tabs(
+        ["Nuevo lote envasado", "📦 Pasar a granel", "📋 Historial", "✏️ Editar lote", "🗑️ Eliminar lote"]
     )
 
     semielaborados = db.get_df("produccion_semielaborados")
@@ -696,5 +1147,8 @@ def render(db, username, rol):
                 f"Despachados: {(df_mostrar['unidades_saldo'] == 0).sum()}"
             )
 
-    with tab_corregir:
-        _render_corregir(db, username, rol, semielaborados, presentaciones)
+    with tab_editar:
+        _render_editar_lote(db, username, rol, semielaborados, presentaciones, turnos, tapas, etiquetas, cartones, liners)
+
+    with tab_eliminar:
+        _render_eliminar_lote(db, username, rol, semielaborados, presentaciones)
