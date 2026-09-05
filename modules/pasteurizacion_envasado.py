@@ -532,11 +532,14 @@ def _render_editar_lote(db, username, rol, semielaborados, presentaciones, turno
     # Kg reales disponibles para reasignar = saldo actual de los tanques del
     # mismo tipo + lo que este lote ya tenía tomado (se revierte al guardar).
     semi_virtual = semielaborados.copy()
-    semi_virtual["kg_saldo"] = pd.to_numeric(semi_virtual["kg_saldo"], errors="coerce").fillna(0)
+    saldo_virtual = {
+        row["lote_semielaborado_id"]: float(pd.to_numeric(row["kg_saldo"], errors="coerce") or 0)
+        for _, row in semi_virtual.iterrows()
+    }
     for _, c in consumo_rel.iterrows():
-        semi_virtual.loc[
-            semi_virtual["lote_semielaborado_id"] == c["lote_semielaborado_id"], "kg_saldo"
-        ] += float(c["kg_tomado"])
+        tid = c["lote_semielaborado_id"]
+        saldo_virtual[tid] = saldo_virtual.get(tid, 0.0) + float(c["kg_tomado"])
+    semi_virtual["kg_saldo"] = semi_virtual["lote_semielaborado_id"].map(saldo_virtual).fillna(0.0)
     pool = semi_virtual[
         (semi_virtual["tipo_producto"].astype(str) == tipo_producto_lote) & (semi_virtual["kg_saldo"] >= 0.1)
     ].copy()
