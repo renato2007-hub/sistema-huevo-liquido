@@ -410,12 +410,28 @@ def _render_corregir(db, username, rol, semielaborados, presentaciones):
         "regístralo de nuevo bien en 'Nuevo lote envasado'."
     )
     df_prod = db.get_df("pasteurizacion_envasado")
+    df_prod = df_prod[df_prod["lote_producto_id"].astype(str).str.strip() != ""]
     if df_prod.empty:
         st.info("No hay lotes de envasado registrados todavía.")
         return
 
+    c1, c2 = st.columns(2)
+    desde = c1.date_input(
+        "Desde", value=datetime.date.today() - datetime.timedelta(days=5), key="corregir_envasado_desde",
+    )
+    hasta = c2.date_input("Hasta", value=datetime.date.today(), key="corregir_envasado_hasta")
+    df_filtrado = df_prod[
+        (df_prod["fecha"].astype(str) >= desde.isoformat())
+        & (df_prod["fecha"].astype(str) <= hasta.isoformat())
+    ]
+    if df_filtrado.empty:
+        st.warning("No hay lotes en ese rango de fechas — amplía el rango para encontrar el lote a corregir.")
+        return
+
     lote_sel = st.selectbox(
-        "Selecciona el lote a corregir", df_prod["lote_producto_id"], key="corregir_envasado_select",
+        "Selecciona el lote a corregir",
+        df_filtrado.sort_values("fecha", ascending=False)["lote_producto_id"],
+        key="corregir_envasado_select",
     )
     fila_sel = df_prod[df_prod["lote_producto_id"] == lote_sel].iloc[0]
     presentacion_nombre = lote_sel
