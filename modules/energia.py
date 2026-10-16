@@ -10,6 +10,7 @@ Factores de conversión:
 import datetime
 import streamlit as st
 import pandas as pd
+from utils.bitacora import log_cambios_multiples
 
 MJ_POR_GALON_DIESEL = 138.874   # MJ
 MJ_POR_KWH          = 3.6       # MJ
@@ -67,9 +68,12 @@ def _filtrar(df, desde, hasta):
 def render(db, username, rol):
     st.title("⚡ Energía")
 
-    tab_diesel, tab_elec, tab_resumen = st.tabs([
-        "⛽ Diésel", "💡 Electricidad", "📊 Resumen energético"
+    tab_diesel, tab_editar_d, tab_elec, tab_resumen = st.tabs([
+        "⛽ Diésel", "✏️ Editar diésel", "💡 Electricidad", "📊 Resumen energético"
     ])
+
+    with tab_editar_d:
+        _render_editar_diesel(db, username)
 
     # ======================== DIESEL ========================
     with tab_diesel:
@@ -385,3 +389,123 @@ def render(db, username, rol):
                     f"Equivalencias: {gal_total:,.2f} gal diésel + {kwh_total:,.1f} kWh eléctricos "
                     f"= {mj_total:,.1f} MJ totales"
                 )
+
+
+def _render_editar_diesel(db, username):
+    """Correccion de un registro de diesel ya guardado. Cualquier rol puede
+    editar, pero se exige el motivo y cada campo cambiado queda en la
+    bitacora con su valor anterior y nuevo."""
+    st.caption(
+        "Corrige un registro de diésel que se guardó con valores equivocados. "
+        "El costo total y los MJ se recalculan solos, y el cambio queda en la bitácora."
+    )
+    diesel_df = db.get_df("registro_diesel")
+    if diesel_df.empty:
+        st.info("No hay registros de diésel todavía.")
+        return
+
+    hoy = datetime.date.today()
+    c1, c2 = st.columns(2)
+    desde = c1.date_input("Desde", value=hoy - datetime.timedelta(days=30), key="de_desde")
+    hasta = c2.date_input("Hasta", value=hoy, key="de_hasta")
+    df = _filtrar(diesel_df, desde, hasta)
+    if df.empty:
+        st.info("Sin registros en ese período.")
+        return
+    df = df.sort_values(["fecha", "diesel_id"], ascending=False)
+
+    def _etiqueta(did):
+        r = df.set_index("diesel_id").loc[did]
+        return f"{did} | {r['fecha']} | {r['uso']} | {float(pd.to_numeric(r['galones'], errors='coerce') or 0):.2f} gal"
+
+    did = st.selectbox("Registro a corregir", df["diesel_id"], format_func=_etiqueta, key="de_registro")
+    fila = df.set_index("diesel_id").loc[did]
+
+    def _f(col):
+        return float(pd.to_numeric(fila.get(col, 0), errors="coerce") or 0)
+
+    # Las claves llevan el id del registro para que, al cambiar de registro,
+    # los campos se recarguen con sus valores y no arrastren los del anterior.
+    with st.container(border=True):
+        fecha_actual = pd.to_datetime(fila["fecha"], errors="coerce")
+        fecha = st.date_input(
+            "Fecha", value=fecha_actual.date() if pd.notna(fecha_actual) else hoy, key=f"de_fecha_{did}",
+        )
+        uso_actual = str(fila["uso"])
+        uso = st.selectbox(
+            "Uso", USOS_DIESEL,
+            index=USOS_DIESEL.index(uso_actual) if uso_actual in USOS_DIESEL else 0,
+            key=f"de_uso_{did}",
+        )
+        costo_gl = st.number_input(
+            "Costo por galón ($)", min_value=0.0, step=0.01, value=_f("costo_galon"), key=f"de_costo_{did}",
+        )
+
+        nivel_inicio = nivel_fin = galones_agregados = 0.0
+        if uso == "Caldero":
+            ca, cb, cc = st.columns(3)
+            nivel_inicio = ca.number_input(
+                "Nivel inicio (gal)", min_value=0.0, max_value=CAPACIDAD_TANQUE_DIESEL, step=0.1,
+                value=min(_f("nivel_inicio"), CAPACIDAD_TANQUE_DIESEL), key=f"de_ini_{did}",
+            )
+            galones_agregados = cb.number_input(
+                "Galones agregados", min_value=0.0, step=0.1,
+                value=_f("galones_agregados"), key=f"de_agr_{did}",
+            )
+            nivel_fin = cc.number_input(
+                "Nivel fin (gal)", min_value=0.0, max_value=CAPACIDAD_TANQUE_DIESEL, step=0.1,
+                value=min(_f("nivel_fin"), CAPACIDAD_TANQUE_DIESEL), key=f"de_fin_{did}",
+            )
+            galones = round(nivel_inicio + galones_agregados - nivel_fin, 2)
+        else:
+            galones = st.number_input(
+                "Galones usados", min_value=0.0, step=0.1, value=_f("galones"), key=f"de_gal_{did}",
+            )
+
+        observaciones = st.text_input("Observaciones", str(fila.get("observaciones", "") or ""), key=f"de_obs_{did}")
+        motivo = st.text_input("Motivo de la corrección (obligatorio)", "", key=f"de_motivo_{did}")
+
+        costo_total = galones * costo_gl
+        mj_total = galones * MJ_POR_GALON_DIESEL
+        st.info(
+            f"Antes: **{_f('galones'):.2f} gal** · ${_f('costo_total'):,.2f}  →  "
+            f"Ahora: **{galones:.2f} gal** · ${costo_total:,.2f} · {mj_total:,.1f} MJ"
+        )
+
+        if st.button("💾 Guardar corrección", type="primary", use_container_width=True, key=f"de_guardar_{did}"):
+            nuevos = {
+                "fecha": fecha.isoformat(),
+                "uso": uso,
+                "galones": galones,
+                "costo_galon": costo_gl,
+                "costo_total": costo_total,
+                "mj_total": mj_total,
+                "observaciones": observaciones,
+                "nivel_inicio": nivel_inicio,
+                "nivel_fin": nivel_fin,
+                "galones_agregados": galones_agregados,
+            }
+            anteriores = {k: fila.get(k, "") for k in nuevos}
+            cambios = {
+                k: (anteriores[k], v) for k, v in nuevos.items()
+                if str(anteriores[k]) != str(v)
+                and not (isinstance(v, float) and abs(_f(k) - v) < 1e-9)
+            }
+            if galones < 0:
+                st.error("Los niveles no cuadran: el nivel final es mayor que lo que había más lo agregado.")
+            elif galones == 0:
+                st.error("Los galones deben ser mayores a cero.")
+            elif costo_gl <= 0:
+                st.error("Ingresa el costo por galón.")
+            elif not motivo.strip():
+                st.error("Escribe el motivo de la corrección.")
+            elif not cambios:
+                st.warning("No cambiaste ningún valor.")
+            else:
+                db.update_row("registro_diesel", "diesel_id", did, nuevos)
+                log_cambios_multiples(
+                    db, username, modulo="Energía", tabla="registro_diesel",
+                    id_registro=did, cambios=cambios, motivo=motivo.strip(),
+                )
+                st.success(f"✅ Registro {did} corregido ({len(cambios)} campo(s)).")
+                st.rerun()
