@@ -175,6 +175,14 @@ SHEET_SCHEMAS = {
         "salida_id", "fecha", "entrada_id", "cliente_id", "cantidad", "vehiculo_id",
         "despachador", "pedido_ref", "usuario", "observaciones",
     ],
+    # Ajustes de inventario (conteo fisico, producto danado, etc.). Cada fila
+    # deja el saldo antes/despues, el motivo y el trabajador responsable, para
+    # ver en el historial a quien se le descuadra el inventario con frecuencia.
+    "cuarto_frio_ajustes": [
+        "ajuste_id", "fecha", "entrada_id", "lote_producto_id", "presentacion_id",
+        "saldo_anterior", "saldo_nuevo", "diferencia", "motivo", "detalle",
+        "responsable", "usuario",
+    ],
 
     # ---------- Limpieza y desinfeccion ----------
     "limpieza_desinfeccion": [

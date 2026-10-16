@@ -9,23 +9,25 @@ import datetime
 import streamlit as st
 import pandas as pd
 from utils.permisos import ve_costos, es_despachador
+from utils.bitacora import log_cambio
 
 
 def render(db, username, rol):
     st.title("❄️ Cuarto frío")
 
     if es_despachador(rol):
-        # Despachador: solo ve inventario, stock a granel, despacho y cargas
-        tab_inventario, tab_granel_cf, tab_despacho, tab_vehiculos = st.tabs([
+        # Despachador: solo ve inventario, stock a granel, despacho, cargas y ajustes
+        tab_inventario, tab_granel_cf, tab_despacho, tab_vehiculos, tab_ajuste = st.tabs([
             "📦 Inventario actual", "🫙 Stock a granel",
             "🚚 :red[**Despacho a cliente**]", "🚛 Cargas por vehículo",
+            "⚖️ Ajuste de inventario",
         ])
         tab_verificacion = None
     else:
-        tab_inventario, tab_granel_cf, tab_despacho, tab_vehiculos, tab_verificacion = st.tabs(
+        tab_inventario, tab_granel_cf, tab_despacho, tab_vehiculos, tab_ajuste, tab_verificacion = st.tabs(
             ["📦 Inventario actual", "🫙 Stock a granel",
              "🚚 :red[**Despacho a cliente**]", "🚛 Cargas por vehículo",
-             "✅ Verificación de cargas"]
+             "⚖️ Ajuste de inventario", "✅ Verificación de cargas"]
         )
 
     pasteurizado = db.get_df("pasteurizacion_envasado")
@@ -869,6 +871,9 @@ def render(db, username, rol):
                     key=f"btn_pdf_desp_{placa_archivo}_{fecha_archivo}",
                 )
 
+    with tab_ajuste:
+        _render_ajuste_inventario(db, username, presentaciones, pasteurizado)
+
     # ======================== VERIFICACION DE CARGAS ========================
     if tab_verificacion is not None:
         with tab_verificacion:
@@ -1033,3 +1038,204 @@ def render(db, username, rol):
                                 ] if c in errores_detalle.columns]],
                                 use_container_width=True, hide_index=True,
                             )
+
+
+MOTIVOS_AJUSTE = [
+    "Conteo físico no coincide",
+    "Error al registrar un despacho",
+    "Producto dañado / roto",
+    "Producto vencido / desechado",
+    "Otro",
+]
+
+
+def _render_ajuste_inventario(db, username, presentaciones, pasteurizado):
+    """Ajuste del saldo de un lote al conteo fisico. Lo puede hacer cualquier
+    rol, pero exige motivo y trabajador responsable: el historial cuenta los
+    ajustes por responsable para detectar a quien capacitar."""
+    personal = db.get_df("personal")
+    mapa_personal = (
+        dict(zip(personal["personal_id"], personal["nombre"]))
+        if not personal.empty and "personal_id" in personal.columns else {}
+    )
+    mapa_pres = (
+        dict(zip(presentaciones["presentacion_id"], presentaciones["nombre"]))
+        if not presentaciones.empty else {}
+    )
+    mapa_lote_origen = (
+        dict(zip(pasteurizado["lote_producto_id"], pasteurizado["lote_semielaborado_id"]))
+        if not pasteurizado.empty and "lote_semielaborado_id" in pasteurizado.columns else {}
+    )
+
+    sub_registrar, sub_historial = st.tabs(["➕ Registrar ajuste", "📊 Historial de ajustes"])
+
+    with sub_registrar:
+        st.caption(
+            "Usa esto cuando el conteo físico del cuarto frío no coincide con el sistema. "
+            "Escribe cuántas unidades hay **realmente** en el lote; el sistema calcula la "
+            "diferencia y la deja registrada con el motivo y el responsable."
+        )
+        entradas = db.get_df("cuarto_frio_entradas")
+        if entradas.empty:
+            st.info("No hay lotes en cuarto frío todavía.")
+        elif not mapa_personal:
+            st.warning("Configura el personal en Catálogos para poder registrar al responsable.")
+        else:
+            entradas["saldo"] = pd.to_numeric(entradas["saldo"], errors="coerce").fillna(0)
+            incluir_cero = st.checkbox(
+                "Mostrar también lotes que el sistema tiene en cero (para subir saldo)",
+                key="ajuste_incluir_cero",
+            )
+            lotes = entradas if incluir_cero else entradas[entradas["saldo"] > 0]
+            lotes = lotes.sort_values("fecha", ascending=False)
+            if lotes.empty:
+                st.info("No hay lotes con saldo. Marca la casilla de arriba para ver los lotes en cero.")
+            else:
+                def _etiqueta_lote(eid):
+                    r = lotes.set_index("entrada_id").loc[eid]
+                    lote = mapa_lote_origen.get(r["lote_producto_id"], r["lote_producto_id"])
+                    pres = mapa_pres.get(r["presentacion_id"], r["presentacion_id"])
+                    return f"{pres} | lote: {lote} | {eid} | en sistema: {int(r['saldo'])}"
+
+                entrada_sel = st.selectbox(
+                    "Lote / presentación", lotes["entrada_id"],
+                    format_func=_etiqueta_lote, key="ajuste_entrada",
+                )
+                saldo_sistema = int(lotes.set_index("entrada_id").loc[entrada_sel, "saldo"])
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("📦 En sistema", f"{saldo_sistema:,}")
+                contado = c2.number_input(
+                    "Unidades contadas físicamente", min_value=0, step=1,
+                    value=saldo_sistema, key=f"ajuste_contado_{entrada_sel}",
+                )
+                diferencia = int(contado) - saldo_sistema
+                c3.metric("Diferencia", f"{diferencia:+,}")
+
+                responsable = st.selectbox(
+                    "Trabajador responsable del descuadre",
+                    [""] + list(mapa_personal),
+                    format_func=lambda x: "— Selecciona el responsable —" if x == "" else mapa_personal[x],
+                    key="ajuste_responsable",
+                )
+                motivo = st.selectbox("Motivo del ajuste", MOTIVOS_AJUSTE, key="ajuste_motivo")
+                detalle = st.text_area(
+                    "Explica qué pasó (obligatorio)",
+                    placeholder="ej. 'se cargaron 10 fundas de más al camión de Guayaquil y no se registró'",
+                    key="ajuste_detalle",
+                )
+
+                if st.button("💾 Guardar ajuste", type="primary", key="ajuste_guardar"):
+                    if diferencia == 0:
+                        st.error("El conteo es igual al sistema — no hay nada que ajustar.")
+                    elif not responsable:
+                        st.error("Selecciona el trabajador responsable.")
+                    elif not detalle.strip():
+                        st.error("Explica qué pasó antes de guardar.")
+                    else:
+                        # Saldo fresco de la hoja: si alguien despacho del lote
+                        # mientras se llenaba el formulario, el ajuste se calcula
+                        # contra el saldo real y no contra el de la pantalla.
+                        frescas = db.get_df("cuarto_frio_entradas", forzar_actualizacion=True)
+                        fila = frescas[frescas["entrada_id"] == entrada_sel].iloc[0]
+                        saldo_anterior = float(pd.to_numeric(fila["saldo"], errors="coerce") or 0)
+                        hoy = datetime.date.today()
+                        ajuste_id = db.siguiente_id("cuarto_frio_ajustes", "AJ", hoy)
+                        db.append_row("cuarto_frio_ajustes", {
+                            "ajuste_id": ajuste_id,
+                            "fecha": hoy.isoformat(),
+                            "entrada_id": entrada_sel,
+                            "lote_producto_id": fila["lote_producto_id"],
+                            "presentacion_id": fila["presentacion_id"],
+                            "saldo_anterior": saldo_anterior,
+                            "saldo_nuevo": int(contado),
+                            "diferencia": int(contado) - saldo_anterior,
+                            "motivo": motivo,
+                            "detalle": detalle.strip(),
+                            "responsable": responsable,
+                            "usuario": username,
+                        })
+                        db.update_row("cuarto_frio_entradas", "entrada_id", entrada_sel, {
+                            "saldo": int(contado),
+                        })
+                        log_cambio(
+                            db, username,
+                            modulo="Cuarto frío", tabla="cuarto_frio_entradas",
+                            id_registro=entrada_sel, accion="ajuste_inventario",
+                            campo="saldo", valor_antes=saldo_anterior, valor_despues=int(contado),
+                            motivo=f"{ajuste_id} — {motivo}: {detalle.strip()} "
+                                   f"(responsable: {mapa_personal.get(responsable, responsable)})",
+                        )
+                        st.success(
+                            f"✅ Ajuste {ajuste_id} guardado: {entrada_sel} pasa de "
+                            f"{saldo_anterior:g} a {int(contado)} unidades."
+                        )
+                        st.rerun()
+
+    with sub_historial:
+        ajustes = db.get_df("cuarto_frio_ajustes")
+        if ajustes.empty:
+            st.info("No hay ajustes de inventario registrados todavía.")
+            return
+        ajustes = ajustes.copy()
+        ajustes["diferencia"] = pd.to_numeric(ajustes["diferencia"], errors="coerce").fillna(0)
+        ajustes["responsable_nombre"] = ajustes["responsable"].apply(
+            lambda x: mapa_personal.get(str(x), str(x)) if str(x).strip() else "Sin registrar"
+        )
+        ajustes["presentacion"] = ajustes["presentacion_id"].map(mapa_pres).fillna(ajustes["presentacion_id"])
+        ajustes["lote_origen"] = ajustes["lote_producto_id"].map(mapa_lote_origen).fillna(ajustes["lote_producto_id"])
+
+        c1, c2 = st.columns(2)
+        desde = c1.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="ajuste_hist_desde")
+        hasta = c2.date_input("Hasta", value=datetime.date.today(), key="ajuste_hist_hasta")
+        periodo = ajustes[
+            (ajustes["fecha"].astype(str) >= desde.isoformat())
+            & (ajustes["fecha"].astype(str) <= hasta.isoformat())
+        ]
+        if periodo.empty:
+            st.info("No hay ajustes en ese período.")
+            return
+
+        faltantes = -periodo.loc[periodo["diferencia"] < 0, "diferencia"].sum()
+        sobrantes = periodo.loc[periodo["diferencia"] > 0, "diferencia"].sum()
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ajustes registrados", len(periodo))
+        m2.metric("Unidades faltantes", f"{faltantes:,.0f}")
+        m3.metric("Unidades sobrantes", f"{sobrantes:,.0f}")
+
+        st.markdown("##### Ajustes por trabajador responsable")
+        conteo = periodo.groupby("responsable_nombre").agg(
+            ajustes=("ajuste_id", "count"),
+            unidades_faltantes=("diferencia", lambda s: -s[s < 0].sum()),
+            unidades_sobrantes=("diferencia", lambda s: s[s > 0].sum()),
+        ).reset_index().sort_values("ajustes", ascending=False)
+        st.dataframe(
+            conteo.rename(columns={
+                "responsable_nombre": "Responsable", "ajustes": "Ajustes",
+                "unidades_faltantes": "Unid. faltantes", "unidades_sobrantes": "Unid. sobrantes",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+        st.bar_chart(conteo.set_index("responsable_nombre")["ajustes"])
+
+        st.markdown("##### Ajustes por motivo")
+        st.dataframe(
+            periodo.groupby("motivo").agg(ajustes=("ajuste_id", "count")).reset_index()
+            .sort_values("ajustes", ascending=False)
+            .rename(columns={"motivo": "Motivo", "ajustes": "Ajustes"}),
+            use_container_width=True, hide_index=True,
+        )
+
+        st.markdown("##### Detalle")
+        st.dataframe(
+            periodo.sort_values("ajuste_id", ascending=False)[[
+                "fecha", "ajuste_id", "responsable_nombre", "presentacion", "lote_origen",
+                "saldo_anterior", "saldo_nuevo", "diferencia", "motivo", "detalle", "usuario",
+            ]].rename(columns={
+                "fecha": "Fecha", "ajuste_id": "Ajuste", "responsable_nombre": "Responsable",
+                "presentacion": "Presentación", "lote_origen": "Lote origen",
+                "saldo_anterior": "Antes", "saldo_nuevo": "Después", "diferencia": "Diferencia",
+                "motivo": "Motivo", "detalle": "Detalle", "usuario": "Registrado por",
+            }),
+            use_container_width=True, hide_index=True,
+        )
