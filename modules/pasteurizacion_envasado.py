@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 from modules.bodega_envases_insumos import _saldo_actual
 from utils.costing import costo_ponderado
-from utils.permisos import ve_costos, puede_corregir_produccion
+from utils.permisos import ve_costos, puede_corregir_produccion, es_admin
 from utils.bitacora import log_cambio, log_cambios_multiples
 
 
@@ -875,8 +875,8 @@ def _render_editar_lote(db, username, rol, semielaborados, presentaciones, turno
 
 
 def _render_eliminar_lote(db, username, rol, semielaborados, presentaciones):
-    if not puede_corregir_produccion(rol):
-        st.error("🔒 Esta función está disponible solo para administrador, jefe de planta y supervisor.")
+    if not es_admin(rol):
+        st.error("🔒 Esta función está disponible solo para el administrador.")
         return
     st.caption(
         "Si prefieres no editar el lote campo por campo, puedes eliminarlo por completo "
