@@ -272,7 +272,14 @@ def render(db, username, rol):
                     db.append_row("movimientos_envases_insumos", {
                         "movimiento_id": mov_id,
                         "fecha": fecha_aj.isoformat(),
-                        "item_tipo": tipo_ajuste.split()[0].lower(),
+                        # Mapa explicito: derivarlo del texto ("Cartón" -> "cartón")
+                        # dejaba la tilde y el inventario, que busca "carton", no
+                        # veia el ajuste.
+                        "item_tipo": {
+                            "Insumo de limpieza": "insumo", "Envase": "envase",
+                            "Tapa (PET)": "tapa", "Etiqueta": "etiqueta",
+                            "Cartón": "carton", "Liner de aluminio": "liner",
+                        }[tipo_ajuste],
                         "item_id": item_sel,
                         "tipo_movimiento": tipo_mov,
                         "cantidad": cantidad,
