@@ -238,8 +238,34 @@ def render(db, username, rol):
 
                     st.write("")
                     if st.button("💾 Registrar despacho completo", type="primary", use_container_width=True):
+                        # Total a descontar por lote: una carga puede llevar el
+                        # mismo lote en varias lineas (distintos clientes), y el
+                        # saldo debe bajar por la suma de todas, no solo la ultima.
+                        total_por_entrada = {}
+                        for linea in lineas_acum:
+                            total_por_entrada[linea["entrada_id"]] = (
+                                total_por_entrada.get(linea["entrada_id"], 0) + linea["cantidad"]
+                            )
+                        # Saldo leido en este momento desde la hoja (no el cache
+                        # de hasta 3 min), por si otro usuario despacho mientras
+                        # se armaba la carga.
+                        entradas_frescas = db.get_df("cuarto_frio_entradas", forzar_actualizacion=True)
+                        saldos_frescos = dict(zip(
+                            entradas_frescas["entrada_id"],
+                            pd.to_numeric(entradas_frescas["saldo"], errors="coerce").fillna(0),
+                        ))
+                        sin_saldo = [
+                            mapa_entrada_info.get(e, {}).get("lote_origen", e)
+                            for e, total in total_por_entrada.items()
+                            if total > saldos_frescos.get(e, 0)
+                        ]
                         if not despachador_personal_id:
                             st.error("Selecciona el trabajador responsable antes de guardar.")
+                        elif sin_saldo:
+                            st.error(
+                                f"El saldo de {', '.join(map(str, sin_saldo))} cambió mientras armabas la carga "
+                                "y ya no alcanza. Revisa las líneas y vuelve a intentar."
+                            )
                         else:
                             salidas_generadas = []
                             pedidos_marcados = []
@@ -257,14 +283,14 @@ def render(db, username, rol):
                                     "usuario": username,
                                     "observaciones": observaciones,
                                 })
-                                saldo_actual = float(entradas.set_index("entrada_id").loc[linea["entrada_id"], "saldo"])
-                                db.update_row("cuarto_frio_entradas", "entrada_id", linea["entrada_id"], {
-                                    "saldo": saldo_actual - linea["cantidad"],
-                                })
                                 salidas_generadas.append(salida_id)
                                 if linea["pedido_ref"] and linea["pedido_ref"] not in pedidos_marcados:
                                     db.update_row("pedidos", "pedido_id", linea["pedido_ref"], {"producido": True})
                                     pedidos_marcados.append(linea["pedido_ref"])
+                            for entrada_id_desc, total in total_por_entrada.items():
+                                db.update_row("cuarto_frio_entradas", "entrada_id", entrada_id_desc, {
+                                    "saldo": saldos_frescos[entrada_id_desc] - total,
+                                })
 
                             st.session_state[clave_lineas] = []
                             msg = f"✅ Despacho registrado: {len(salidas_generadas)} línea(s)"
