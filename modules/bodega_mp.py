@@ -113,10 +113,14 @@ def render(db, username, rol):
                 use_container_width=True,
             )
 
-    tab_recepcion, tab_inventario, tab_historial, tab_perdida, tab_corregir = st.tabs(
+    tab_recepcion, tab_inventario, tab_historial, tab_perdida, tab_ajuste, tab_corregir = st.tabs(
         ["Registrar recepción", "Inventario actual", "Historial",
-         "⚠️ Registrar pérdida/daño", "✏️ Corregir / eliminar recepción"]
+         "⚠️ Registrar pérdida/daño", "⚖️ Ajuste de inventario",
+         "✏️ Corregir / eliminar recepción"]
     )
+
+    with tab_ajuste:
+        _render_ajuste_inventario(db, username)
 
     # ======================== REGISTRAR RECEPCIÓN ========================
     with tab_recepcion:
@@ -566,3 +570,197 @@ def render(db, username, rol):
                                     f"Ya no aparece en el inventario."
                                 )
                                 st.rerun()
+
+
+MOTIVOS_AJUSTE_MP = [
+    "Conteo físico no coincide",
+    "Recepción registrada con menos cubetas",
+    "Recepción registrada con más cubetas",
+    "Consumo de producción mal registrado",
+    "Otro",
+]
+
+
+def _render_ajuste_inventario(db, username):
+    """Lleva el saldo de un lote al conteo fisico, hacia arriba o hacia abajo.
+    Exige motivo y trabajador responsable; el historial cuenta los ajustes por
+    responsable para detectar a quien capacitar."""
+    personal = db.get_df("personal")
+    mapa_personal = (
+        dict(zip(personal["personal_id"], personal["nombre"]))
+        if not personal.empty and "personal_id" in personal.columns else {}
+    )
+    prov = db.get_df("proveedores")
+    mapa_prov = (
+        dict(zip(prov["proveedor_id"], prov["nombre"]))
+        if not prov.empty and "proveedor_id" in prov.columns else {}
+    )
+
+    sub_registrar, sub_historial = st.tabs(["➕ Registrar ajuste", "📊 Historial de ajustes"])
+
+    with sub_registrar:
+        st.caption(
+            "Usa esto cuando el conteo físico de cubetas no coincide con el sistema — "
+            "sirve tanto para **agregar** como para **quitar** cubetas. Escribe cuántas "
+            "hay **realmente** en el lote; el sistema calcula la diferencia y la deja "
+            "registrada con el motivo y el responsable."
+        )
+        recepciones = _recepciones_activas(db)
+        if recepciones.empty:
+            st.info("No hay recepciones activas registradas todavía.")
+        elif not mapa_personal:
+            st.warning("Configura el personal en Catálogos para poder registrar al responsable.")
+        else:
+            recepciones = recepciones.copy()
+            recepciones["cubetas_saldo"] = pd.to_numeric(recepciones["cubetas_saldo"], errors="coerce").fillna(0)
+            incluir_cero = st.checkbox(
+                "Mostrar también lotes que el sistema tiene en cero (para agregar cubetas)",
+                key="mp_ajuste_incluir_cero",
+            )
+            lotes = recepciones if incluir_cero else recepciones[recepciones["cubetas_saldo"] > 0]
+            lotes = lotes.sort_values("fecha", ascending=False)
+            if lotes.empty:
+                st.info("No hay lotes con saldo. Marca la casilla de arriba para ver los lotes en cero.")
+            else:
+                def _etiqueta_lote(rid):
+                    r = lotes.set_index("recepcion_id").loc[rid]
+                    return (
+                        f"{rid} | {r['fecha']} | {mapa_prov.get(r['origen_id'], r['origen_id'])} | "
+                        f"en sistema: {r['cubetas_saldo']:g} cub."
+                    )
+
+                rec_sel = st.selectbox(
+                    "Lote", lotes["recepcion_id"], format_func=_etiqueta_lote, key="mp_ajuste_lote",
+                )
+                saldo_sistema = float(lotes.set_index("recepcion_id").loc[rec_sel, "cubetas_saldo"])
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("📦 En sistema", f"{saldo_sistema:g} cub.")
+                contado = c2.number_input(
+                    "Cubetas contadas físicamente", min_value=0.0, step=1.0,
+                    value=saldo_sistema, key=f"mp_ajuste_contado_{rec_sel}",
+                )
+                diferencia = round(contado - saldo_sistema, 4)
+                c3.metric("Diferencia", f"{diferencia:+g} cub.")
+
+                responsable = st.selectbox(
+                    "Trabajador responsable del descuadre",
+                    [""] + list(mapa_personal),
+                    format_func=lambda x: "— Selecciona el responsable —" if x == "" else mapa_personal[x],
+                    key="mp_ajuste_responsable",
+                )
+                motivo = st.selectbox("Motivo del ajuste", MOTIVOS_AJUSTE_MP, key="mp_ajuste_motivo")
+                detalle = st.text_area(
+                    "Explica qué pasó (obligatorio)",
+                    placeholder="ej. 'llegaron 75 cubetas más de La Libertad y no se registraron'",
+                    key="mp_ajuste_detalle",
+                )
+
+                if st.button("💾 Guardar ajuste", type="primary", key="mp_ajuste_guardar"):
+                    if diferencia == 0:
+                        st.error("El conteo es igual al sistema — no hay nada que ajustar.")
+                    elif not responsable:
+                        st.error("Selecciona el trabajador responsable.")
+                    elif not detalle.strip():
+                        st.error("Explica qué pasó antes de guardar.")
+                    else:
+                        # Saldo fresco de la hoja: si produccion consumio del lote
+                        # mientras se llenaba el formulario, el ajuste se calcula
+                        # contra el saldo real y no contra el de la pantalla.
+                        frescas = db.get_df("recepciones_mp", forzar_actualizacion=True)
+                        fila = frescas[frescas["recepcion_id"].astype(str) == str(rec_sel)].iloc[0]
+                        saldo_anterior = float(pd.to_numeric(fila["cubetas_saldo"], errors="coerce") or 0)
+                        hoy = datetime.date.today()
+                        ajuste_id = db.siguiente_id("mp_ajustes", "AJMP", hoy)
+                        db.append_row("mp_ajustes", {
+                            "ajuste_id": ajuste_id,
+                            "fecha": hoy.isoformat(),
+                            "recepcion_id": rec_sel,
+                            "origen_id": fila["origen_id"],
+                            "saldo_anterior": saldo_anterior,
+                            "saldo_nuevo": contado,
+                            "diferencia": round(contado - saldo_anterior, 4),
+                            "motivo": motivo,
+                            "detalle": detalle.strip(),
+                            "responsable": responsable,
+                            "usuario": username,
+                        })
+                        obs_prev = str(fila.get("observaciones", "") or "")
+                        db.update_row("recepciones_mp", "recepcion_id", rec_sel, {
+                            "cubetas_saldo": contado,
+                            "observaciones": (
+                                obs_prev + f" | {ajuste_id}: saldo {saldo_anterior:g}→{contado:g} ({motivo})"
+                            ).strip(" |"),
+                        })
+                        log_cambio(
+                            db, username,
+                            modulo="Bodega de materia prima", tabla="recepciones_mp",
+                            id_registro=rec_sel, accion="ajuste_inventario",
+                            campo="cubetas_saldo", valor_antes=saldo_anterior, valor_despues=contado,
+                            motivo=f"{ajuste_id} — {motivo}: {detalle.strip()} "
+                                   f"(responsable: {mapa_personal.get(responsable, responsable)})",
+                        )
+                        st.success(
+                            f"✅ Ajuste {ajuste_id} guardado: {rec_sel} pasa de "
+                            f"{saldo_anterior:g} a {contado:g} cubetas."
+                        )
+                        st.rerun()
+
+    with sub_historial:
+        ajustes = db.get_df("mp_ajustes")
+        if ajustes.empty:
+            st.info("No hay ajustes de inventario registrados todavía.")
+            return
+        ajustes = ajustes.copy()
+        ajustes["diferencia"] = pd.to_numeric(ajustes["diferencia"], errors="coerce").fillna(0)
+        ajustes["responsable_nombre"] = ajustes["responsable"].apply(
+            lambda x: mapa_personal.get(str(x), str(x)) if str(x).strip() else "Sin registrar"
+        )
+        ajustes["proveedor"] = ajustes["origen_id"].map(mapa_prov).fillna(ajustes["origen_id"])
+
+        c1, c2 = st.columns(2)
+        desde = c1.date_input("Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="mp_ajuste_desde")
+        hasta = c2.date_input("Hasta", value=datetime.date.today(), key="mp_ajuste_hasta")
+        periodo = ajustes[
+            (ajustes["fecha"].astype(str) >= desde.isoformat())
+            & (ajustes["fecha"].astype(str) <= hasta.isoformat())
+        ]
+        if periodo.empty:
+            st.info("No hay ajustes en ese período.")
+            return
+
+        faltantes = abs(periodo.loc[periodo["diferencia"] < 0, "diferencia"].sum())
+        sobrantes = periodo.loc[periodo["diferencia"] > 0, "diferencia"].sum()
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ajustes registrados", len(periodo))
+        m2.metric("Cubetas quitadas", f"{faltantes:,.0f}")
+        m3.metric("Cubetas agregadas", f"{sobrantes:,.0f}")
+
+        st.markdown("##### Ajustes por trabajador responsable")
+        conteo = periodo.groupby("responsable_nombre").agg(
+            ajustes=("ajuste_id", "count"),
+            quitadas=("diferencia", lambda s: -s[s < 0].sum()),
+            agregadas=("diferencia", lambda s: s[s > 0].sum()),
+        ).reset_index().sort_values("ajustes", ascending=False)
+        st.dataframe(
+            conteo.rename(columns={
+                "responsable_nombre": "Responsable", "ajustes": "Ajustes",
+                "quitadas": "Cub. quitadas", "agregadas": "Cub. agregadas",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+        st.bar_chart(conteo.set_index("responsable_nombre")["ajustes"])
+
+        st.markdown("##### Detalle")
+        st.dataframe(
+            periodo.sort_values("ajuste_id", ascending=False)[[
+                "fecha", "ajuste_id", "responsable_nombre", "recepcion_id", "proveedor",
+                "saldo_anterior", "saldo_nuevo", "diferencia", "motivo", "detalle", "usuario",
+            ]].rename(columns={
+                "fecha": "Fecha", "ajuste_id": "Ajuste", "responsable_nombre": "Responsable",
+                "recepcion_id": "Lote", "proveedor": "Proveedor",
+                "saldo_anterior": "Antes", "saldo_nuevo": "Después", "diferencia": "Diferencia",
+                "motivo": "Motivo", "detalle": "Detalle", "usuario": "Registrado por",
+            }),
+            use_container_width=True, hide_index=True,
+        )

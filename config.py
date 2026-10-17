@@ -117,6 +117,12 @@ SHEET_SCHEMAS = {
         "merma_id", "fecha", "recepcion_id", "causa", "huevos_danados",
         "cubetas_equivalentes", "costo_estimado", "usuario", "observaciones",
     ],
+    # Ajustes de inventario de huevo al conteo fisico (suben o bajan el saldo
+    # de un lote), con motivo y trabajador responsable para el historial.
+    "mp_ajustes": [
+        "ajuste_id", "fecha", "recepcion_id", "origen_id", "saldo_anterior",
+        "saldo_nuevo", "diferencia", "motivo", "detalle", "responsable", "usuario",
+    ],
 
     # ---------- Produccion de semielaborados ----------
     "consumo_mp_produccion": [

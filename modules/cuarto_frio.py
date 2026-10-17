@@ -1196,7 +1196,7 @@ def _render_ajuste_inventario(db, username, presentaciones, pasteurizado):
             st.info("No hay ajustes en ese período.")
             return
 
-        faltantes = -periodo.loc[periodo["diferencia"] < 0, "diferencia"].sum()
+        faltantes = abs(periodo.loc[periodo["diferencia"] < 0, "diferencia"].sum())
         sobrantes = periodo.loc[periodo["diferencia"] > 0, "diferencia"].sum()
         m1, m2, m3 = st.columns(3)
         m1.metric("Ajustes registrados", len(periodo))
