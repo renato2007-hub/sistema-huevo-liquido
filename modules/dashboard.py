@@ -182,6 +182,12 @@ def render(db, username, rol):
     consumo_f    = _filtrar_por_fecha(consumo_mp, desde, hasta)
     past_f       = _filtrar_por_fecha(pasteurizacion, desde, hasta)
     mov_f        = _filtrar_por_fecha(movimientos, desde, hasta)
+    # Los ajustes manuales de inventario (Bodega de envases -> Ajuste, ids
+    # "AJ-...") corrigen el saldo pero no son consumo ni merma real: sin este
+    # filtro, una salida de ajuste aparecia como insumo consumido en el dia.
+    # Los saldos siguen usando "movimientos" completo, con ajustes incluidos.
+    if not mov_f.empty and "movimiento_id" in mov_f.columns:
+        mov_f = mov_f[~mov_f["movimiento_id"].astype(str).str.startswith("AJ-")]
     limpieza_f   = _filtrar_por_fecha(limpieza, desde, hasta)
     mermas_mp_f  = _filtrar_por_fecha(mermas_mp, desde, hasta)
 
@@ -290,7 +296,7 @@ def render(db, username, rol):
                 icono = "✅" if "sin" not in row["etiqueta"] else "🔴"
                 costo_kg = row["costo_total"] / row["kg"] if row["kg"] > 0 else 0
                 _kpi_card(col, icono, row["etiqueta"],
-                          f"{row['kg']:,.1f} kg",
+                          f"{row['kg']:,.2f} kg",
                           sufijo=f"Costo prom. ${costo_kg:,.3f}/kg" if ve_costos(rol) else None)
 
     st.write("")
@@ -604,6 +610,7 @@ def render(db, username, rol):
                     filas_env = [{"Presentación": r["nombre"], "Saldo": _saldo_actual(movimientos,"envase",r["presentacion_id"])}
                                  for _, r in presentaciones.iterrows()]
                     df_env = pd.DataFrame(filas_env)
+                    df_env["Saldo"] = df_env["Saldo"].round(2)
                     st.dataframe(df_env, use_container_width=True, hide_index=True)
                     _grafico_barras(df_env.set_index("Presentación")["Saldo"], color=NARANJA)
 
@@ -617,7 +624,11 @@ def render(db, username, rol):
                                   "Saldo": _saldo_actual(movimientos,"insumo",r["insumo_id"])}
                                  for _, r in insumos.iterrows()]
                     df_ins = pd.DataFrame(filas_ins)
-                    st.dataframe(df_ins, use_container_width=True, hide_index=True)
+                    df_ins["Saldo"] = df_ins["Saldo"].round(2)
+                    st.dataframe(
+                        df_ins, use_container_width=True, hide_index=True,
+                        column_config={"Saldo": st.column_config.NumberColumn(format="%.2f")},
+                    )
                     _grafico_barras(df_ins.set_index("Insumo")["Saldo"], color=TEAL)
 
         st.divider()
@@ -648,9 +659,17 @@ def render(db, username, rol):
                     resumen_ins = salidas_insumos.groupby("nombre").agg(
                         cantidad=("cantidad","sum"), costo=("costo_total","sum")
                     ).reset_index().sort_values("cantidad", ascending=False)
+                    resumen_ins[["cantidad", "costo"]] = resumen_ins[["cantidad", "costo"]].round(2)
                     if ve_costos(rol):
                         st.caption(f"Costo total: **${resumen_ins['costo'].sum():,.2f}**")
-                    st.dataframe(resumen_ins, use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        resumen_ins if ve_costos(rol) else resumen_ins.drop(columns=["costo"]),
+                        use_container_width=True, hide_index=True,
+                        column_config={
+                            "cantidad": st.column_config.NumberColumn(format="%.2f"),
+                            "costo": st.column_config.NumberColumn(format="%.2f"),
+                        },
+                    )
                     _grafico_barras(resumen_ins.set_index("nombre")["cantidad"], color=TEAL)
 
         with col_env_c:
@@ -702,9 +721,9 @@ def render(db, username, rol):
 
         st.markdown("##### ♻️ Cáscara (subproducto para biomateriales)")
         c1, c2, c3 = st.columns(3)
-        _kpi_card(c1, "🥚", "Producida en el período", f"{cascara_producida_periodo:,.1f} kg")
-        _kpi_card(c2, "🚚", "Enviada a biomateriales", f"{cascara_enviada_periodo:,.1f} kg")
-        _kpi_card(c3, "📦", "En bodega (saldo actual)", f"{cascara_saldo_actual:,.1f} kg")
+        _kpi_card(c1, "🥚", "Producida en el período", f"{cascara_producida_periodo:,.2f} kg")
+        _kpi_card(c2, "🚚", "Enviada a biomateriales", f"{cascara_enviada_periodo:,.2f} kg")
+        _kpi_card(c3, "📦", "En bodega (saldo actual)", f"{cascara_saldo_actual:,.2f} kg")
 
         if kg_total_periodo > 0:
             pct_cascara = cascara_producida_periodo / kg_total_periodo * 100
@@ -714,7 +733,7 @@ def render(db, username, rol):
         st.markdown("##### 💔 Otras mermas")
         m1, m2, m3 = st.columns(3)
         _kpi_card(m1, "💔", "Huevos dañados en bodega", f"{huevos_danados_total:,.0f}")
-        _kpi_card(m2, "🧪", "Clara/yema desechada", f"{kg_semi_desechado:,.1f} kg")
+        _kpi_card(m2, "🧪", "Clara/yema desechada", f"{kg_semi_desechado:,.2f} kg")
         if ve_costos(rol):
             _kpi_card(m3, "💲", "Costo perdido (huevo + semi)", f"${(costo_mermas_mp+costo_semi_desechado):,.2f}")
 
@@ -1028,13 +1047,13 @@ def render(db, username, rol):
                 with st.container(border=True):
                     st.markdown(f"#### 🔄 {tnombre}")
                     c1,c2,c3,c4 = st.columns(4)
-                    c1.metric("Kg producidos", f"{kg_total:,.1f} kg")
+                    c1.metric("Kg producidos", f"{kg_total:,.2f} kg")
                     c2.metric("Costo total", f"${costo_total_turno:,.2f}")
                     c3.metric("Costo/kg", f"${costo_kg_turno:,.3f}")
                     c4.metric("Agua usada", f"{agua:,.0f} L")
 
                     if kg_por_tipo:
-                        st.caption("Kg por producto: " + " · ".join(f"**{t}**: {v:.1f} kg" for t,v in kg_por_tipo.items()))
+                        st.caption("Kg por producto: " + " · ".join(f"**{t}**: {v:.2f} kg" for t,v in kg_por_tipo.items()))
 
                     col_d, col_g = st.columns([2,1])
                     with col_d:
@@ -1097,7 +1116,7 @@ def render(db, username, rol):
 
             st.markdown(f"### 📅 Resumen del {fecha_d.strftime('%d/%m/%Y')}")
             r1,r2,r3,r4,r5 = st.columns(5)
-            r1.metric("Kg producidos", f"{kg_dia:,.1f} kg")
+            r1.metric("Kg producidos", f"{kg_dia:,.2f} kg")
             r2.metric("Costo total día", f"${costo_total_dia:,.2f}")
             r3.metric("Costo/kg", f"${costo_kg_dia:,.3f}")
             r4.metric("HH/kg", f"{hh_por_kg_dia:,.3f}")
@@ -1305,7 +1324,7 @@ def render(db, username, rol):
                         # Fila de promedios
                         st.caption(
                             f"**Promedios del período** — "
-                            f"Kg/día: {tend_df['kg'].mean():,.1f} · "
+                            f"Kg/día: {tend_df['kg'].mean():,.2f} · "
                             f"Costo/kg: ${tend_df['costo_kg'].mean():,.3f} · "
                             f"HH/kg: {tend_df['hh_kg'].mean():,.3f} · "
                             f"L/kg: {tend_df['agua_kg'].mean():,.2f} · "
