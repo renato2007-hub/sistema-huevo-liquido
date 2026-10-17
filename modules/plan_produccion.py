@@ -115,14 +115,14 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
     datos = [[_p(h, negrita=True) for h in ["Producto", "Kg a producir", "Cubetas", "Pedidos", "Clientes"]]]
     for row in consolidado:
         datos.append([
-            _p(row["producto"]), _p(f"{row['kg']:.1f} kg"),
+            _p(row["producto"]), _p(f"{row['kg']:.2f} kg"),
             _p(f"{row.get('cubetas', 0):.0f}"),
             _p(", ".join(row["pedidos"][:3]) + ("..." if len(row["pedidos"]) > 3 else "")),
             _p(", ".join(sorted(set(row["clientes"]))[:3])),
         ])
     datos.append([
         _p("TOTAL", negrita=True),
-        _p(f"{sum(r['kg'] for r in consolidado):.1f} kg", negrita=True),
+        _p(f"{sum(r['kg'] for r in consolidado):.2f} kg", negrita=True),
         _p(f"{cubetas_necesarias_total:.0f}", negrita=True),
         _p(""), _p(""),
     ])
@@ -144,7 +144,7 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
             bloque_turno = [Paragraph(f"<b>{tr['turno']}</b>", ESTILOS["Normal"])]
             datos_t = [[_p(h, negrita=True) for h in ["Producto", "Kg a producir"]]]
             for prod, kg in tr["kg_por_producto"].items():
-                datos_t.append([_p(prod), _p(f"{kg:.1f} kg")])
+                datos_t.append([_p(prod), _p(f"{kg:.2f} kg")])
             datos_t.append([
                 _p("Cubetas necesarias para este turno", negrita=True),
                 _p(f"{tr['cubetas']:.0f}", negrita=True),
@@ -178,9 +178,9 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
             for fila in tp["filas"]:
                 datos_p.append([
                     _p(fila["producto"]),
-                    _p(f"{fila['disponible']:.1f} kg"),
-                    _p(f"{fila['a_pasteurizar']:.1f} kg"),
-                    _p(f"{fila['pendiente']:.1f} kg" if fila["pendiente"] >= 0.1 else "—"),
+                    _p(f"{fila['disponible']:.2f} kg"),
+                    _p(f"{fila['a_pasteurizar']:.2f} kg"),
+                    _p(f"{fila['pendiente']:.2f} kg" if fila["pendiente"] >= 0.1 else "—"),
                     _p(fila["nota"] or "—", pequeño=True),
                 ])
             tp_tabla = Table(datos_p, repeatRows=1, colWidths=[3*cm, 2.5*cm, 2.8*cm, 2.5*cm, 6.2*cm])
@@ -211,7 +211,7 @@ def _generar_pdf(fecha, consolidado, detalle, cubetas_necesarias_total,
         det.append([
             _p(row["pedido_id"], pequeño=True), _p(row["cliente"], pequeño=True),
             _p(row["tipo_producto"], pequeño=True), _p(row["presentacion"], pequeño=True),
-            _p(f"{row['kg']:.1f}", pequeño=True), _p(str(row["unidades"]), pequeño=True),
+            _p(f"{row['kg']:.2f}", pequeño=True), _p(str(row["unidades"]), pequeño=True),
             _p(row.get("turno_nombre", "—") or "—", pequeño=True),
             _p(row["fecha_entrega"], pequeño=True),
             _p(row.get("observaciones", "") or "", pequeño=True),
@@ -459,15 +459,15 @@ def _render_planificar(db, username, rol):
         for t in turnos_del_dia:
             nombre_t = mapa_turnos.get(t, t)
             fila_tur[nombre_t] = (
-                [f"{c['kg_por_turno'].get(t, 0):.1f} kg" if c['kg_por_turno'].get(t, 0) > 0 else "—" for c in consolidado]
+                [f"{c['kg_por_turno'].get(t, 0):.2f} kg" if c['kg_por_turno'].get(t, 0) > 0 else "—" for c in consolidado]
                 + [f"{mapa_cubetas_por_turno.get(nombre_t, 0):.0f}"]
             )
         if hay_sin_asignar:
             fila_tur["Sin asignar"] = (
-                [f"{c['kg_sin_turno']:.1f} kg" if c['kg_sin_turno'] > 0 else "—" for c in consolidado]
+                [f"{c['kg_sin_turno']:.2f} kg" if c['kg_sin_turno'] > 0 else "—" for c in consolidado]
                 + [f"{mapa_cubetas_por_turno.get('Sin asignar', 0):.0f}"]
             )
-        fila_tur["Total"] = [f"{c['kg']:.1f} kg" for c in consolidado] + [f"{cubetas_necesarias_total:.0f}"]
+        fila_tur["Total"] = [f"{c['kg']:.2f} kg" for c in consolidado] + [f"{cubetas_necesarias_total:.0f}"]
         st.dataframe(pd.DataFrame(fila_tur), use_container_width=True, hide_index=True)
         st.caption(
             "Las cubetas de cada turno también aplican la lógica de co-producto "
@@ -551,7 +551,7 @@ def _render_planificar(db, username, rol):
         with col:
             with st.container(border=True):
                 st.markdown(f"**{row['producto']}**")
-                st.metric("Kg pedidos", f"{row['kg']:,.1f} kg")
+                st.metric("Kg pedidos", f"{row['kg']:,.2f} kg")
                 if row["producto"] in TIPOS_CLARA or row["producto"] in TIPOS_YEMA:
                     co_producto = "yema" if row["producto"] in TIPOS_CLARA else "clara"
                     st.caption(
@@ -561,9 +561,9 @@ def _render_planificar(db, username, rol):
                 else:
                     st.caption(f"🥚 Cubetas necesarias: {row['cubetas']:.0f}")
                 if kg_en_cf > 0:
-                    st.caption(f"✅ {kg_en_cf:.1f} kg ya en cuarto frío → producir {kg_a_producir:.1f} kg adicionales")
+                    st.caption(f"✅ {kg_en_cf:.2f} kg ya en cuarto frío → producir {kg_a_producir:.2f} kg adicionales")
                 else:
-                    st.caption(f"Producir: {kg_a_producir:.1f} kg")
+                    st.caption(f"Producir: {kg_a_producir:.2f} kg")
                 st.caption(f"Pedidos: {len(row['pedidos'])} | Clientes: {', '.join(sorted(set(row['clientes'])))}")
 
     st.write("")
@@ -572,7 +572,7 @@ def _render_planificar(db, username, rol):
     with st.container(border=True):
         st.markdown("##### 🥚 Materia prima necesaria")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Kg totales a producir", f"{kg_total_dia:,.1f} kg")
+        c1.metric("Kg totales a producir", f"{kg_total_dia:,.2f} kg")
         c2.metric("Cubetas necesarias", f"{cubetas_necesarias_total:.0f}")
         c3.metric("Cubetas disponibles en bodega", f"{cubetas_disponibles:.0f}",
                   delta=f"{cubetas_disponibles - cubetas_necesarias_total:+.0f}",
@@ -586,13 +586,13 @@ def _render_planificar(db, username, rol):
             sobrante_yema = kg_yema_producida - kg_yema_total
             texto_sobrante = ""
             if sobrante_clara > 0.5:
-                texto_sobrante = f" (sobran ~{sobrante_clara:.1f} kg de clara respecto a lo pedido hoy)"
+                texto_sobrante = f" (sobran ~{sobrante_clara:.2f} kg de clara respecto a lo pedido hoy)"
             elif sobrante_yema > 0.5:
-                texto_sobrante = f" (sobran ~{sobrante_yema:.1f} kg de yema respecto a lo pedido hoy)"
+                texto_sobrante = f" (sobran ~{sobrante_yema:.2f} kg de yema respecto a lo pedido hoy)"
             st.caption(
                 f"ℹ️ Clara y yema salen del mismo quiebre de huevo, no se suman por separado: "
                 f"se necesitan **{cubetas_clara_yema:.0f} cubetas** para cubrir "
-                f"{kg_clara_total:.1f} kg de clara + {kg_yema_total:.1f} kg de yema"
+                f"{kg_clara_total:.2f} kg de clara + {kg_yema_total:.2f} kg de yema"
                 f"{texto_sobrante} — no {cubetas_suma_ingenua:.0f} como saldría sumándolas."
             )
 
@@ -648,8 +648,8 @@ def _render_planificar(db, username, rol):
                         continue
                     hubo_filas = True
                     st.caption(
-                        f"**{base}** — disponible: {disp:.1f} kg "
-                        f"(nuevo de este turno: {quiebre_turno:.1f} kg)"
+                        f"**{base}** — disponible: {disp:.2f} kg "
+                        f"(nuevo de este turno: {quiebre_turno:.2f} kg)"
                     )
                     key_base = f"pastplan_{fecha_sel.isoformat()}_{t}_{base}"
                     a_pasteurizar = st.number_input(
@@ -661,7 +661,7 @@ def _render_planificar(db, username, rol):
                     nota = ""
                     if pendiente >= 0.1:
                         nota = st.text_input(
-                            f"🟡 Quedan {pendiente:.1f} kg de {base} pendientes — ¿por qué / para qué se completan?",
+                            f"🟡 Quedan {pendiente:.2f} kg de {base} pendientes — ¿por qué / para qué se completan?",
                             key=f"pastplan_nota_{fecha_sel.isoformat()}_{t}_{base}",
                             placeholder="ej. se completa con el quiebre de mañana",
                         )

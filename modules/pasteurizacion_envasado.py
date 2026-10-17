@@ -1054,7 +1054,7 @@ def render(db, username, rol):
                     obs_gr = st.text_input("Observaciones (opcional)", "", key="granel_obs")
 
                     st.info(
-                        f"Se guardarán **{kg_a_trasladar:.1f} kg** de **{tipo_producto_gr}** "
+                        f"Se guardarán **{kg_a_trasladar:.2f} kg** de **{tipo_producto_gr}** "
                         f"en recipiente de acero inoxidable. Tendrán máximo **2 días** para envasar o desechar."
                     )
 
@@ -1073,7 +1073,7 @@ def render(db, username, rol):
                         db.update_row("produccion_semielaborados", "lote_semielaborado_id", lote_sel, {
                             "kg_saldo": round(saldo_disp - kg_a_trasladar, 2),
                         })
-                        st.success(f"✅ {stock_id}: {kg_a_trasladar:.1f} kg de {tipo_producto_gr} trasladados a recipiente.")
+                        st.success(f"✅ {stock_id}: {kg_a_trasladar:.2f} kg de {tipo_producto_gr} trasladados a recipiente.")
                         st.rerun()
 
     with tab_historial:

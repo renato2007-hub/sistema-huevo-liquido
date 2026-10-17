@@ -189,7 +189,7 @@ def render(db, username, rol):
                     info_sel = mapa_entrada_info.get(mapa_entrada.get(entrada_sel), {})
                     cs1, cs2 = st.columns(2)
                     cs1.metric("📦 Unidades disponibles", f"{info_sel.get('saldo_libre', 0):,}")
-                    cs2.metric("⚖️ Kg disponibles", f"{info_sel.get('kg_libre', 0):,.1f} kg")
+                    cs2.metric("⚖️ Kg disponibles", f"{info_sel.get('kg_libre', 0):,.2f} kg")
 
                     if st.button("➕ Agregar a la carga", use_container_width=True):
                         if cliente_sel == "— Elige —":
@@ -380,7 +380,7 @@ def render(db, username, rol):
             n_lotes = inventario["lote_producto_id"].nunique()
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("📦 Total unidades", f"{total_unidades:,}")
-            k2.metric("⚖️ Total kg", f"{total_kg:,.1f} kg")
+            k2.metric("⚖️ Total kg", f"{total_kg:,.2f} kg")
             k3.metric("🏷️ Presentaciones", f"{n_presentaciones}")
             k4.metric("🔢 Lotes en stock", f"{n_lotes}")
 
@@ -486,7 +486,7 @@ def render(db, username, rol):
                         hole=0.5,
                         marker_colors=[_color_etiq(e) for e in prod_g["etiqueta"]],
                         textinfo="label+percent",
-                        hovertemplate="%{label}: %{value:,.1f} kg<extra></extra>",
+                        hovertemplate="%{label}: %{value:,.2f} kg<extra></extra>",
                     ))
                     fig_dona.update_layout(
                         height=280,
@@ -577,12 +577,12 @@ def render(db, username, rol):
                 stock_activo2["stock_id"],
                 format_func=lambda x: (
                     f"{x} — {stock_activo2.set_index('stock_id').loc[x, 'tipo_producto']} "
-                    f"({stock_activo2.set_index('stock_id').loc[x, 'kg_saldo']:.1f} kg)"
+                    f"({stock_activo2.set_index('stock_id').loc[x, 'kg_saldo']:.2f} kg)"
                 ),
                 key="granel_accion_sel",
             )
             fila_stock = stock_activo2.set_index("stock_id").loc[stock_sel]
-            kg_disp_stock = round(float(fila_stock["kg_saldo"]), 1)
+            kg_disp_stock = round(float(fila_stock["kg_saldo"]), 2)
             tipo_stock = str(fila_stock["tipo_producto"])
             lote_origen_stock = str(fila_stock["lote_origen"])
 
@@ -593,9 +593,9 @@ def render(db, username, rol):
             )
 
             kg_accion = st.number_input(
-                f"Kg a procesar (máx {kg_disp_stock:.1f} kg)",
-                min_value=min(0.1, kg_disp_stock), max_value=kg_disp_stock, value=kg_disp_stock, step=0.1,
-                format="%.1f", key=f"granel_kg_accion_{stock_sel}",
+                f"Kg a procesar (máx {kg_disp_stock:.2f} kg)",
+                min_value=min(0.01, kg_disp_stock), max_value=kg_disp_stock, value=kg_disp_stock, step=0.01,
+                format="%.2f", key=f"granel_kg_accion_{stock_sel}",
             )
 
             if accion == "🔄 Pasar a producción (próximo turno)":
@@ -629,7 +629,7 @@ def render(db, username, rol):
                     })
                     nuevo_saldo_stock = kg_disp_stock - kg_accion
                     db.update_row("stock_a_granel", "stock_id", stock_sel, {"kg_saldo": nuevo_saldo_stock})
-                    st.success(f"✅ {kg_accion:.1f} kg devueltos a producción como lote {nuevo_lote_id}.")
+                    st.success(f"✅ {kg_accion:.2f} kg devueltos a producción como lote {nuevo_lote_id}.")
                     st.rerun()
 
             else:  # Desechar
@@ -642,7 +642,7 @@ def render(db, username, rol):
                             "kg_saldo": kg_disp_stock - kg_accion,
                             "observaciones": f"Desechado: {causa_desc}",
                         })
-                        st.success(f"🗑️ {kg_accion:.1f} kg de {tipo_stock} desechados del recipiente {stock_sel}.")
+                        st.success(f"🗑️ {kg_accion:.2f} kg de {tipo_stock} desechados del recipiente {stock_sel}.")
                         st.rerun()
 
     with tab_vehiculos:
@@ -720,7 +720,7 @@ def render(db, username, rol):
                 kg_total = vista["kg"].sum()
                 col_m1, col_m2 = st.columns(2)
                 col_m1.metric("Total de unidades cargadas (según filtro)", f"{int(cantidad_total)}")
-                col_m2.metric("Total en kg (según filtro)", f"{kg_total:,.1f} kg")
+                col_m2.metric("Total en kg (según filtro)", f"{kg_total:,.2f} kg")
 
                 if "cliente_nombre" in vista.columns:
                     st.markdown("**Resumen por cliente:**")

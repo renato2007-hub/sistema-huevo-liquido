@@ -80,7 +80,7 @@ def render(db, username, rol):
         kg_nominal_l = float(presentaciones.set_index("presentacion_id").loc[pres_sel, "kg_nominal"])
         # kg se calcula automaticamente: unidades * kg_nominal de la presentacion
         kg_sel       = round(unid_sel * kg_nominal_l, 2)
-        cd.metric("Kg (auto)", f"{kg_sel:.1f}", help=f"{unid_sel} × {kg_nominal_l:g} kg por unidad")
+        cd.metric("Kg (auto)", f"{kg_sel:.2f}", help=f"{unid_sel} × {kg_nominal_l:g} kg por unidad")
 
         if st.button("➕ Agregar producto al pedido", use_container_width=True):
             if unid_sel <= 0:
@@ -103,7 +103,7 @@ def render(db, username, rol):
             df_items = pd.DataFrame(items_acum)[["tipo_producto","presentacion_nombre","unidades_solicitadas","cantidad_kg"]]
             df_items.columns = ["Producto","Presentación","Unidades","Kg"]
             st.dataframe(df_items, use_container_width=True, hide_index=True)
-            st.info(f"Total: **{df_items['Kg'].sum():.1f} kg** en {len(items_acum)} línea(s)")
+            st.info(f"Total: **{df_items['Kg'].sum():.2f} kg** en {len(items_acum)} línea(s)")
 
             ce, cf = st.columns(2)
             if ce.button("🗑️ Quitar última línea"):
@@ -254,7 +254,7 @@ def render(db, username, rol):
                 unid_extra = c3.number_input("Unidades", min_value=0, step=1, key="extra_unid")
                 kg_nom_extra = float(presentaciones.set_index("presentacion_id").loc[pres_extra, "kg_nominal"])
                 kg_extra = round(unid_extra * kg_nom_extra, 2)
-                c4.metric("Kg (auto)", f"{kg_extra:.1f}", help=f"{unid_extra} × {kg_nom_extra:g} kg por unidad")
+                c4.metric("Kg (auto)", f"{kg_extra:.2f}", help=f"{unid_extra} × {kg_nom_extra:g} kg por unidad")
 
                 c5, c6 = st.columns(2)
                 try:
@@ -322,13 +322,13 @@ def render(db, username, rol):
                         obs_cab_prev = str(fila_pedido.get("observaciones", "") or "")
                         marca_extra = (
                             f"EXTRA {datetime.date.today().isoformat()} por {username}: "
-                            f"+{unid_extra} un. de {tipo_extra} ({kg_extra:.1f} kg)"
+                            f"+{unid_extra} un. de {tipo_extra} ({kg_extra:.2f} kg)"
                         )
                         cambios_cab["observaciones"] = (obs_cab_prev + " | " + marca_extra).strip(" |")
                         db.update_row("pedidos", "pedido_id", pedido_extra_id, cambios_cab)
                         st.success(
                             f"✅ Línea extra agregada al pedido {pedido_extra_id}: "
-                            f"{unid_extra} un. de {tipo_extra} ({kg_extra:.1f} kg)."
+                            f"{unid_extra} un. de {tipo_extra} ({kg_extra:.2f} kg)."
                             + (" ⚡ Pedido marcado urgente." if marcar_urg else "")
                         )
                         st.rerun()
@@ -410,7 +410,7 @@ def render(db, username, rol):
         def _etq(row):
             return (
                 f"{row['pedido_id']} — {row['cliente_nombre']} — "
-                f"{row['tipo_producto']} ({row['cantidad_kg']:.1f} kg, entrega: {row['fecha_entrega']})"
+                f"{row['tipo_producto']} ({row['cantidad_kg']:.2f} kg, entrega: {row['fecha_entrega']})"
             )
         lineas["etiqueta"] = lineas.apply(_etq, axis=1)
         return lineas
@@ -432,7 +432,7 @@ def render(db, username, rol):
                 pendientes["fp_estado"] = pendientes["fecha_produccion"].where(~sin_fp_bool, "🔴 Sin asignar")
 
                 col_m1, col_m2 = st.columns(2)
-                col_m1.metric("Kg pendientes de producir", f"{pendientes['cantidad_kg'].sum():,.1f}")
+                col_m1.metric("Kg pendientes de producir", f"{pendientes['cantidad_kg'].sum():,.2f}")
                 col_m2.metric("Sin fecha de producción asignada", f"{int(sin_fp_bool.sum())} de {len(pendientes)}")
                 if sin_fp_bool.any():
                     st.warning(

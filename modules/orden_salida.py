@@ -254,7 +254,7 @@ def render(db, username, rol):
                     fc = pedidos_cab[pedidos_cab["pedido_id"] == l["pedido_id"]]
                     if not fc.empty:
                         cli = mapa_cli.get(fc.iloc[0]["cliente_id"], fc.iloc[0]["cliente_id"])
-                st.markdown(f"- `{l['pedido_id']}` — **{cli}** — {l['tipo_producto']} — {l['cantidad_kg']:.1f} kg")
+                st.markdown(f"- `{l['pedido_id']}` — **{cli}** — {l['tipo_producto']} — {l['cantidad_kg']:.2f} kg")
 
     lineas_producidas = lineas_fecha[lineas_fecha["producido_bool"]]
     if lineas_producidas.empty:
@@ -498,7 +498,7 @@ def render(db, username, rol):
 
         etiqueta = (
             f"**{linea['cliente_nombre']}** — Pedido `{linea['pedido_id']}` — "
-            f"{linea['tipo_producto']} — {linea['cantidad_kg']:.1f} kg — "
+            f"{linea['tipo_producto']} — {linea['cantidad_kg']:.2f} kg — "
             f"{int(linea['unidades'])} un. {mapa_pres_nombre.get(pid, pid)}"
         )
 
@@ -632,11 +632,11 @@ def render(db, username, rol):
             # Indicador de balance
             diff = kg_total_asignado - float(linea["cantidad_kg"])
             if abs(diff) < 0.01:
-                st.caption(f"✅ Asignado: {kg_total_asignado:.1f} kg / pedido {linea['cantidad_kg']:.1f} kg")
+                st.caption(f"✅ Asignado: {kg_total_asignado:.2f} kg / pedido {linea['cantidad_kg']:.2f} kg")
             elif diff > 0:
-                st.caption(f"⚠️ Sobrasignado: {kg_total_asignado:.1f} kg vs pedido {linea['cantidad_kg']:.1f} kg (+{diff:.1f})")
+                st.caption(f"⚠️ Sobrasignado: {kg_total_asignado:.2f} kg vs pedido {linea['cantidad_kg']:.2f} kg (+{diff:.2f} kg)")
             else:
-                st.caption(f"⚠️ Faltan {abs(diff):.1f} kg — asignado {kg_total_asignado:.1f} / pedido {linea['cantidad_kg']:.1f}")
+                st.caption(f"⚠️ Faltan {abs(diff):.2f} kg — asignado {kg_total_asignado:.2f} kg / pedido {linea['cantidad_kg']:.2f} kg")
 
             # Botón para agregar otra fila
             if st.button("➕ Agregar otro lote a esta línea", key=f"add_{orden_sel}_{lid}"):
@@ -699,7 +699,7 @@ def render(db, username, rol):
             )
             obs_extra_m = st.text_input("Observaciones", "", key="man_obs")
             colm7, _ = st.columns(2)
-            colm7.metric("Kg calculados", f"{kg_extra_m:.1f} kg")
+            colm7.metric("Kg calculados", f"{kg_extra_m:.2f} kg")
 
             if st.button("➕ Agregar línea manual", key="btn_man_add"):
                 if unid_extra_m <= 0:
@@ -738,7 +738,7 @@ def render(db, username, rol):
             cm1.markdown(
                 f"• **{mapa_cli_m.get(cli_id_m, cli_id_m)}** — {tipo_m} — "
                 f"{mapa_pres_nombre.get(pres_id_m, pres_id_m)} — "
-                f"{unid_m} un., {float(a.get('kg_asignado', 0)):.1f} kg — "
+                f"{unid_m} un., {float(a.get('kg_asignado', 0)):.2f} kg — "
                 f"lote `{a.get('lote_producto_id', '') or '(sin lote)'}`"
             )
             if cm2.button("🗑️", key=f"del_man_{a['asignacion_id']}"):
@@ -793,7 +793,7 @@ def render(db, username, rol):
         st.markdown("##### Totales por producto")
         df_prod = pd.DataFrame([
             {
-                "Producto": t, "Kg totales": f"{v['kg']:.1f}",
+                "Producto": t, "Kg totales": f"{v['kg']:.2f}",
                 "Unidades": _fmt_unidades_por_pres(v["unidades_por_pres"]),
                 "Gavetas": f"{v['gavetas']:.1f}",
             }
@@ -801,7 +801,7 @@ def render(db, username, rol):
         ])
         total_kg_p = sum(v["kg"] for v in totales_prod.values())
         total_gav_p = sum(v["gavetas"] for v in totales_prod.values())
-        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.1f}", "—", f"{total_gav_p:.1f}"]
+        df_prod.loc[len(df_prod)] = ["TOTAL GENERAL", f"{total_kg_p:.2f}", "—", f"{total_gav_p:.1f}"]
         st.dataframe(df_prod, use_container_width=True, hide_index=True)
     else:
         st.caption("Todavía no hay pedidos incluidos en esta orden.")
@@ -835,7 +835,7 @@ def render(db, username, rol):
         for pres_id, v in sorted(totales_pres.items(), key=lambda x: mapa_pres_nombre.get(x[0], x[0])):
             c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
             c1.markdown(mapa_pres_nombre.get(pres_id, pres_id))
-            c2.markdown(f"{v['kg']:.1f}")
+            c2.markdown(f"{v['kg']:.2f}")
             c3.markdown(str(v['unidades']))
             c4.markdown(f"{v['gavetas_sugeridas']:.1f}")
             # Gavetas reales editables (persistidas), admite un decimal
@@ -992,8 +992,8 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
             datos.append([
                 _p(f["producto"], pequeño=True),
                 _p(f["lote"], pequeño=True),
-                _p(f"{f['kg_total']:.1f}", pequeño=True),
-                _p(f"{f['kg_lote']:.1f}", pequeño=True),
+                _p(f"{f['kg_total']:.2f}", pequeño=True),
+                _p(f"{f['kg_lote']:.2f}", pequeño=True),
                 _p(f["presentacion"], pequeño=True),
                 _p(str(f["unidades"]), pequeño=True),
                 _p(f"{f['gavetas']:.1f}", pequeño=True),
@@ -1005,7 +1005,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
         # Fila TOTAL
         datos.append([
             _p("TOTAL", negrita=True, pequeño=True), _p(""), _p(""),
-            _p(f"{total_kg:.1f}", negrita=True, pequeño=True),
+            _p(f"{total_kg:.2f}", negrita=True, pequeño=True),
             _p(""), _p(str(total_unid), negrita=True, pequeño=True),
             _p(f"{total_gav:.1f}", negrita=True, pequeño=True), _p(""),
         ])
@@ -1033,7 +1033,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
         for tipo, v in sorted(totales_prod.items()):
             datos_tot.append([
                 _p(tipo),
-                _p(f"{v['kg']:.1f}"),
+                _p(f"{v['kg']:.2f}"),
                 _p(_fmt_unidades_por_pres(v["unidades_por_pres"])),
                 _p(f"{v['gavetas']:.1f}"),
             ])
@@ -1042,7 +1042,7 @@ def _generar_pdf(fecha, datos_por_cliente, totales_prod=None, nombre_orden=None)
         tot_gav = sum(v["gavetas"] for v in totales_prod.values())
         datos_tot.append([
             _p("TOTAL GENERAL", negrita=True),
-            _p(f"{tot_kg:.1f}", negrita=True),
+            _p(f"{tot_kg:.2f}", negrita=True),
             _p("—"),
             _p(f"{tot_gav:.1f}", negrita=True),
         ])

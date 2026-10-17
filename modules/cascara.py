@@ -35,9 +35,9 @@ def render(db, username, rol):
             total_enviado = total_producido - total_saldo
 
             c1, c2, c3 = st.columns(3)
-            c1.metric("Producida (histórico)", f"{total_producido:,.1f} kg")
-            c2.metric("Enviada a biomateriales", f"{total_enviado:,.1f} kg")
-            c3.metric("En bodega (saldo)", f"{total_saldo:,.1f} kg")
+            c1.metric("Producida (histórico)", f"{total_producido:,.2f} kg")
+            c2.metric("Enviada a biomateriales", f"{total_enviado:,.2f} kg")
+            c3.metric("En bodega (saldo)", f"{total_saldo:,.2f} kg")
 
             st.write("")
             if inv.empty:
@@ -82,7 +82,7 @@ def render(db, username, rol):
                     disponibles["cascara_id"],
                     format_func=lambda x: (
                         f"{x} — origen {disponibles.set_index('cascara_id').loc[x, 'lote_semielaborado_origen']} "
-                        f"— saldo {float(disponibles.set_index('cascara_id').loc[x, 'kg_saldo']):.1f} kg"
+                        f"— saldo {float(disponibles.set_index('cascara_id').loc[x, 'kg_saldo']):.2f} kg"
                     ),
                     key="cas_lote",
                 )
@@ -91,7 +91,7 @@ def render(db, username, rol):
                 # combo de arriba, para que "Kg a enviar" muestre el mismo
                 # numero que el "saldo X kg" del lote elegido (si no, se ven
                 # como si no coincidieran por mostrar distinta precision).
-                saldo = round(float(fila["kg_saldo"]), 1)
+                saldo = round(float(fila["kg_saldo"]), 2)
 
                 # key con el cascara_id: si no, al cambiar de lote Streamlit
                 # reusaba el valor del widget anterior (mismo key fijo) en vez
@@ -99,8 +99,8 @@ def render(db, username, rol):
                 # no coincidia con el lote, y a veces quedaba un saldo residual
                 # sin enviar (el lote no desaparecia del selector).
                 kg_enviar = st.number_input(
-                    "Kg a enviar", min_value=0.0, max_value=saldo, step=0.1,
-                    value=saldo, format="%.1f", key=f"cas_kg_{cascara_id}",
+                    "Kg a enviar", min_value=0.0, max_value=saldo, step=0.01,
+                    value=saldo, format="%.2f", key=f"cas_kg_{cascara_id}",
                 )
                 destino = st.text_input(
                     "Destino", value="Planta biomateriales circulares", key="cas_dest",
@@ -111,7 +111,7 @@ def render(db, username, rol):
                     if kg_enviar <= 0:
                         st.error("Ingresa una cantidad mayor a cero.")
                     elif kg_enviar > saldo + 0.001:
-                        st.error(f"No puedes enviar más de {saldo:.1f} kg (saldo del lote).")
+                        st.error(f"No puedes enviar más de {saldo:.2f} kg (saldo del lote).")
                     else:
                         salida_id = db.siguiente_id("salidas_cascara", "SCAS", fecha)
                         db.append_row("salidas_cascara", {
@@ -137,7 +137,7 @@ def render(db, username, rol):
                             )
                         else:
                             st.success(
-                                f"✅ Salida {salida_id} registrada — {kg_enviar:.1f} kg "
+                                f"✅ Salida {salida_id} registrada — {kg_enviar:.2f} kg "
                                 f"del lote {cascara_id} enviados a {destino}."
                             )
                         st.rerun()
@@ -191,4 +191,4 @@ def render(db, username, rol):
                 }),
                 use_container_width=True, hide_index=True,
             )
-            st.metric("Total enviado (en el rango filtrado)", f"{df['kg'].sum():,.1f} kg")
+            st.metric("Total enviado (en el rango filtrado)", f"{df['kg'].sum():,.2f} kg")

@@ -168,8 +168,8 @@ def generar_pdf_trazabilidad(arbol: list, tipo_lote: str, lote_id: str) -> bytes
                     destinos = ", ".join(sorted({e["destino"] for e in c.get("envios", []) if e["destino"]})) or "—"
                     filas_cas.append([
                         c["cascara_id"], c["fecha"],
-                        f"{c['kg_producida']:.1f}", f"{kg_enviado:.1f}",
-                        f"{c['kg_saldo']:.1f}", destinos,
+                        f"{c['kg_producida']:.2f}", f"{kg_enviado:.2f}",
+                        f"{c['kg_saldo']:.2f}", destinos,
                     ])
                 el.append(_tabla_encabezado(
                     filas_cas,

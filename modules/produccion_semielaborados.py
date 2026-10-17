@@ -79,7 +79,7 @@ def render(db, username, rol):
                             )
                             st.error("🔴 Ya debiste haber producido:")
                             for tipo, fila in resumen_atrasados.iterrows():
-                                st.markdown(f"- **{tipo}**: {fila['kg']:.1f} kg ({int(fila['pedidos'])} pedido(s))")
+                                st.markdown(f"- **{tipo}**: {fila['kg']:.2f} kg ({int(fila['pedidos'])} pedido(s))")
                         if not proximos_prod.empty:
                             proximos_prod = proximos_prod.copy()
                             proximos_prod["cantidad_kg"] = pd.to_numeric(proximos_prod["cantidad_kg"], errors="coerce").fillna(0)
@@ -88,7 +88,7 @@ def render(db, username, rol):
                             )
                             st.warning("🟡 Producción próxima (siguientes 3 días):")
                             for tipo, fila in resumen_proximos.iterrows():
-                                st.markdown(f"- **{tipo}**: {fila['kg']:.1f} kg ({int(fila['pedidos'])} pedido(s))")
+                                st.markdown(f"- **{tipo}**: {fila['kg']:.2f} kg ({int(fila['pedidos'])} pedido(s))")
                         with st.expander("Ver detalle de estos pedidos"):
                             cols_detalle = [c for c in [
                                 "pedido_id", "cliente_id", "tipo_producto", "cantidad_kg",
@@ -168,10 +168,10 @@ def render(db, username, rol):
                             st.markdown(
                                 f"- {marca_urg}`{pv['pedido_id']}` — "
                                 f"{mapa_cli.get(pv['cliente_id'], pv['cliente_id'])} — "
-                                f"**{kg_v:.1f} kg** {pv.get('tipo_producto', '')}"
+                                f"**{kg_v:.2f} kg** {pv.get('tipo_producto', '')}"
                             )
                         st.info(
-                            f"💡 Total kg de líneas vinculadas: **{total_kg_vinc:.1f} kg**. "
+                            f"💡 Total kg de líneas vinculadas: **{total_kg_vinc:.2f} kg**. "
                             f"Ajusta las cubetas más abajo si necesitas incluir esa producción extra."
                         )
         tipo_producto = st.selectbox("Producto a obtener", ["Huevo entero", "Clara", "Yema", "Clara y yema"])
@@ -216,7 +216,7 @@ def render(db, username, rol):
                     ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
                     if ocupante:
                         st.error(
-                            f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                            f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.2f} kg de '{ocupante}' — "
                             f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
                             f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
                         )
@@ -242,7 +242,7 @@ def render(db, username, rol):
             ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tanque_lote, "Clara")
             if ocupante:
                 st.error(
-                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.2f} kg de '{ocupante}' — "
                     f"no se puede mezclar con 'Clara'. Usa el otro tanque, pasteuriza y vacía este "
                     f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
                 )
@@ -267,7 +267,7 @@ def render(db, username, rol):
             ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tanque_lote, "Yema")
             if ocupante:
                 st.error(
-                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.2f} kg de '{ocupante}' — "
                     f"no se puede mezclar con 'Yema'. Usa el otro tanque, pasteuriza y vacía este "
                     f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
                 )
@@ -285,7 +285,7 @@ def render(db, username, rol):
             ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tanque_lote, tipo_producto)
             if ocupante:
                 st.error(
-                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                    f"⚠️ {NOMBRES_TANQUE[tanque_lote]} ya tiene {kg_ocupante:.2f} kg de '{ocupante}' — "
                     f"no se puede mezclar con '{tipo_producto}'. Usa el otro tanque, pasteuriza y vacía "
                     f"este primero, o elige 'Sin tanque' para mandarlo directo a granel."
                 )
@@ -455,10 +455,10 @@ def render(db, username, rol):
 
             col_p1, col_p2, col_p3 = st.columns(3)
             col_p1.metric("🥚 Peso del huevo estimado", f"{peso_huevo_g:.1f} g")
-            col_p2.metric("Kg líquido estimado", f"{cubetas_necesarias * factor_liquido_total:.1f} kg")
+            col_p2.metric("Kg líquido estimado", f"{cubetas_necesarias * factor_liquido_total:.2f} kg")
             col_p3.metric(
                 "Kg cáscara estimada",
-                f"{cubetas_necesarias * HUEVOS_POR_CUBETA * gr_cascara / 1000:.1f} kg",
+                f"{cubetas_necesarias * HUEVOS_POR_CUBETA * gr_cascara / 1000:.2f} kg",
             )
 
             # Aviso si el peso del huevo estimado se sale de un rango razonable (45-75 g)
@@ -571,7 +571,7 @@ def render(db, username, rol):
         elif masa_real_total > 0 and balance_masa_pct < 85:
             st.warning(
                 f"⚠️ Solo se contabilizó el {balance_masa_pct:.0f}% de la masa esperada — hay una "
-                f"pérdida sin explicar de aproximadamente {teorico['kg_teorico_bruto'] - masa_real_total:.1f} kg. "
+                f"pérdida sin explicar de aproximadamente {teorico['kg_teorico_bruto'] - masa_real_total:.2f} kg. "
                 f"Revisa si falta registrar cáscara, hubo derrames, o un error de digitación."
             )
 
@@ -644,7 +644,7 @@ def render(db, username, rol):
                 ocupante, kg_ocupante = _tanque_ocupado_por_otro(producciones_existentes, tq, tp)
                 if ocupante:
                     st.error(
-                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.1f} kg de '{ocupante}' — "
+                        f"⚠️ {NOMBRES_TANQUE[tq]} ya tiene {kg_ocupante:.2f} kg de '{ocupante}' — "
                         f"no se puede mezclar con '{tp}'. Usa el otro tanque, pasteuriza y vacía este "
                         f"primero, o elige 'Sin tanque' para mandarlo directo a granel."
                     )
@@ -911,7 +911,7 @@ def render(db, username, rol):
 
                 msg_lotes = codigo_lote
                 if tipo_coproducto and kg_coproducto > 0 and codigo_coproducto:
-                    msg_lotes += f" + co-producto {codigo_coproducto} ({tipo_coproducto}, {kg_coproducto:.1f} kg)"
+                    msg_lotes += f" + co-producto {codigo_coproducto} ({tipo_coproducto}, {kg_coproducto:.2f} kg)"
 
                 if ve_costos(rol):
                     st.success(f"✅ Lote {msg_lotes} guardado correctamente — costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}")
@@ -1018,7 +1018,7 @@ def render(db, username, rol):
             # < 0.1 (no == 0): un lote practicamente vacio puede tener un
             # residuo de redondeo (ej. 1.4e-14) en vez de un cero exacto.
             df_mostrar["estado"] = df_mostrar["kg_saldo"].apply(
-                lambda s: "✅ Despachado/usado" if s < 0.1 else f"🟡 {s:.1f} kg en tanque"
+                lambda s: "✅ Despachado/usado" if s < 0.1 else f"🟡 {s:.2f} kg en tanque"
             )
 
             columnas_hist = ["lote_semielaborado_id", "fecha", "tipo_producto", "kg_real", "estado"]
@@ -1033,7 +1033,7 @@ def render(db, username, rol):
                 f"Total: {len(df_mostrar)} lote(s) | "
                 f"En tanque: {(df_mostrar['kg_saldo'] >= 0.1).sum()} | "
                 f"Despachados/usados: {(df_mostrar['kg_saldo'] < 0.1).sum()} | "
-                f"Kg producidos: {df_mostrar['kg_real'].sum():,.1f} kg"
+                f"Kg producidos: {df_mostrar['kg_real'].sum():,.2f} kg"
             )
 
     with tab_perdida:
@@ -1093,7 +1093,7 @@ def render(db, username, rol):
                             "usuario": username,
                             "observaciones": observaciones_perdida,
                         })
-                        st.success(f"Pérdida {merma_id} registrada — saldo del lote actualizado a {nuevo_saldo:.1f} kg.")
+                        st.success(f"Pérdida {merma_id} registrada — saldo del lote actualizado a {nuevo_saldo:.2f} kg.")
                         st.rerun()
 
         st.divider()
@@ -1121,7 +1121,7 @@ def render(db, username, rol):
                 use_container_width=True, hide_index=True,
             )
             kg_total_desechado = pd.to_numeric(df_mermas_vista["kg_desechado"], errors="coerce").fillna(0).sum()
-            st.caption(f"Total desechado histórico: **{kg_total_desechado:,.1f} kg** en {len(df_mermas_vista)} registro(s)")
+            st.caption(f"Total desechado histórico: **{kg_total_desechado:,.2f} kg** en {len(df_mermas_vista)} registro(s)")
 
             if es_admin_o_jefe_planta(rol):
                 st.markdown("###### ↩️ Revertir una pérdida registrada por error")
@@ -1279,7 +1279,7 @@ def render(db, username, rol):
                 use_container_width=True, hide_index=True,
             )
             kg_total_agregado = pd.to_numeric(df_ajustes_vista["kg_agregado"], errors="coerce").fillna(0).sum()
-            st.caption(f"Total agregado histórico: **{kg_total_agregado:,.1f} kg** en {len(df_ajustes_vista)} registro(s)")
+            st.caption(f"Total agregado histórico: **{kg_total_agregado:,.2f} kg** en {len(df_ajustes_vista)} registro(s)")
 
     with tab_rendimiento:
         df = db.get_df("produccion_semielaborados")
@@ -1395,7 +1395,7 @@ def render(db, username, rol):
                 if not granel_rel.empty:
                     st.info(
                         f"ℹ️ Este lote tiene {len(granel_rel)} traslado(s) a stock a granel "
-                        f"({pd.to_numeric(granel_rel['kg_inicial'], errors='coerce').sum():.1f} kg) que ya están "
+                        f"({pd.to_numeric(granel_rel['kg_inicial'], errors='coerce').sum():.2f} kg) que ya están "
                         "en recipientes de cuarto frío — no se eliminan, quedan como stock independiente."
                     )
 

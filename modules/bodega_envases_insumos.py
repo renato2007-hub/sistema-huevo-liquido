@@ -77,7 +77,7 @@ def render(db, username, rol):
                     "Ítem", catalogo[col_id],
                     format_func=lambda x: catalogo.set_index(col_id).loc[x, col_nombre],
                 )
-                cantidad = st.number_input("Cantidad", min_value=0.0, step=1.0)
+                cantidad = round(st.number_input("Cantidad", min_value=0.0, step=1.0, format="%.2f"), 2)
                 costo_unitario = st.number_input("Costo unitario", min_value=0.0, step=0.01, format="%.2f")
                 proveedor = st.text_input(
                     "Proveedor (opcional, solo informativo — no es un catálogo, escribe el nombre libremente)", "",
@@ -158,13 +158,17 @@ def render(db, username, rol):
             })
         if filas:
             df_inv = pd.DataFrame(filas)
+            df_inv["saldo"] = df_inv["saldo"].round(2)
             negativos = df_inv[df_inv["saldo"] < 0]
             if not negativos.empty:
                 st.warning(
                     f"⚠️ {len(negativos)} ítem(s) con saldo negativo — significa que se registraron "
                     f"más salidas/mermas que entradas (probablemente falta registrar una compra)."
                 )
-            st.dataframe(df_inv, use_container_width=True)
+            st.dataframe(
+                df_inv, use_container_width=True,
+                column_config={"saldo": st.column_config.NumberColumn(format="%.2f")},
+            )
 
             # Gráficas de barras por tipo de ítem
             import plotly.graph_objects as go
@@ -186,7 +190,7 @@ def render(db, username, rol):
                     y=df_tipo["nombre"].tolist(),
                     orientation="h",
                     marker_color=COLORES.get(tipo, "#2e7d32"),
-                    text=df_tipo["saldo"].apply(lambda v: f"{int(v)}").tolist(),
+                    text=df_tipo["saldo"].apply(lambda v: f"{v:g}" if tipo != "Insumo" else f"{v:.2f}").tolist(),
                     textposition="auto",
                     textangle=0,
                     textfont=dict(size=11, family="Arial Black"),

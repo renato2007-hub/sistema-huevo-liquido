@@ -50,7 +50,7 @@ def render(db, username, rol):
                             )
                             st.error("🔴 Ya debiste haber producido:")
                             for tipo, fila in resumen_atrasados.iterrows():
-                                st.markdown(f"- **{tipo}**: {fila['kg']:.1f} kg ({int(fila['pedidos'])} pedido(s))")
+                                st.markdown(f"- **{tipo}**: {fila['kg']:.2f} kg ({int(fila['pedidos'])} pedido(s))")
                         if not proximos_prod.empty:
                             proximos_prod = proximos_prod.copy()
                             proximos_prod["cantidad_kg"] = pd.to_numeric(proximos_prod["cantidad_kg"], errors="coerce").fillna(0)
@@ -59,7 +59,7 @@ def render(db, username, rol):
                             )
                             st.warning("🟡 Producción próxima (siguientes 3 días):")
                             for tipo, fila in resumen_proximos.iterrows():
-                                st.markdown(f"- **{tipo}**: {fila['kg']:.1f} kg ({int(fila['pedidos'])} pedido(s))")
+                                st.markdown(f"- **{tipo}**: {fila['kg']:.2f} kg ({int(fila['pedidos'])} pedido(s))")
                         with st.expander("Ver detalle de estos pedidos"):
                             cols_detalle = [c for c in [
                                 "pedido_id", "cliente_id", "tipo_producto", "cantidad_kg",
@@ -361,7 +361,7 @@ def render(db, username, rol):
         elif masa_real_total > 0 and balance_masa_pct < 85:
             st.warning(
                 f"⚠️ Solo se contabilizó el {balance_masa_pct:.0f}% de la masa esperada — hay una "
-                f"pérdida sin explicar de aproximadamente {teorico['kg_teorico_bruto'] - masa_real_total:.1f} kg. "
+                f"pérdida sin explicar de aproximadamente {teorico['kg_teorico_bruto'] - masa_real_total:.2f} kg. "
                 f"Revisa si falta registrar cáscara, hubo derrames, o un error de digitación."
             )
 
@@ -594,7 +594,7 @@ def render(db, username, rol):
 
                 msg_lotes = codigo_lote
                 if tipo_coproducto and kg_coproducto > 0 and codigo_coproducto:
-                    msg_lotes += f" + co-producto {codigo_coproducto} ({tipo_coproducto}, {kg_coproducto:.1f} kg)"
+                    msg_lotes += f" + co-producto {codigo_coproducto} ({tipo_coproducto}, {kg_coproducto:.2f} kg)"
 
                 if ve_costos(rol):
                     st.success(f"Lote {msg_lotes} guardado — costo total {costo_total:,.2f}, costo/kg {costo_unitario_kg:,.2f}")
@@ -652,7 +652,7 @@ def render(db, username, rol):
             ]
 
             df_mostrar["estado"] = df_mostrar["kg_saldo"].apply(
-                lambda s: "✅ Despachado/usado" if s == 0 else f"🟡 {s:.1f} kg en tanque"
+                lambda s: "✅ Despachado/usado" if s == 0 else f"🟡 {s:.2f} kg en tanque"
             )
 
             columnas_hist = ["lote_semielaborado_id", "fecha", "tipo_producto", "kg_real", "estado"]
@@ -667,7 +667,7 @@ def render(db, username, rol):
                 f"Total: {len(df_mostrar)} lote(s) | "
                 f"En tanque: {(df_mostrar['kg_saldo'] > 0).sum()} | "
                 f"Despachados/usados: {(df_mostrar['kg_saldo'] == 0).sum()} | "
-                f"Kg producidos: {df_mostrar['kg_real'].sum():,.1f} kg"
+                f"Kg producidos: {df_mostrar['kg_real'].sum():,.2f} kg"
             )
 
     with tab_perdida:
@@ -689,7 +689,7 @@ def render(db, username, rol):
                     "Lote semielaborado", disponibles_perdida["lote_semielaborado_id"],
                     format_func=lambda x: (
                         f"{x} — {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'tipo_producto']} "
-                        f"(saldo {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.1f} kg)"
+                        f"(saldo {disponibles_perdida.set_index('lote_semielaborado_id').loc[x, 'kg_saldo']:.2f} kg)"
                     ),
                 )
                 fila_lote = disponibles_perdida.set_index("lote_semielaborado_id").loc[lote_perdida_id]
@@ -727,7 +727,7 @@ def render(db, username, rol):
                             "usuario": username,
                             "observaciones": observaciones_perdida,
                         })
-                        st.success(f"Pérdida {merma_id} registrada — saldo del lote actualizado a {nuevo_saldo:.1f} kg.")
+                        st.success(f"Pérdida {merma_id} registrada — saldo del lote actualizado a {nuevo_saldo:.2f} kg.")
                         st.rerun()
 
         st.divider()
@@ -755,7 +755,7 @@ def render(db, username, rol):
                 use_container_width=True, hide_index=True,
             )
             kg_total_desechado = pd.to_numeric(df_mermas_vista["kg_desechado"], errors="coerce").fillna(0).sum()
-            st.caption(f"Total desechado histórico: **{kg_total_desechado:,.1f} kg** en {len(df_mermas_vista)} registro(s)")
+            st.caption(f"Total desechado histórico: **{kg_total_desechado:,.2f} kg** en {len(df_mermas_vista)} registro(s)")
         df = db.get_df("produccion_semielaborados")
         if df.empty:
             st.info("No hay datos todavía.")
