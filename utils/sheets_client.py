@@ -33,6 +33,7 @@ IMPORTANTE sobre cortes de red: el uso diario va a tener wifi imperfecto
 (planta, oficina, etc.). _con_reintentos() reintenta automaticamente ante
 cortes momentaneos de conexion antes de mostrar un error real al usuario.
 """
+import re
 import time
 import streamlit as st
 import gspread
@@ -253,7 +254,11 @@ class SheetsDB:
         if df.empty or id_col not in df.columns:
             n = 1
         else:
-            n = int(df[id_col].astype(str).str.startswith(base).sum()) + 1
+            # Maximo consecutivo + 1 (no contar filas): si se elimino un
+            # registro del dia, contar devolvia un id que ya existia.
+            sufijos = df[id_col].astype(str).str.extract(rf"^{re.escape(base)}-(\d+)$")[0]
+            sufijos = pd.to_numeric(sufijos, errors="coerce").dropna()
+            n = int(sufijos.max()) + 1 if not sufijos.empty else 1
         return f"{base}-{n:03d}"
 
 

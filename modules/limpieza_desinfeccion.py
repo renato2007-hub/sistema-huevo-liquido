@@ -332,12 +332,17 @@ def _render_corregir(db, username, rol, insumos, areas):
         dict(zip(insumos["insumo_id"], pd.to_numeric(insumos["costo_unitario"], errors="coerce").fillna(0)))
         if not insumos.empty else {}
     )
+    # Etiquetas armadas fila por fila: si un limpieza_id quedo repetido en la
+    # hoja, .loc devolvia varias filas y la pantalla se caia (TypeError).
+    etiquetas = {}
+    for _, r in df.iterrows():
+        etiquetas.setdefault(
+            r["limpieza_id"],
+            f"{r['limpieza_id']} — {r['fecha']} — {mapa_area.get(r['area_id'], r['area_id'])}",
+        )
     limpieza_sel = st.selectbox(
-        "Selecciona el registro", df["limpieza_id"], key="corregir_limpieza_select",
-        format_func=lambda x: (
-            f"{x} — {df.set_index('limpieza_id').loc[x, 'fecha']} — "
-            f"{mapa_area.get(df.set_index('limpieza_id').loc[x, 'area_id'], df.set_index('limpieza_id').loc[x, 'area_id'])}"
-        ),
+        "Selecciona el registro", list(etiquetas), key="corregir_limpieza_select",
+        format_func=lambda x: etiquetas[x],
     )
     insumos_rel = db.get_df("limpieza_insumos")
     insumos_rel = (
