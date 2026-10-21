@@ -268,6 +268,14 @@ def render(db, username, rol):
         if df.empty:
             st.info("No hay datos todavía.")
         else:
+            hoy = datetime.date.today()
+            f1, f2 = st.columns(2)
+            desde = f1.date_input("Desde", value=hoy - datetime.timedelta(days=30), key="limp_res_desde")
+            hasta = f2.date_input("Hasta", value=hoy, key="limp_res_hasta")
+            fechas = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+            df = df[(fechas >= desde) & (fechas <= hasta)].copy()
+
+        if not df.empty:
             df["agua_litros"] = pd.to_numeric(df["agua_litros"], errors="coerce").fillna(0)
             df["costo_insumos"] = pd.to_numeric(df["costo_insumos"], errors="coerce").fillna(0)
             if not areas.empty:
@@ -275,6 +283,7 @@ def render(db, username, rol):
                     areas[["area_id", "nombre"]].rename(columns={"nombre": "area_nombre"}),
                     on="area_id", how="left",
                 )
+                df["area_nombre"] = df["area_nombre"].fillna(df["area_id"])
             else:
                 df["area_nombre"] = df["area_id"]
 
@@ -283,6 +292,26 @@ def render(db, username, rol):
                 costo_total_insumos=("costo_insumos", "sum"),
                 registros=("limpieza_id", "count"),
             ).reset_index()
+
+            # Kg de cada insumo por area en el periodo
+            detalle = db.get_df("limpieza_insumos")
+            columnas_insumos = []
+            if not detalle.empty:
+                detalle = detalle.merge(
+                    df[["limpieza_id", "area_nombre"]].drop_duplicates("limpieza_id"), on="limpieza_id",
+                )
+            if not detalle.empty:
+                detalle["cantidad"] = pd.to_numeric(detalle["cantidad"], errors="coerce").fillna(0)
+                mapa_insumo = dict(zip(insumos["insumo_id"], insumos["nombre"])) if not insumos.empty else {}
+                detalle["insumo"] = detalle["insumo_id"].map(mapa_insumo).fillna(detalle["insumo_id"]) + " (kg)"
+                pivote = detalle.pivot_table(
+                    index="area_nombre", columns="insumo", values="cantidad", aggfunc="sum",
+                ).round(2)
+                columnas_insumos = sorted(
+                    pivote.columns,
+                    key=lambda c: unicodedata.normalize("NFD", c).encode("ascii", "ignore").decode().lower(),
+                )
+                resumen = resumen.merge(pivote, left_on="area_nombre", right_index=True, how="left")
 
             if ve_costos(rol):
                 c1, c2 = st.columns(2)
@@ -297,13 +326,27 @@ def render(db, username, rol):
             st.write("")
             with st.container(border=True):
                 st.markdown("##### Detalle por área")
-                columnas_resumen = [c for c in resumen.columns if ve_costos(rol) or "costo" not in c]
-                st.dataframe(resumen[columnas_resumen], use_container_width=True, hide_index=True)
+                columnas_resumen = ["area_nombre", "registros", "agua_total_litros"] + columnas_insumos
+                if ve_costos(rol):
+                    columnas_resumen.append("costo_total_insumos")
+                st.dataframe(
+                    resumen[columnas_resumen].rename(columns={
+                        "area_nombre": "Área", "registros": "Registros",
+                        "agua_total_litros": "Agua (L)", "costo_total_insumos": "Costo insumos",
+                    }),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        **{c: st.column_config.NumberColumn(format="%.2f") for c in columnas_insumos},
+                        "Costo insumos": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
 
             st.write("")
             with st.container(border=True):
                 st.markdown("##### 💧 Agua usada por área")
                 st.bar_chart(resumen.set_index("area_nombre")["agua_total_litros"])
+        elif not db.get_df("limpieza_desinfeccion").empty:
+            st.info("No hay registros de limpieza en ese período.")
 
     # ======================== CORREGIR / ELIMINAR ========================
     with tab_corregir:
