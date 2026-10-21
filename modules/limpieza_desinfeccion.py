@@ -6,6 +6,7 @@ verificacion (util para auditorias BPM/HACCP). Los insumos consumidos aqui
 descuentan del mismo inventario de Bodega de envases e insumos.
 """
 import datetime
+import unicodedata
 import streamlit as st
 import pandas as pd
 from utils.permisos import ve_costos, es_admin
@@ -169,30 +170,79 @@ def render(db, username, rol):
 
             df["agua_litros"] = pd.to_numeric(df["agua_litros"], errors="coerce").fillna(0)
 
-            c1, c2, c3 = st.columns(3)
-            with c1.container(border=True):
-                st.metric("Total de registros", f"{len(df):,}")
-            with c2.container(border=True):
-                st.metric("Agua total usada", f"{df['agua_litros'].sum():,.0f} L")
-            with c3.container(border=True):
-                verificados = df["verificado"].astype(str).str.upper().eq("TRUE").sum()
-                st.metric("Verificados", f"{verificados} de {len(df)}")
-
-            st.write("")
-            filtro_area = st.selectbox(
+            hoy = datetime.date.today()
+            f1, f2, f3 = st.columns(3)
+            desde = f1.date_input("Desde", value=hoy - datetime.timedelta(days=30), key="limp_hist_desde")
+            hasta = f2.date_input("Hasta", value=hoy, key="limp_hist_hasta")
+            filtro_area = f3.selectbox(
                 "Filtrar por área", ["Todas"] + sorted(df["area_nombre"].dropna().unique().tolist()),
             )
-            df_mostrar = df if filtro_area == "Todas" else df[df["area_nombre"] == filtro_area]
+            fechas = pd.to_datetime(df["fecha"], errors="coerce").dt.date
+            df_mostrar = df[(fechas >= desde) & (fechas <= hasta)]
+            if filtro_area != "Todas":
+                df_mostrar = df_mostrar[df_mostrar["area_nombre"] == filtro_area]
 
-            columnas_base = ["fecha", "area_nombre", "tipo_limpieza", "agua_litros", "verificado", "observaciones"]
-            if ve_costos(rol):
-                columnas_base.insert(4, "costo_insumos")
-            columnas = [c for c in columnas_base if c in df_mostrar.columns]
-            with st.container(border=True):
-                st.dataframe(
-                    df_mostrar[columnas].sort_values("fecha", ascending=False),
-                    use_container_width=True, hide_index=True,
-                )
+            if df_mostrar.empty:
+                st.info("No hay registros de limpieza con esos filtros.")
+            else:
+                # Una columna por insumo con los kg usados en cada limpieza
+                # (sale de limpieza_insumos, el detalle de cada registro).
+                detalle = db.get_df("limpieza_insumos")
+                columnas_insumos = []
+                if not detalle.empty:
+                    detalle = detalle[detalle["limpieza_id"].isin(df_mostrar["limpieza_id"])].copy()
+                if not detalle.empty:
+                    detalle["cantidad"] = pd.to_numeric(detalle["cantidad"], errors="coerce").fillna(0)
+                    mapa_insumo = (
+                        dict(zip(insumos["insumo_id"], insumos["nombre"])) if not insumos.empty else {}
+                    )
+                    detalle["insumo"] = (
+                        detalle["insumo_id"].map(mapa_insumo).fillna(detalle["insumo_id"]) + " (kg)"
+                    )
+                    pivote = detalle.pivot_table(
+                        index="limpieza_id", columns="insumo", values="cantidad", aggfunc="sum",
+                    ).round(2)
+                    # orden alfabetico sin que la tilde mande "Ácido" al final
+                    columnas_insumos = sorted(
+                        pivote.columns,
+                        key=lambda c: unicodedata.normalize("NFD", c).encode("ascii", "ignore").decode().lower(),
+                    )
+                    df_mostrar = df_mostrar.merge(pivote, left_on="limpieza_id", right_index=True, how="left")
+
+                c1, c2, c3 = st.columns(3)
+                with c1.container(border=True):
+                    st.metric("Registros en el período", f"{len(df_mostrar):,}")
+                with c2.container(border=True):
+                    st.metric("Agua usada", f"{df_mostrar['agua_litros'].sum():,.0f} L")
+                with c3.container(border=True):
+                    verificados = df_mostrar["verificado"].astype(str).str.upper().eq("TRUE").sum()
+                    st.metric("Verificados", f"{verificados} de {len(df_mostrar)}")
+
+                if columnas_insumos:
+                    totales = df_mostrar[columnas_insumos].sum()
+                    st.caption(
+                        "🧴 **Insumos usados en el período:** "
+                        + " · ".join(f"{c.replace(' (kg)', '')}: **{v:,.2f} kg**" for c, v in totales.items())
+                    )
+
+                columnas_base = ["fecha", "area_nombre", "tipo_limpieza", "agua_litros"]
+                columnas_base += columnas_insumos
+                if ve_costos(rol):
+                    columnas_base.append("costo_insumos")
+                columnas_base += ["verificado", "observaciones"]
+                columnas = [c for c in columnas_base if c in df_mostrar.columns]
+                with st.container(border=True):
+                    st.dataframe(
+                        df_mostrar[columnas].sort_values("fecha", ascending=False).rename(columns={
+                            "fecha": "Fecha", "area_nombre": "Área", "tipo_limpieza": "Tipo",
+                            "agua_litros": "Agua (L)", "costo_insumos": "Costo insumos",
+                            "verificado": "Verificado", "observaciones": "Observaciones",
+                        }),
+                        use_container_width=True, hide_index=True,
+                        column_config={
+                            c: st.column_config.NumberColumn(format="%.2f") for c in columnas_insumos
+                        },
+                    )
 
     # ======================== RESUMEN POR AREA ========================
     with tab_resumen:
