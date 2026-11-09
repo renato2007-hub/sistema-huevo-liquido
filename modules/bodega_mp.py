@@ -974,9 +974,10 @@ def _kardex_mp(db):
         dict(zip(prov["proveedor_id"].astype(str), prov["nombre"]))
         if not prov.empty and "proveedor_id" in prov.columns else {}
     )
-    kardex["proveedor"] = kardex["recepcion_id"].map(
-        lambda r: nombres_prov.get(proveedor_lote.get(r, ""), proveedor_lote.get(r, ""))
-    )
+    kardex["origen_id"] = kardex["recepcion_id"].map(proveedor_lote).fillna("")
+    kardex["proveedor"] = kardex["origen_id"].map(lambda o: nombres_prov.get(o, o))
+    lotes_eliminados = set(recepciones.loc[recepciones["eliminada"], "recepcion_id"])
+    kardex["lote_eliminado"] = kardex["recepcion_id"].isin(lotes_eliminados)
     return kardex
 
 
@@ -988,20 +989,31 @@ def _render_historial(db, rol):
         st.info("Todavía no hay movimientos registrados en la bodega.")
         return
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2 = st.columns(2)
     desde = c1.date_input(
         "Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="mp_hist_desde",
     )
     hasta = c2.date_input("Hasta", value=datetime.date.today(), key="mp_hist_hasta")
+    if desde > hasta:
+        st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
+        return
+
+    sub_graficas, sub_movimientos = st.tabs(["📊 Gráficas", "📋 Movimientos"])
+    with sub_graficas:
+        _render_graficas_mp(db, kardex, desde, hasta, rol)
+    with sub_movimientos:
+        _render_movimientos_mp(db, kardex, desde, hasta, rol)
+
+
+def _render_movimientos_mp(db, kardex, desde, hasta, rol):
+    """Tabla de movimientos del Historial, con filtro de proveedor y lote."""
+    c3, c4 = st.columns(2)
     proveedores = sorted(kardex["proveedor"].dropna().astype(str).unique())
     prov_sel = c3.selectbox("Proveedor", ["Todos"] + proveedores, key="mp_hist_prov")
     lotes = kardex if prov_sel == "Todos" else kardex[kardex["proveedor"] == prov_sel]
     lote_sel = c4.selectbox(
         "Lote", ["Todos"] + sorted(lotes["recepcion_id"].unique(), reverse=True), key="mp_hist_lote",
     )
-    if desde > hasta:
-        st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
-        return
 
     periodo = kardex[(kardex["fecha"].dt.date >= desde) & (kardex["fecha"].dt.date <= hasta)]
     if prov_sel != "Todos":
@@ -1061,3 +1073,275 @@ def _render_historial(db, rol):
         if not ve_costos(rol):
             df = df.drop(columns=[c for c in ["costo_cubeta", "costo_total"] if c in df.columns])
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ============================ GRÁFICAS DEL HISTORIAL ============================
+# Colores fijos por entidad (paleta categórica validada): la misma entidad
+# lleva siempre el mismo color en todas las gráficas.
+COLOR_CENTRAL = "#2a78d6"    # azul    — Planta central (La Libertad)
+COLOR_SUCURSAL = "#eb6834"   # naranja — Planta sucursal (Rumipamba)
+COLOR_COMPRAS = "#1baf7a"    # aqua    — compras a proveedores externos
+COLOR_CONSUMO = "#6250d6"    # violeta — consumo en producción
+COLOR_AJUSTE_MAS = "#2a78d6"   # azul — ajustes que suman (polo positivo)
+COLOR_AJUSTE_MENOS = "#e34948" # rojo — ajustes que restan (polo negativo)
+GRANULARIDAD = {"Día": "D", "Semana": "W-SUN", "Mes": "M"}
+
+
+def _origen_mp(db):
+    """Clasifica cada proveedor (proveedor_id) en 'central', 'sucursal' o
+    'compra'. Planta central = prefijo PC (Galpones La Libertad), planta
+    sucursal = prefijo PSU (Galpones Rumipamba); el resto de proveedores
+    externos son compras."""
+    prov = db.get_df("proveedores")
+    clases = {}
+    if prov.empty or "proveedor_id" not in prov.columns:
+        return clases
+    for _, p in prov.iterrows():
+        prefijo = str(p.get("prefijo", "") or "").strip().upper()
+        nombre = str(p.get("nombre", "") or "").lower()
+        tipo = str(p.get("tipo", "") or "").strip().lower()
+        if prefijo == "PC" or "libertad" in nombre:
+            clases[str(p["proveedor_id"])] = "central"
+        elif prefijo == "PSU" or "rumipamba" in nombre:
+            clases[str(p["proveedor_id"])] = "sucursal"
+        elif tipo == "interno":
+            clases[str(p["proveedor_id"])] = "interno_otro"
+        else:
+            clases[str(p["proveedor_id"])] = "compra"
+    return clases
+
+
+def _serie_por_periodo(df, columna, desde, hasta, freq):
+    """Suma 'columna' por periodo (dia/semana/mes) incluyendo los periodos
+    sin movimiento en cero, para que la grafica y las estadisticas muestren
+    tambien los dias en que no paso nada."""
+    rango = pd.period_range(pd.Timestamp(desde), pd.Timestamp(hasta), freq=freq)
+    if df.empty:
+        return pd.Series(0.0, index=rango)
+    sumas = df.groupby(df["fecha"].dt.to_period(freq))[columna].sum()
+    return sumas.reindex(rango, fill_value=0.0).astype(float)
+
+
+def _etiqueta_periodo(periodo, freq):
+    if freq == "D":
+        return periodo.start_time.strftime("%d/%m")
+    if freq.startswith("W"):
+        return "Sem " + periodo.start_time.strftime("%d/%m")
+    meses = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+    return f"{meses[periodo.start_time.month - 1]} {periodo.start_time.year}"
+
+
+def _layout_base(fig, alto=300, leyenda=False):
+    fig.update_layout(
+        height=alto, margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        bargap=0.35, showlegend=leyenda,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+        hoverlabel=dict(bgcolor="white", font_size=12),
+        xaxis=dict(showgrid=False, linecolor="#d9d8d3"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zerolinecolor="#b5b4ae", title="Cubetas"),
+    )
+    try:
+        fig.update_traces(marker_cornerradius=4)  # extremo redondeado (plotly >= 5.19)
+    except (ValueError, TypeError):
+        pass
+    return fig
+
+
+def _cuadro_estadistico(serie, freq_nombre, etiquetas):
+    """Pequeño cuadro con el análisis estadístico de una serie por periodo."""
+    import numpy as np
+    unidad = {"Día": "día", "Semana": "semana", "Mes": "mes"}[freq_nombre]
+    total = float(serie.sum())
+    n = len(serie)
+    con_mov = int((serie > 0).sum())
+    promedio = total / n if n else 0.0
+    prom_activos = float(serie[serie > 0].mean()) if con_mov else 0.0
+    desv = float(serie.std(ddof=1)) if n > 1 else 0.0
+    cv = (desv / promedio * 100) if promedio else 0.0
+    if con_mov:
+        i_max = int(np.argmax(serie.values))
+        maximo = f"{serie.iloc[i_max]:,.0f} ({etiquetas[i_max]})"
+    else:
+        maximo = "—"
+    if n >= 3 and con_mov >= 3:
+        pendiente = float(np.polyfit(np.arange(n), serie.values, 1)[0])
+        if abs(pendiente) < 0.05 * max(promedio, 1e-9):
+            tendencia = "→ estable"
+        else:
+            tendencia = f"{'↑ sube' if pendiente > 0 else '↓ baja'} {abs(pendiente):,.1f} cub./{unidad}"
+    else:
+        tendencia = "—"
+    with st.container(border=True):
+        st.markdown(
+            f"| Total | Promedio/{unidad} | {unidad.capitalize()}s con movimiento | Máximo | Variabilidad | Tendencia |\n"
+            f"|---|---|---|---|---|---|\n"
+            f"| **{total:,.0f}** cub. | {promedio:,.1f} cub. | {con_mov} de {n} "
+            f"(prom. {prom_activos:,.1f}) | {maximo} | ±{desv:,.1f} (CV {cv:,.0f}%) | {tendencia} |"
+        )
+
+
+def _grafica_serie(titulo, df, columna, color, desde, hasta, freq, freq_nombre, vacio):
+    import plotly.graph_objects as go
+    st.markdown(f"##### {titulo}")
+    serie = _serie_por_periodo(df, columna, desde, hasta, freq)
+    etiquetas = [_etiqueta_periodo(p, freq) for p in serie.index]
+    if serie.sum() == 0:
+        st.info(vacio)
+        return
+    fig = go.Figure(go.Bar(
+        x=etiquetas, y=serie.values, marker_color=color,
+        hovertemplate="%{x}<br><b>%{y:,.2f}</b> cubetas<extra></extra>",
+    ))
+    # etiqueta solo en el valor más alto (no un número en cada barra)
+    i_max = int(serie.values.argmax())
+    fig.add_annotation(
+        x=etiquetas[i_max], y=serie.iloc[i_max], text=f"{serie.iloc[i_max]:,.0f}",
+        showarrow=False, yshift=10, font=dict(size=11, color="#52514e"),
+    )
+    st.plotly_chart(_layout_base(fig), use_container_width=True)
+    _cuadro_estadistico(serie, freq_nombre, etiquetas)
+
+
+def _render_graficas_mp(db, kardex, desde, hasta, rol):
+    """Panel de gráficas del Historial: consumo, ingresos de cada planta,
+    compras (totales y por proveedor) y ajustes, con su análisis."""
+    import plotly.graph_objects as go
+
+    dias = (hasta - desde).days + 1
+    sugerida = "Día" if dias <= 45 else ("Semana" if dias <= 200 else "Mes")
+    freq_nombre = st.radio(
+        "Agrupar por", list(GRANULARIDAD), index=list(GRANULARIDAD).index(sugerida),
+        horizontal=True, key="mp_graf_freq",
+    )
+    freq = GRANULARIDAD[freq_nombre]
+
+    # Las recepciones eliminadas fueron errores de registro: no cuentan.
+    k = kardex[
+        ~kardex["lote_eliminado"]
+        & (kardex["fecha"].dt.date >= desde) & (kardex["fecha"].dt.date <= hasta)
+    ].copy()
+    clases = _origen_mp(db)
+    k["origen"] = k["origen_id"].astype(str).map(clases).fillna("compra")
+    recep = k[k["movimiento"].str.startswith("Recepción")]
+    consumo = k[k["movimiento"] == "Consumo en producción"]
+    ajustes = k[k["movimiento"].isin(["Ajuste de inventario", "Corrección de recepción"])]
+    compras = recep[recep["origen"] == "compra"]
+
+    # ---- resumen rápido ----
+    r = st.columns(4)
+    r[0].metric("Consumo en producción", f"{consumo['salida'].sum():,.0f} cub.")
+    r[1].metric("Planta central", f"{recep.loc[recep['origen'] == 'central', 'ingreso'].sum():,.0f} cub.")
+    r[2].metric("Planta sucursal", f"{recep.loc[recep['origen'] == 'sucursal', 'ingreso'].sum():,.0f} cub.")
+    r[3].metric("Compras", f"{compras['ingreso'].sum():,.0f} cub.")
+
+    g1, g2 = st.columns(2)
+    with g1:
+        _grafica_serie(
+            "🏭 Consumo de huevo en producción", consumo, "salida", COLOR_CONSUMO,
+            desde, hasta, freq, freq_nombre, "No hubo consumo en producción en este período.",
+        )
+    with g2:
+        _grafica_serie(
+            "🛒 Compras totales (proveedores externos)", compras, "ingreso", COLOR_COMPRAS,
+            desde, hasta, freq, freq_nombre, "No hubo compras a proveedores externos en este período.",
+        )
+    g3, g4 = st.columns(2)
+    with g3:
+        _grafica_serie(
+            "🐔 Ingresos Planta central (La Libertad)", recep[recep["origen"] == "central"], "ingreso",
+            COLOR_CENTRAL, desde, hasta, freq, freq_nombre,
+            "No hubo ingresos de Planta central en este período.",
+        )
+    with g4:
+        _grafica_serie(
+            "🐔 Ingresos Planta sucursal (Rumipamba)", recep[recep["origen"] == "sucursal"], "ingreso",
+            COLOR_SUCURSAL, desde, hasta, freq, freq_nombre,
+            "No hubo ingresos de Planta sucursal en este período.",
+        )
+
+    g5, g6 = st.columns(2)
+    # ---- compras por proveedor ----
+    with g5:
+        st.markdown("##### 🛒 Compras por proveedor")
+        if compras.empty:
+            st.info("No hubo compras a proveedores externos en este período.")
+        else:
+            por_prov = compras.groupby("proveedor").agg(
+                cubetas=("ingreso", "sum"), costo=("costo_total", "sum"), entregas=("ingreso", "count"),
+            ).sort_values("cubetas")
+            por_prov["costo_cub"] = por_prov["costo"] / por_prov["cubetas"].where(por_prov["cubetas"] > 0)
+            hover = "%{y}<br><b>%{x:,.0f}</b> cubetas en %{customdata[0]} entregas"
+            if ve_costos(rol):
+                hover += "<br>Costo: $%{customdata[1]:,.2f} ($%{customdata[2]:,.2f}/cub.)"
+            fig = go.Figure(go.Bar(
+                x=por_prov["cubetas"], y=por_prov.index, orientation="h", marker_color=COLOR_COMPRAS,
+                customdata=por_prov[["entregas", "costo", "costo_cub"]].values,
+                text=por_prov["cubetas"].map("{:,.0f}".format), textposition="outside",
+                textfont=dict(color="#52514e"), cliponaxis=False,
+                hovertemplate=hover + "<extra></extra>",
+            ))
+            fig = _layout_base(fig, alto=max(220, 50 * len(por_prov) + 60))
+            fig.update_layout(xaxis=dict(title="Cubetas", showgrid=True,
+                                         gridcolor="rgba(128,128,128,0.15)"),
+                              yaxis=dict(title=None, gridcolor="rgba(0,0,0,0)"),
+                              margin=dict(l=10, r=50, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+            total = por_prov["cubetas"].sum()
+            principal = por_prov["cubetas"].idxmax()
+            fila = (
+                f"| **{total:,.0f}** cub. | {len(por_prov)} | {int(por_prov['entregas'].sum())} | "
+                f"{principal} ({por_prov.loc[principal, 'cubetas'] / total * 100:,.0f}%) | "
+                f"{total / por_prov['entregas'].sum():,.1f} cub."
+            )
+            encabezado = "| Total comprado | Proveedores | Entregas | Principal proveedor | Promedio por entrega"
+            if ve_costos(rol):
+                costo_total = por_prov["costo"].sum()
+                encabezado += " | Costo total | Costo prom./cub."
+                fila += f" | ${costo_total:,.2f} | ${costo_total / total:,.2f}" if total else " | — | —"
+            with st.container(border=True):
+                st.markdown(
+                    encabezado + " |\n" + "|---" * (encabezado.count("|")) + "|\n" + fila + " |"
+                )
+
+    # ---- ajustes ----
+    with g6:
+        st.markdown("##### ⚖️ Ajustes de inventario y correcciones")
+        if ajustes.empty:
+            st.info("No hubo ajustes ni correcciones en este período.")
+        else:
+            mas = _serie_por_periodo(ajustes, "ingreso", desde, hasta, freq)
+            menos = _serie_por_periodo(ajustes, "salida", desde, hasta, freq)
+            etiquetas = [_etiqueta_periodo(p, freq) for p in mas.index]
+            fig = go.Figure([
+                go.Bar(x=etiquetas, y=mas.values, name="Agregadas", marker_color=COLOR_AJUSTE_MAS,
+                       hovertemplate="%{x}<br>Agregadas: <b>%{y:,.2f}</b> cub.<extra></extra>"),
+                go.Bar(x=etiquetas, y=-menos.values, name="Quitadas", marker_color=COLOR_AJUSTE_MENOS,
+                       customdata=menos.values,
+                       hovertemplate="%{x}<br>Quitadas: <b>%{customdata:,.2f}</b> cub.<extra></extra>"),
+            ])
+            fig = _layout_base(fig, leyenda=True)
+            fig.update_layout(barmode="relative")
+            st.plotly_chart(fig, use_container_width=True)
+            agregadas, quitadas = float(mas.sum()), float(menos.sum())
+            ingresado = float(recep["ingreso"].sum())
+            neto = agregadas - quitadas
+            pct = f"{abs(neto) / ingresado * 100:,.1f}%" if ingresado else "—"
+            motivos = ajustes.loc[ajustes["movimiento"] == "Ajuste de inventario", "detalle"].astype(str)
+            motivo_top = motivos.str.split(" — ").str[0].mode()
+            motivo_txt = motivo_top.iloc[0] if not motivo_top.empty else "Corrección de recepción"
+            with st.container(border=True):
+                st.markdown(
+                    "| Registros | Agregadas | Quitadas | Neto | Neto vs. ingresos | Motivo más frecuente |\n"
+                    "|---|---|---|---|---|---|\n"
+                    f"| {len(ajustes)} | +{agregadas:,.0f} cub. | −{quitadas:,.0f} cub. | "
+                    f"**{neto:+,.0f}** cub. | {pct} | {motivo_txt} |"
+                )
+
+    st.caption(
+        "Las gráficas usan solo el período Desde/Hasta. Planta central = proveedor con prefijo PC "
+        "(La Libertad); Planta sucursal = prefijo PSU (Rumipamba); compras = proveedores externos. "
+        "Las recepciones eliminadas no se cuentan. **Variabilidad** = desviación estándar por "
+        "período (CV = qué tanto varía respecto al promedio). **Tendencia** = pendiente de la "
+        "recta de mejor ajuste."
+    )
