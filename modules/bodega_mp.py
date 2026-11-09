@@ -13,6 +13,7 @@ semielaborados' con descuento FIFO estricto por fecha de recepcion.
 """
 import datetime
 import re
+from html import escape
 import streamlit as st
 import pandas as pd
 from utils.permisos import ve_costos
@@ -1148,6 +1149,23 @@ def _layout_base(fig, alto=300, leyenda=False):
     return fig
 
 
+def _cuadro_html(celdas):
+    """Cuadro compacto de estadisticas: celdas pequeñas que se acomodan solas
+    en varias filas segun el ancho disponible, para que no se traslapen
+    cuando la grafica esta en media pantalla."""
+    items = "".join(
+        f'<div style="flex:1 1 90px;min-width:90px;padding:4px 8px;">'
+        f'<div style="font-size:11px;opacity:.65;line-height:1.2;">{etiqueta}</div>'
+        f'<div style="font-size:13px;line-height:1.3;">{valor}</div></div>'
+        for etiqueta, valor in celdas
+    )
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:2px;border:1px solid rgba(128,128,128,.25);'
+        f'border-radius:8px;padding:4px;margin:-8px 0 16px 0;">{items}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _cuadro_estadistico(serie, freq_nombre, etiquetas):
     """Pequeño cuadro con el análisis estadístico de una serie por periodo."""
     import numpy as np
@@ -1172,13 +1190,14 @@ def _cuadro_estadistico(serie, freq_nombre, etiquetas):
             tendencia = f"{'↑ sube' if pendiente > 0 else '↓ baja'} {abs(pendiente):,.1f} cub./{unidad}"
     else:
         tendencia = "—"
-    with st.container(border=True):
-        st.markdown(
-            f"| Total | Promedio/{unidad} | {unidad.capitalize()}s con movimiento | Máximo | Variabilidad | Tendencia |\n"
-            f"|---|---|---|---|---|---|\n"
-            f"| **{total:,.0f}** cub. | {promedio:,.1f} cub. | {con_mov} de {n} "
-            f"(prom. {prom_activos:,.1f}) | {maximo} | ±{desv:,.1f} (CV {cv:,.0f}%) | {tendencia} |"
-        )
+    _cuadro_html([
+        ("Total", f"<b>{total:,.0f}</b> cub."),
+        (f"Promedio/{unidad}", f"{promedio:,.1f} cub."),
+        (f"{unidad.capitalize()}s con mov.", f"{con_mov} de {n} (prom. {prom_activos:,.1f})"),
+        ("Máximo", maximo),
+        ("Variabilidad", f"±{desv:,.1f} (CV {cv:,.0f}%)"),
+        ("Tendencia", tendencia),
+    ])
 
 
 def _grafica_serie(titulo, df, columna, color, desde, hasta, freq, freq_nombre, vacio):
@@ -1289,20 +1308,20 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
             st.plotly_chart(fig, use_container_width=True)
             total = por_prov["cubetas"].sum()
             principal = por_prov["cubetas"].idxmax()
-            fila = (
-                f"| **{total:,.0f}** cub. | {len(por_prov)} | {int(por_prov['entregas'].sum())} | "
-                f"{principal} ({por_prov.loc[principal, 'cubetas'] / total * 100:,.0f}%) | "
-                f"{total / por_prov['entregas'].sum():,.1f} cub."
-            )
-            encabezado = "| Total comprado | Proveedores | Entregas | Principal proveedor | Promedio por entrega"
+            celdas = [
+                ("Total comprado", f"<b>{total:,.0f}</b> cub."),
+                ("Proveedores", f"{len(por_prov)}"),
+                ("Entregas", f"{int(por_prov['entregas'].sum())}"),
+                ("Principal", f"{escape(str(principal))} ({por_prov.loc[principal, 'cubetas'] / total * 100:,.0f}%)"),
+                ("Prom./entrega", f"{total / por_prov['entregas'].sum():,.1f} cub."),
+            ]
             if ve_costos(rol):
                 costo_total = por_prov["costo"].sum()
-                encabezado += " | Costo total | Costo prom./cub."
-                fila += f" | ${costo_total:,.2f} | ${costo_total / total:,.2f}" if total else " | — | —"
-            with st.container(border=True):
-                st.markdown(
-                    encabezado + " |\n" + "|---" * (encabezado.count("|")) + "|\n" + fila + " |"
-                )
+                celdas += [
+                    ("Costo total", f"${costo_total:,.2f}"),
+                    ("Costo prom./cub.", f"${costo_total / total:,.2f}" if total else "—"),
+                ]
+            _cuadro_html(celdas)
 
     # ---- ajustes ----
     with g6:
@@ -1330,13 +1349,14 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
             motivos = ajustes.loc[ajustes["movimiento"] == "Ajuste de inventario", "detalle"].astype(str)
             motivo_top = motivos.str.split(" — ").str[0].mode()
             motivo_txt = motivo_top.iloc[0] if not motivo_top.empty else "Corrección de recepción"
-            with st.container(border=True):
-                st.markdown(
-                    "| Registros | Agregadas | Quitadas | Neto | Neto vs. ingresos | Motivo más frecuente |\n"
-                    "|---|---|---|---|---|---|\n"
-                    f"| {len(ajustes)} | +{agregadas:,.0f} cub. | −{quitadas:,.0f} cub. | "
-                    f"**{neto:+,.0f}** cub. | {pct} | {motivo_txt} |"
-                )
+            _cuadro_html([
+                ("Registros", f"{len(ajustes)}"),
+                ("Agregadas", f"+{agregadas:,.0f} cub."),
+                ("Quitadas", f"−{quitadas:,.0f} cub."),
+                ("Neto", f"<b>{neto:+,.0f}</b> cub."),
+                ("Neto vs. ingresos", pct),
+                ("Motivo más frecuente", escape(str(motivo_txt))),
+            ])
 
     st.caption(
         "Las gráficas usan solo el período Desde/Hasta. Planta central = proveedor con prefijo PC "
