@@ -103,6 +103,9 @@ SHEET_SCHEMAS = {
         "recepcion_id", "fecha", "origen_tipo", "origen_id", "categoria_id",
         "cubetas", "costo_cubeta", "costo_total", "cubetas_saldo",
         "fecha_vencimiento", "usuario", "observaciones", "estado",
+        # turno en que llego la entrega (1 = primer turno, 2 = segundo turno).
+        # Cada entrega es un lote propio: el del segundo turno lleva sufijo -2.
+        "turno",
     ],
 
     # ---------- Bodega de envases e insumos ----------

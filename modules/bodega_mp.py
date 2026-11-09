@@ -81,42 +81,58 @@ def _recepcion_ya_consumida(db, recepcion_id):
     return False
 
 
-def _sumar_por_lote(df, columna, nombre):
-    """Suma una columna numerica de una tabla de movimientos agrupando por lote."""
-    if df.empty or "recepcion_id" not in df.columns or columna not in df.columns:
-        return pd.Series(dtype=float, name=nombre)
-    valores = pd.to_numeric(df[columna], errors="coerce").fillna(0)
-    return valores.groupby(df["recepcion_id"].astype(str)).sum().rename(nombre)
+TURNOS_RECEPCION = {1: "Primer turno", 2: "Segundo turno"}
 
 
-def _movimientos_por_lote(db):
-    """Devuelve, por lote (recepcion_id), las cubetas consumidas en produccion,
-    las perdidas y los ajustes de inventario separados en lo que sumo y lo que
-    resto."""
-    consumo = _sumar_por_lote(db.get_df("consumo_mp_produccion"), "cubetas_usadas", "consumo")
-    perdidas = _sumar_por_lote(db.get_df("mermas_mp"), "cubetas_equivalentes", "perdidas")
-    ajustes = db.get_df("mp_ajustes")
-    if not ajustes.empty and "diferencia" in ajustes.columns:
-        dif = pd.to_numeric(ajustes["diferencia"], errors="coerce").fillna(0)
-        ajustes = ajustes.assign(mas=dif.clip(lower=0), menos=(-dif).clip(lower=0))
-    ajuste_mas = _sumar_por_lote(ajustes, "mas", "ajuste_mas")
-    ajuste_menos = _sumar_por_lote(ajustes, "menos", "ajuste_menos")
-    resultado = pd.concat([consumo, perdidas, ajuste_mas, ajuste_menos], axis=1)
-    resultado.index.name = "recepcion_id"
-    return resultado.reset_index()
+def _turno_de(fila, base):
+    """Turno de una recepcion: el de la columna 'turno' o, para las que se
+    registraron antes de existir esa columna, se deduce del codigo
+    (sin sufijo = primer turno, sufijo -2 = segundo turno)."""
+    t = str(fila.get("turno", "") or "").strip()
+    if t.isdigit():
+        return int(t)
+    rid = str(fila.get("recepcion_id", ""))
+    if rid == base:
+        return 1
+    if rid == f"{base}-2":
+        return 2
+    return None
 
 
-def _buscar_lote_del_dia(db, prefijo, fecha):
-    """Busca si ya existe una recepcion activa con el mismo lote del dia
-    (para consolidarla en lugar de crear una nueva). Devuelve la fila o None."""
-    lote_esperado = _generar_lote(prefijo, fecha)
-    activas = _recepciones_activas(db)
-    if activas.empty or "recepcion_id" not in activas.columns:
-        return None
-    match = activas[activas["recepcion_id"].astype(str) == lote_esperado]
-    if match.empty:
-        return None
-    return match.iloc[0]
+def _texto_turno(fila):
+    """Turno para mostrar en tablas ('Primer turno' / 'Segundo turno')."""
+    rid = str(fila.get("recepcion_id", ""))
+    base = rid.split("-")[0]
+    t = _turno_de(fila, base)
+    return TURNOS_RECEPCION.get(t, "Primer turno")
+
+
+def _lote_para_turno(db, prefijo, fecha, turno):
+    """Devuelve (codigo_de_lote, recepcion_activa_que_ya_ocupa_ese_turno).
+    Primer turno = PREFIJO+DDMMYY (ej. PC081126); segundo turno = mismo
+    codigo con -2 (PC081126-2). Si ese codigo ya lo usa una recepcion
+    ELIMINADA, se toma el siguiente sufijo libre (-3, -4...) para no repetir
+    ids; el turno queda igual guardado en su columna."""
+    base = _generar_lote(prefijo, fecha)
+    preferido = base if turno == 1 else f"{base}-{turno}"
+    todas = db.get_df("recepciones_mp")
+    if todas.empty or "recepcion_id" not in todas.columns:
+        return preferido, None
+    todas = todas.copy()
+    todas["recepcion_id"] = todas["recepcion_id"].astype(str)
+    del_dia = todas[
+        (todas["recepcion_id"] == base) | todas["recepcion_id"].str.startswith(f"{base}-")
+    ]
+    for _, fila in del_dia.iterrows():
+        if _lote_estado_activo(fila) and _turno_de(fila, base) == turno:
+            return fila["recepcion_id"], fila
+    usados = set(todas["recepcion_id"])
+    if preferido not in usados:
+        return preferido, None
+    n = 3
+    while f"{base}-{n}" in usados:
+        n += 1
+    return f"{base}-{n}", None
 
 
 def render(db, username, rol):
@@ -158,15 +174,14 @@ def render(db, username, rol):
             )
         else:
             st.caption(
-                "Solo elige proveedor, cubetas y costo — el sistema genera el "
+                "Solo elige proveedor, turno, cubetas y costo — el sistema genera el "
                 "código de lote automáticamente (prefijo+fecha, ej. **PC270726**). "
-                "Si el mismo proveedor entrega dos veces el mismo día, las "
-                "cubetas se consolidan en un solo lote (con costo promedio "
-                "ponderado)."
+                "Cada entrega queda registrada por separado: la del **segundo turno** "
+                "lleva el sufijo **-2** (ej. **PC270726-2**)."
             )
 
             # Preview del lote que se va a generar (fuera del form para que
-            # se actualice en vivo al cambiar proveedor o fecha)
+            # se actualice en vivo al cambiar proveedor, fecha o turno)
             con_prefijo = con_prefijo.sort_values(
                 ["tipo", "nombre"] if "tipo" in con_prefijo.columns else ["nombre"]
             )
@@ -181,21 +196,24 @@ def render(db, username, rol):
                 ),
                 key="rec_prov",
             )
-            fecha = st.date_input("Fecha de recepción", value=datetime.date.today(), key="rec_fecha")
+            c_fecha, c_turno = st.columns(2)
+            fecha = c_fecha.date_input("Fecha de recepción", value=datetime.date.today(), key="rec_fecha")
+            turno = c_turno.radio(
+                "Turno", list(TURNOS_RECEPCION), format_func=TURNOS_RECEPCION.get,
+                horizontal=True, key="rec_turno",
+            )
 
             fila_prov = con_prefijo.set_index("proveedor_id").loc[proveedor_id]
             prefijo_sel = str(fila_prov["prefijo"]).strip().upper()
-            lote_preview = _generar_lote(prefijo_sel, fecha)
-            existente = _buscar_lote_del_dia(db, prefijo_sel, fecha)
+            lote_preview, existente = _lote_para_turno(db, prefijo_sel, fecha, turno)
 
             if existente is not None:
                 cub_prev = float(pd.to_numeric(existente.get("cubetas", 0), errors="coerce") or 0)
-                costo_prev = float(pd.to_numeric(existente.get("costo_cubeta", 0), errors="coerce") or 0)
-                st.info(
-                    f"📦 Ya existe el lote **{lote_preview}** con **{cub_prev:.0f} cubetas** "
-                    f"a costo ${costo_prev:.2f}/cub. "
-                    f"Las cubetas que ingreses se **sumarán a este lote** y el costo "
-                    f"se recalculará como promedio ponderado."
+                st.warning(
+                    f"⚠️ Ya hay una recepción de este proveedor en el **{TURNOS_RECEPCION[turno].lower()}** "
+                    f"de esa fecha: lote **{lote_preview}** con **{cub_prev:.0f} cubetas**. "
+                    f"Si es otra entrega, elige el otro turno. Si la cantidad de ese lote "
+                    f"está mal, corrígela en **✏️ Corregir / eliminar recepción**."
                 )
             else:
                 st.success(f"📦 Se creará el lote nuevo: **{lote_preview}**")
@@ -208,68 +226,41 @@ def render(db, username, rol):
                     "Costo por cubeta ($)", min_value=0.0, step=0.01, format="%.2f", key="rec_costo",
                 )
                 observaciones = st.text_area("Observaciones", "", key="rec_obs")
-                guardar = st.form_submit_button("Registrar recepción")
+                guardar = st.form_submit_button("Registrar recepción", disabled=existente is not None)
 
             if guardar:
+                # Releer la hoja: si otro usuario registro el mismo turno
+                # mientras se llenaba el formulario, no se duplica el lote.
+                db.get_df("recepciones_mp", forzar_actualizacion=True)
+                lote_nuevo, existente = _lote_para_turno(db, prefijo_sel, fecha, turno)
                 if cubetas <= 0:
                     st.error("Ingresa una cantidad mayor a cero.")
+                elif existente is not None:
+                    st.error(
+                        f"Ya existe la recepción {lote_nuevo} para ese proveedor, fecha y turno. "
+                        f"No se guardó nada."
+                    )
                 else:
                     costo_total = cubetas * costo_cubeta
-                    # Releer el lote directo de la hoja: si otro usuario lo
-                    # movio mientras se llenaba el formulario, se consolida
-                    # sobre el saldo real y no sobre el de la pantalla.
-                    db.get_df("recepciones_mp", forzar_actualizacion=True)
-                    existente = _buscar_lote_del_dia(db, prefijo_sel, fecha)
-                    if existente is not None:
-                        # Consolidacion: sumar cubetas al lote existente y
-                        # recalcular costo promedio ponderado.
-                        cub_prev = float(pd.to_numeric(existente.get("cubetas", 0), errors="coerce") or 0)
-                        saldo_prev = float(pd.to_numeric(existente.get("cubetas_saldo", 0), errors="coerce") or 0)
-                        costo_prev = float(pd.to_numeric(existente.get("costo_cubeta", 0), errors="coerce") or 0)
-                        cub_total = cub_prev + cubetas
-                        saldo_total = saldo_prev + cubetas
-                        costo_prom = (
-                            (cub_prev * costo_prev + cubetas * costo_cubeta) / cub_total
-                            if cub_total > 0 else costo_cubeta
-                        )
-                        obs_prev = str(existente.get("observaciones", "") or "")
-                        obs_consolidada = (
-                            (obs_prev + " | " if obs_prev else "")
-                            + f"Consolidacion {fecha.isoformat()}: +{cubetas:.0f} cub. @ ${costo_cubeta:.2f} "
-                            + f"por {username}. "
-                            + (observaciones or "").strip()
-                        ).strip(" |")
-                        db.update_row("recepciones_mp", "recepcion_id", lote_preview, {
-                            "cubetas": cub_total,
-                            "cubetas_saldo": saldo_total,
-                            "costo_cubeta": round(costo_prom, 4),
-                            "costo_total": round(cub_total * costo_prom, 2),
-                            "observaciones": obs_consolidada,
-                        })
-                        st.success(
-                            f"✅ Lote **{lote_preview}** consolidado: total {cub_total:.0f} cub. "
-                            f"@ ${costo_prom:.4f}/cub. (promedio ponderado)"
-                        )
-                    else:
-                        # Recepcion nueva.
-                        db.append_row("recepciones_mp", {
-                            "recepcion_id": lote_preview,
-                            "fecha": fecha.isoformat(),
-                            "origen_tipo": "Proveedor",
-                            "origen_id": proveedor_id,
-                            "cubetas": cubetas,
-                            "costo_cubeta": costo_cubeta,
-                            "costo_total": costo_total,
-                            "cubetas_saldo": cubetas,
-                            "usuario": username,
-                            "observaciones": observaciones,
-                            "estado": "activo",
-                        })
-                        st.success(
-                            f"✅ Recepción **{lote_preview}** registrada — "
-                            f"{cubetas:.0f} cub. @ ${costo_cubeta:.2f}/cub. "
-                            f"(total ${costo_total:,.2f})"
-                        )
+                    db.append_row("recepciones_mp", {
+                        "recepcion_id": lote_nuevo,
+                        "fecha": fecha.isoformat(),
+                        "origen_tipo": "Proveedor",
+                        "origen_id": proveedor_id,
+                        "cubetas": cubetas,
+                        "costo_cubeta": costo_cubeta,
+                        "costo_total": costo_total,
+                        "cubetas_saldo": cubetas,
+                        "usuario": username,
+                        "observaciones": observaciones,
+                        "estado": "activo",
+                        "turno": turno,
+                    })
+                    st.success(
+                        f"✅ Recepción **{lote_nuevo}** registrada — "
+                        f"{cubetas:.0f} cub. @ ${costo_cubeta:.2f}/cub. "
+                        f"(total ${costo_total:,.2f})"
+                    )
                     st.rerun()
 
     # ======================== INVENTARIO ACTUAL ========================
@@ -307,26 +298,8 @@ def render(db, username, rol):
                         inventario["origen_id"]
                     )
 
-                # Ingreso y salida de cada lote, armados con sus movimientos:
-                #   ingreso = cubetas recibidas + ajustes que sumaron
-                #   salida  = consumo en produccion + perdidas + ajustes que restaron
-                movimientos = _movimientos_por_lote(db)
-                inventario["recepcion_id"] = inventario["recepcion_id"].astype(str)
-                inventario = inventario.merge(movimientos, on="recepcion_id", how="left")
-                for col in ["consumo", "perdidas", "ajuste_mas", "ajuste_menos"]:
-                    inventario[col] = inventario[col].fillna(0)
-                inventario["cubetas_ingreso"] = (
-                    pd.to_numeric(inventario["cubetas"], errors="coerce").fillna(0)
-                    + inventario["ajuste_mas"]
-                )
-                inventario["cubetas_salida"] = (
-                    inventario["consumo"] + inventario["perdidas"] + inventario["ajuste_menos"]
-                )
-
-                columnas_inv = [
-                    "recepcion_id", "fecha", "proveedor_nombre",
-                    "cubetas_ingreso", "cubetas_salida", "cubetas_saldo",
-                ]
+                inventario["turno_txt"] = [_texto_turno(f) for _, f in inventario.iterrows()]
+                columnas_inv = ["recepcion_id", "fecha", "turno_txt", "proveedor_nombre", "cubetas_saldo"]
                 if "tipo" in inventario.columns:
                     columnas_inv.insert(3, "tipo")
                 if ve_costos(rol):
@@ -338,31 +311,25 @@ def render(db, username, rol):
                 st.dataframe(
                     tabla_inv.rename(columns={
                         "recepcion_id": "Lote", "fecha": "Fecha", "proveedor_nombre": "Proveedor",
-                        "tipo": "Tipo", "cubetas_ingreso": "Ingreso (cub.)",
-                        "cubetas_salida": "Salida (cub.)", "cubetas_saldo": "Saldo (cub.)",
+                        "tipo": "Tipo", "turno_txt": "Turno", "cubetas_saldo": "Saldo (cub.)",
                         "costo_cubeta": "Costo/cub. ($)", "valor_saldo": "Valor saldo ($)",
                     }),
                     use_container_width=True, hide_index=True,
                     column_config={
                         "Fecha": st.column_config.DateColumn(format="YYYY-MM-DD"),
-                        "Ingreso (cub.)": st.column_config.NumberColumn(format="%.2f"),
-                        "Salida (cub.)": st.column_config.NumberColumn(format="%.2f"),
                         "Saldo (cub.)": st.column_config.NumberColumn(format="%.2f"),
                         "Costo/cub. ($)": st.column_config.NumberColumn(format="%.2f"),
                         "Valor saldo ($)": st.column_config.NumberColumn(format="%.2f"),
                     },
                 )
                 st.caption(
-                    "**Ingreso** = cubetas recibidas + ajustes que sumaron. "
-                    "**Salida** = consumo en producción + pérdidas/daños + ajustes que restaron."
+                    "Para ver los ingresos y salidas de cada lote, revisa la pestaña **Historial**."
                 )
 
                 total_cubetas = int(inventario["cubetas_saldo"].sum())
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Total ingresado (cub.)", f"{inventario['cubetas_ingreso'].sum():,.2f}")
-                c2.metric("Total salido (cub.)", f"{inventario['cubetas_salida'].sum():,.2f}")
-                c3.metric("Total cubetas en bodega", f"{total_cubetas:,}")
-                c4.metric("Total huevos en bodega", f"{total_cubetas * 30:,}")
+                c1, c2 = st.columns(2)
+                c1.metric("Total cubetas en bodega", f"{total_cubetas:,}")
+                c2.metric("Total huevos en bodega", f"{total_cubetas * 30:,}")
                 if ve_costos(rol):
                     valor_total = float(inventario["valor_saldo"].sum())
                     st.metric("Valor total en bodega ($)", f"{valor_total:,.2f}")
@@ -403,17 +370,7 @@ def render(db, username, rol):
 
     # ======================== HISTORIAL ========================
     with tab_historial:
-        df = db.get_df("recepciones_mp")
-        if df.empty:
-            st.info("Sin recepciones registradas.")
-        else:
-            # Marcar eliminadas visualmente
-            if "estado" in df.columns:
-                df["estado"] = df["estado"].fillna("activo").astype(str).str.strip().str.lower()
-                df.loc[df["estado"] == "", "estado"] = "activo"
-            if not ve_costos(rol):
-                df = df.drop(columns=[c for c in ["costo_cubeta", "costo_total"] if c in df.columns])
-            st.dataframe(df, use_container_width=True, hide_index=True)
+        _render_historial(db, rol)
 
     # ======================== REGISTRAR PÉRDIDA/DAÑO ========================
     with tab_perdida:
@@ -846,3 +803,261 @@ def _render_ajuste_inventario(db, username):
             }),
             use_container_width=True, hide_index=True,
         )
+
+
+def _correcciones_bitacora(db):
+    """Correcciones y eliminaciones de recepciones hechas desde '✏️ Corregir /
+    eliminar recepcion', leidas de la bitacora de cambios."""
+    bit = db.get_df("bitacora_cambios")
+    if bit.empty or "tabla" not in bit.columns:
+        return pd.DataFrame(columns=["fecha", "recepcion_id", "accion", "campo",
+                                     "antes", "despues", "motivo", "usuario"])
+    bit = bit[bit["tabla"].astype(str) == "recepciones_mp"].copy()
+    bit = bit[bit["accion"].astype(str).isin(["edicion", "eliminacion"])]
+    return pd.DataFrame({
+        "fecha": bit["fecha_hora"].astype(str).str[:10],
+        "recepcion_id": bit["id_registro"].astype(str),
+        "accion": bit["accion"].astype(str),
+        "campo": bit["campo"].astype(str),
+        "antes": pd.to_numeric(bit["valor_antes"], errors="coerce"),
+        "despues": pd.to_numeric(bit["valor_despues"], errors="coerce"),
+        "motivo": bit["motivo"].astype(str),
+        "usuario": bit["usuario"].astype(str),
+    })
+
+
+def _kardex_mp(db):
+    """Arma un movimiento por fila con todo lo que entra y sale de la bodega
+    de huevo:
+      - recepciones (ingreso, con la cantidad ORIGINAL recibida),
+      - correcciones de saldo hechas en 'Corregir' (ingreso o salida),
+      - ajustes de inventario (ingreso o salida segun su signo),
+      - consumo en produccion y perdidas (salida),
+      - eliminacion de una recepcion (salida de todo lo que le quedaba).
+    Asi el saldo que resulta coincide con el saldo actual de cada lote."""
+    recepciones = db.get_df("recepciones_mp")
+    if recepciones.empty:
+        return pd.DataFrame()
+    recepciones = recepciones.copy()
+    recepciones["recepcion_id"] = recepciones["recepcion_id"].astype(str)
+    estado = recepciones.get("estado", pd.Series("", index=recepciones.index))
+    recepciones["eliminada"] = ~estado.fillna("").astype(str).str.strip().str.lower().isin(["", "activo"])
+    costo_lote = dict(zip(
+        recepciones["recepcion_id"],
+        pd.to_numeric(recepciones["costo_cubeta"], errors="coerce").fillna(0),
+    ))
+    num = lambda serie: pd.to_numeric(serie, errors="coerce").fillna(0)
+    costo_de = lambda rid: rid.map(costo_lote).fillna(0)
+    correcciones = _correcciones_bitacora(db)
+    partes = []
+
+    # Cantidad original recibida = cubetas actuales menos lo que se corrigio
+    # despues en el campo 'cubetas' (la correccion se muestra aparte).
+    corr_cub = correcciones[(correcciones["accion"] == "edicion") & (correcciones["campo"] == "cubetas")]
+    delta_cub = (corr_cub["despues"] - corr_cub["antes"]).fillna(0).groupby(corr_cub["recepcion_id"]).sum()
+    cub_original = num(recepciones["cubetas"]) - recepciones["recepcion_id"].map(delta_cub).fillna(0)
+    turnos = [_texto_turno(f) for _, f in recepciones.iterrows()]
+
+    # prioridad: a igual fecha, primero el ingreso del lote y luego el resto
+    partes.append(pd.DataFrame({
+        "fecha": recepciones["fecha"], "recepcion_id": recepciones["recepcion_id"],
+        "movimiento": [f"Recepción ({t.lower()})" for t in turnos],
+        "ingreso": cub_original, "salida": 0.0,
+        "costo_total": cub_original * costo_de(recepciones["recepcion_id"]),
+        "detalle": recepciones.get("observaciones", ""), "usuario": recepciones.get("usuario", ""),
+        "prioridad": 0,
+    }))
+
+    corr_saldo = correcciones[
+        (correcciones["accion"] == "edicion") & (correcciones["campo"] == "cubetas_saldo")
+    ]
+    if not corr_saldo.empty:
+        dif = (corr_saldo["despues"] - corr_saldo["antes"]).fillna(0)
+        partes.append(pd.DataFrame({
+            "fecha": corr_saldo["fecha"], "recepcion_id": corr_saldo["recepcion_id"],
+            "movimiento": "Corrección de recepción",
+            "ingreso": dif.clip(lower=0), "salida": (-dif).clip(lower=0),
+            "costo_total": dif.abs() * costo_de(corr_saldo["recepcion_id"]),
+            "detalle": "Saldo " + corr_saldo["antes"].map("{:g}".format) + " → "
+                       + corr_saldo["despues"].map("{:g}".format) + ". Motivo: " + corr_saldo["motivo"],
+            "usuario": corr_saldo["usuario"], "prioridad": 1,
+        }))
+
+    ajustes = db.get_df("mp_ajustes")
+    if not ajustes.empty:
+        dif = num(ajustes["diferencia"])
+        rid = ajustes["recepcion_id"].astype(str)
+        partes.append(pd.DataFrame({
+            "fecha": ajustes["fecha"], "recepcion_id": rid,
+            "movimiento": "Ajuste de inventario",
+            "ingreso": dif.clip(lower=0), "salida": (-dif).clip(lower=0),
+            "costo_total": dif.abs() * costo_de(rid),
+            "detalle": ajustes["motivo"].astype(str) + " — " + ajustes["detalle"].astype(str),
+            "usuario": ajustes["usuario"], "prioridad": 1,
+        }))
+
+    consumos = db.get_df("consumo_mp_produccion")
+    if not consumos.empty:
+        partes.append(pd.DataFrame({
+            "fecha": consumos["fecha"], "recepcion_id": consumos["recepcion_id"].astype(str),
+            "movimiento": "Consumo en producción", "ingreso": 0.0,
+            "salida": num(consumos["cubetas_usadas"]),
+            "costo_total": num(consumos["costo_total_aplicado"]),
+            "detalle": "Lote producción: " + consumos["lote_semielaborado_id"].astype(str),
+            "usuario": consumos["usuario"], "prioridad": 2,
+        }))
+
+    mermas = db.get_df("mermas_mp")
+    if not mermas.empty:
+        partes.append(pd.DataFrame({
+            "fecha": mermas["fecha"], "recepcion_id": mermas["recepcion_id"].astype(str),
+            "movimiento": "Pérdida / daño", "ingreso": 0.0,
+            "salida": num(mermas["cubetas_equivalentes"]),
+            "costo_total": num(mermas["costo_estimado"]),
+            "detalle": mermas["causa"].astype(str) + (
+                " — " + mermas["observaciones"].astype(str)
+            ).where(mermas["observaciones"].astype(str).str.strip() != "", ""),
+            "usuario": mermas["usuario"], "prioridad": 2,
+        }))
+
+    # Eliminaciones: fecha y motivo de la bitacora; si no quedo registro,
+    # se toma la fecha anotada en observaciones ("ELIMINADA AAAA-MM-DD").
+    eliminadas = recepciones[recepciones["eliminada"]]
+    if not eliminadas.empty:
+        elim_bit = correcciones[correcciones["accion"] == "eliminacion"].drop_duplicates(
+            "recepcion_id", keep="last").set_index("recepcion_id")
+        filas = []
+        for _, r in eliminadas.iterrows():
+            rid = r["recepcion_id"]
+            if rid in elim_bit.index:
+                fecha_e, motivo_e, usuario_e = (
+                    elim_bit.loc[rid, "fecha"], elim_bit.loc[rid, "motivo"], elim_bit.loc[rid, "usuario"]
+                )
+            else:
+                m = re.search(r"ELIMINADA (\d{4}-\d{2}-\d{2})", str(r.get("observaciones", "")))
+                fecha_e, motivo_e, usuario_e = (m.group(1) if m else r["fecha"]), "", ""
+            filas.append({
+                "fecha": fecha_e, "recepcion_id": rid, "movimiento": "Eliminación de recepción",
+                "ingreso": 0.0, "salida": 0.0,  # se calcula abajo con el saldo que tenia
+                "costo_total": 0.0, "detalle": f"Motivo: {motivo_e}" if motivo_e else "",
+                "usuario": usuario_e, "prioridad": 3,
+            })
+        partes.append(pd.DataFrame(filas))
+
+    kardex = pd.concat(partes, ignore_index=True)
+    kardex = kardex[kardex["recepcion_id"].isin(set(recepciones["recepcion_id"]))].copy()
+    kardex["fecha"] = pd.to_datetime(kardex["fecha"], errors="coerce")
+    kardex["orden"] = range(len(kardex))
+    kardex = kardex.sort_values(["fecha", "prioridad", "orden"], na_position="first").reset_index(drop=True)
+
+    # Saldos acumulados (por lote y de toda la bodega). La eliminacion saca
+    # todo lo que el lote tenia en ese momento.
+    saldo_lote, saldo_bodega = {}, 0.0
+    col_saldo_lote, col_saldo_bodega = [], []
+    for i, fila in kardex.iterrows():
+        rid = fila["recepcion_id"]
+        if fila["movimiento"] == "Eliminación de recepción":
+            quedaba = saldo_lote.get(rid, 0.0)
+            kardex.at[i, "salida"] = quedaba
+            kardex.at[i, "costo_total"] = quedaba * costo_lote.get(rid, 0)
+        neto = kardex.at[i, "ingreso"] - kardex.at[i, "salida"]
+        saldo_lote[rid] = saldo_lote.get(rid, 0.0) + neto
+        saldo_bodega += neto
+        col_saldo_lote.append(saldo_lote[rid])
+        col_saldo_bodega.append(saldo_bodega)
+    kardex["saldo_lote"] = col_saldo_lote
+    kardex["saldo_bodega"] = col_saldo_bodega
+
+    proveedor_lote = dict(zip(recepciones["recepcion_id"], recepciones["origen_id"].astype(str)))
+    prov = db.get_df("proveedores")
+    nombres_prov = (
+        dict(zip(prov["proveedor_id"].astype(str), prov["nombre"]))
+        if not prov.empty and "proveedor_id" in prov.columns else {}
+    )
+    kardex["proveedor"] = kardex["recepcion_id"].map(
+        lambda r: nombres_prov.get(proveedor_lote.get(r, ""), proveedor_lote.get(r, ""))
+    )
+    return kardex
+
+
+def _render_historial(db, rol):
+    """Historial de la bodega de huevo: cada movimiento con su ingreso,
+    salida, saldo y costo total, filtrado por periodo."""
+    kardex = _kardex_mp(db)
+    if kardex.empty:
+        st.info("Todavía no hay movimientos registrados en la bodega.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    desde = c1.date_input(
+        "Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="mp_hist_desde",
+    )
+    hasta = c2.date_input("Hasta", value=datetime.date.today(), key="mp_hist_hasta")
+    proveedores = sorted(kardex["proveedor"].dropna().astype(str).unique())
+    prov_sel = c3.selectbox("Proveedor", ["Todos"] + proveedores, key="mp_hist_prov")
+    lotes = kardex if prov_sel == "Todos" else kardex[kardex["proveedor"] == prov_sel]
+    lote_sel = c4.selectbox(
+        "Lote", ["Todos"] + sorted(lotes["recepcion_id"].unique(), reverse=True), key="mp_hist_lote",
+    )
+    if desde > hasta:
+        st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
+        return
+
+    periodo = kardex[(kardex["fecha"].dt.date >= desde) & (kardex["fecha"].dt.date <= hasta)]
+    if prov_sel != "Todos":
+        periodo = periodo[periodo["proveedor"] == prov_sel]
+    if lote_sel != "Todos":
+        periodo = periodo[periodo["recepcion_id"] == lote_sel]
+    if periodo.empty:
+        st.info("No hay movimientos en ese período.")
+        return
+
+    m = st.columns(4 if ve_costos(rol) else 2)
+    m[0].metric("Ingresos (cub.)", f"{periodo['ingreso'].sum():,.2f}")
+    m[1].metric("Salidas (cub.)", f"{periodo['salida'].sum():,.2f}")
+    if ve_costos(rol):
+        m[2].metric("Costo de ingresos ($)", f"{periodo.loc[periodo['ingreso'] > 0, 'costo_total'].sum():,.2f}")
+        m[3].metric("Costo de salidas ($)", f"{periodo.loc[periodo['salida'] > 0, 'costo_total'].sum():,.2f}")
+
+    tabla = periodo.copy()
+    tabla["fecha"] = tabla["fecha"].dt.date
+    columnas = [
+        "fecha", "recepcion_id", "proveedor", "movimiento",
+        "ingreso", "salida", "saldo_lote", "saldo_bodega",
+    ]
+    if ve_costos(rol):
+        columnas.append("costo_total")
+    columnas += ["detalle", "usuario"]
+    st.dataframe(
+        tabla[columnas].rename(columns={
+            "fecha": "Fecha", "recepcion_id": "Lote", "proveedor": "Proveedor",
+            "movimiento": "Movimiento", "ingreso": "Ingreso (cub.)", "salida": "Salida (cub.)",
+            "saldo_lote": "Saldo lote (cub.)", "saldo_bodega": "Saldo bodega (cub.)",
+            "costo_total": "Costo total ($)", "detalle": "Detalle", "usuario": "Usuario",
+        }),
+        use_container_width=True, hide_index=True,
+        column_config={
+            "Fecha": st.column_config.DateColumn(format="YYYY-MM-DD"),
+            "Ingreso (cub.)": st.column_config.NumberColumn(format="%.2f"),
+            "Salida (cub.)": st.column_config.NumberColumn(format="%.2f"),
+            "Saldo lote (cub.)": st.column_config.NumberColumn(format="%.2f"),
+            "Saldo bodega (cub.)": st.column_config.NumberColumn(format="%.2f"),
+            "Costo total ($)": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+    st.caption(
+        "**Saldo lote** = cubetas que le quedaban a ese lote después del movimiento. "
+        "**Saldo bodega** = cubetas en toda la bodega en ese momento. Ambos se calculan con "
+        "todo el histórico. La recepción muestra lo recibido originalmente; las correcciones "
+        "y eliminaciones hechas después aparecen como movimientos propios. Los lotes de antes "
+        "de separar por turno pueden tener varias entregas del mismo día juntas."
+    )
+
+    with st.expander("Ver tabla de recepciones (incluye eliminadas)"):
+        df = db.get_df("recepciones_mp")
+        if "estado" in df.columns:
+            df["estado"] = df["estado"].fillna("activo").astype(str).str.strip().str.lower()
+            df.loc[df["estado"] == "", "estado"] = "activo"
+        if not ve_costos(rol):
+            df = df.drop(columns=[c for c in ["costo_cubeta", "costo_total"] if c in df.columns])
+        st.dataframe(df, use_container_width=True, hide_index=True)
