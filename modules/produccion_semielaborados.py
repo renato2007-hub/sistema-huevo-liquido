@@ -713,7 +713,10 @@ def render(db, username, rol):
                     "costo_total_aplicado": cantidad * costo_unit,
                     "usuario": username,
                 })
-                fila_recepcion = recepciones[recepciones["recepcion_id"] == d["recepcion_id"]]
+                # Saldo fresco de la hoja (no el de la pantalla): si otro
+                # usuario movio el lote mientras tanto, no se pisa su cambio.
+                recepciones_frescas = db.get_df("recepciones_mp", forzar_actualizacion=True)
+                fila_recepcion = recepciones_frescas[recepciones_frescas["recepcion_id"] == d["recepcion_id"]]
                 if not fila_recepcion.empty:
                     saldo_actual = float(fila_recepcion.iloc[0]["cubetas_saldo"])
                     db.update_row("recepciones_mp", "recepcion_id", d["recepcion_id"], {
@@ -1407,7 +1410,7 @@ def render(db, username, rol):
                     if not confirmar:
                         st.error("Marca la casilla de confirmación antes de eliminar.")
                     else:
-                        recepciones_actual = db.get_df("recepciones_mp")
+                        recepciones_actual = db.get_df("recepciones_mp", forzar_actualizacion=True)
                         for _, c in consumo_rel.iterrows():
                             fila_r = recepciones_actual[recepciones_actual["recepcion_id"] == c["recepcion_id"]]
                             if not fila_r.empty:

@@ -34,6 +34,7 @@ IMPORTANTE sobre cortes de red: el uso diario va a tener wifi imperfecto
 cortes momentaneos de conexion antes de mostrar un error real al usuario.
 """
 import re
+import threading
 import time
 import streamlit as st
 import gspread
@@ -104,6 +105,15 @@ class SheetsDB:
         self.sh = _conectar()
         self._ws_cache = {}     # nombre de pestana -> objeto Worksheet (evita relistar)
         self._data_cache = {}   # nombre de pestana -> (timestamp, DataFrame)
+        # Contador de escrituras por pestana. Streamlit atiende a cada usuario
+        # en un hilo distinto y SheetsDB es compartida: si un hilo empieza a
+        # leer una pestana y otro escribe en ella mientras esa lectura esta en
+        # vuelo, la lectura trae datos VIEJOS y antes los dejaba guardados en
+        # cache por CACHE_TTL (el inventario "no se actualizaba"). Con este
+        # contador, una lectura solo se guarda en cache si nadie escribio en
+        # la pestana mientras se hacia.
+        self._version = {}
+        self._lock = threading.Lock()
         self._asegurar_esquema()
 
     def _asegurar_esquema(self):
@@ -159,6 +169,8 @@ class SheetsDB:
             if ahora - ts < CACHE_TTL:
                 return df_cacheado.copy()
 
+        with self._lock:
+            version_inicio = self._version.get(nombre, 0)
         ws = self._ws(nombre)
         columnas = SHEET_SCHEMAS[nombre]
         try:
@@ -175,11 +187,15 @@ class SheetsDB:
             filas = valores[1:] if len(valores) > 1 else []
             filas_normalizadas = [(fila + [""] * len(columnas))[:len(columnas)] for fila in filas]
             df = pd.DataFrame(filas_normalizadas, columns=columnas) if filas_normalizadas else pd.DataFrame(columns=columnas)
-        self._data_cache[nombre] = (ahora, df)
+        with self._lock:
+            if self._version.get(nombre, 0) == version_inicio:
+                self._data_cache[nombre] = (ahora, df)
         return df.copy()
 
     def _invalidar(self, nombre):
-        self._data_cache.pop(nombre, None)
+        with self._lock:
+            self._version[nombre] = self._version.get(nombre, 0) + 1
+            self._data_cache.pop(nombre, None)
 
     def append_row(self, nombre, fila: dict):
         columnas = SHEET_SCHEMAS[nombre]
@@ -189,6 +205,7 @@ class SheetsDB:
             if isinstance(v, bool):
                 v = "TRUE" if v else "FALSE"
             valores.append(v)
+        self._invalidar(nombre)
         _con_reintentos(self._ws(nombre).append_row, valores, value_input_option=ValueInputOption.raw)
         self._invalidar(nombre)
 
@@ -197,17 +214,26 @@ class SheetsDB:
         Usa ws.update() (no update_cell) porque update_cell de gspread fuerza
         USER_ENTERED internamente, sin poder cambiarlo -- y eso es lo que
         causaba que los decimales se guardaran mal en hojas con locale en
-        espanol. ws.update() si permite forzar RAW."""
+        espanol. ws.batch_update() si permite forzar RAW."""
         ws = self._ws(nombre)
         columnas = SHEET_SCHEMAS[nombre]
         idx_id = columnas.index(id_col)
         celdas = _con_reintentos(ws.col_values, idx_id + 1)
         for fila_num, valor in enumerate(celdas[1:], start=2):  # fila 1 = encabezado
             if str(valor) == str(id_valor):
-                for campo, nuevo_valor in cambios.items():
-                    idx_campo = columnas.index(campo)
-                    rango = rowcol_to_a1(fila_num, idx_campo + 1)
-                    _con_reintentos(ws.update, values=[[_a_tipo_nativo(nuevo_valor)]], range_name=rango, raw=True)
+                # Todos los campos en UNA sola llamada (antes era una llamada
+                # por campo: mas lento, gastaba cuota y dejaba la fila a medio
+                # actualizar mientras tanto).
+                datos = [
+                    {
+                        "range": rowcol_to_a1(fila_num, columnas.index(campo) + 1),
+                        "values": [[_a_tipo_nativo(nuevo_valor)]],
+                    }
+                    for campo, nuevo_valor in cambios.items()
+                ]
+                self._invalidar(nombre)
+                if datos:
+                    _con_reintentos(ws.batch_update, datos, value_input_option=ValueInputOption.raw)
                 self._invalidar(nombre)
                 return True
         return False
@@ -220,6 +246,7 @@ class SheetsDB:
         celdas = _con_reintentos(ws.col_values, idx_id + 1)
         for fila_num, valor in enumerate(celdas[1:], start=2):  # fila 1 = encabezado
             if str(valor) == str(id_valor):
+                self._invalidar(nombre)
                 _con_reintentos(ws.delete_rows, fila_num)
                 self._invalidar(nombre)
                 return True
@@ -237,6 +264,8 @@ class SheetsDB:
             fila_num for fila_num, valor_celda in enumerate(celdas[1:], start=2)
             if str(valor_celda) == str(valor)
         ]
+        if filas_a_borrar:
+            self._invalidar(nombre)
         # borrar de abajo hacia arriba para que no se corran los numeros de fila
         for fila_num in reversed(filas_a_borrar):
             _con_reintentos(ws.delete_rows, fila_num)

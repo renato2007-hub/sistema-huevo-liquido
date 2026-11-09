@@ -190,6 +190,11 @@ def render(db, username, rol):
                     st.error("Ingresa una cantidad mayor a cero.")
                 else:
                     costo_total = cubetas * costo_cubeta
+                    # Releer el lote directo de la hoja: si otro usuario lo
+                    # movio mientras se llenaba el formulario, se consolida
+                    # sobre el saldo real y no sobre el de la pantalla.
+                    db.get_df("recepciones_mp", forzar_actualizacion=True)
+                    existente = _buscar_lote_del_dia(db, prefijo_sel, fecha)
                     if existente is not None:
                         # Consolidacion: sumar cubetas al lote existente y
                         # recalcular costo promedio ponderado.
@@ -244,6 +249,8 @@ def render(db, username, rol):
 
     # ======================== INVENTARIO ACTUAL ========================
     with tab_inventario:
+        if st.button("🔄 Actualizar inventario", key="mp_inv_refrescar"):
+            db.get_df("recepciones_mp", forzar_actualizacion=True)
         df = _recepciones_activas(db)
         if df.empty:
             st.info("Todavía no hay recepciones activas registradas.")
@@ -406,8 +413,14 @@ def render(db, username, rol):
                             "usuario": username,
                             "observaciones": observaciones,
                         })
+                        frescas = db.get_df("recepciones_mp", forzar_actualizacion=True)
+                        fila_fresca = frescas[frescas["recepcion_id"].astype(str) == str(recepcion_id)]
+                        saldo_real = (
+                            float(pd.to_numeric(fila_fresca.iloc[0]["cubetas_saldo"], errors="coerce") or 0)
+                            if not fila_fresca.empty else cubetas_saldo_lote
+                        )
                         db.update_row("recepciones_mp", "recepcion_id", recepcion_id, {
-                            "cubetas_saldo": cubetas_saldo_lote - cubetas_equivalentes,
+                            "cubetas_saldo": saldo_real - cubetas_equivalentes,
                         })
                         st.success(
                             f"Pérdida {merma_id} registrada — {huevos_danados} huevos "
