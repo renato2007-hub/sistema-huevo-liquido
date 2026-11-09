@@ -29,8 +29,8 @@ def _saldo_actual(df_movimientos, item_tipo, item_id):
 
 def render(db, username, rol):
     st.title("Bodega de envases e insumos")
-    tab_movimiento, tab_inventario, tab_ajuste = st.tabs([
-        "Registrar movimiento", "Inventario actual", "✏️ Ajuste de inventario"
+    tab_movimiento, tab_inventario, tab_historial, tab_ajuste = st.tabs([
+        "Registrar movimiento", "Inventario actual", "📋 Historial", "✏️ Ajuste de inventario"
     ])
 
     insumos = db.get_df("insumos")
@@ -225,6 +225,17 @@ def render(db, username, rol):
         else:
             st.info("Configura insumos y presentaciones en Catálogos para ver el inventario.")
 
+    # ======================== HISTORIAL ========================
+    with tab_historial:
+        _render_historial(db, rol, {
+            "insumo": (insumos, "insumo_id", "nombre"),
+            "envase": (presentaciones, "presentacion_id", "nombre"),
+            "tapa": (tapas, "tapa_id", "color"),
+            "etiqueta": (etiquetas, "etiqueta_id", "nombre"),
+            "carton": (cartones, "carton_id", "nombre"),
+            "liner": (liners, "liner_id", "nombre"),
+        })
+
     # ======================== AJUSTE DE INVENTARIO ========================
     with tab_ajuste:
         st.caption("Registra entradas o salidas manuales para corregir el inventario — por errores de conteo, devoluciones, etc.")
@@ -296,3 +307,123 @@ def render(db, username, rol):
                     accion = "ingresadas" if tipo_mov == "entrada" else "descontadas"
                     st.success(f"✅ {cantidad:.2f} unidades {accion} de {item_sel} — motivo: {motivo}")
                     st.rerun()
+
+
+NOMBRES_TIPO_ITEM = {
+    "insumo": "Insumo", "envase": "Envase", "tapa": "Tapa",
+    "etiqueta": "Etiqueta", "carton": "Cartón", "liner": "Liner",
+}
+NOMBRES_MOVIMIENTO = {"entrada": "Entrada", "salida": "Salida", "merma": "Merma"}
+
+
+def _render_historial(db, rol, catalogos):
+    """Kardex de la bodega: cada movimiento con su ingreso, salida, el saldo
+    del item despues de ese movimiento y el costo total, filtrado por periodo.
+    El saldo se calcula con TODO el historico (no solo con el periodo
+    filtrado) para que sea el saldo real que tenia el item en esa fecha."""
+    movimientos = db.get_df("movimientos_envases_insumos")
+    if movimientos.empty:
+        st.info("Todavía no hay movimientos registrados en la bodega.")
+        return
+
+    # Nombre (y unidad, para insumos) de cada item segun su catalogo.
+    nombres, unidades = {}, {}
+    for item_tipo, (df_cat, col_id, col_nombre) in catalogos.items():
+        if df_cat.empty or col_id not in df_cat.columns:
+            continue
+        for _, fila in df_cat.iterrows():
+            clave = (item_tipo, str(fila[col_id]))
+            nombres[clave] = str(fila.get(col_nombre, "") or fila[col_id])
+            unidades[clave] = str(fila.get("unidad", "") or "unid.") if item_tipo == "insumo" else "unid."
+
+    mov = movimientos.copy()
+    mov["orden"] = range(len(mov))  # orden de registro, para desempatar el mismo dia
+    mov["item_tipo"] = mov["item_tipo"].astype(str).str.strip().str.lower()
+    mov["item_id"] = mov["item_id"].astype(str)
+    mov["tipo_movimiento"] = mov["tipo_movimiento"].astype(str).str.strip().str.lower()
+    mov["fecha"] = pd.to_datetime(mov["fecha"], errors="coerce")
+    cantidad = pd.to_numeric(mov["cantidad"], errors="coerce").fillna(0)
+    es_entrada = mov["tipo_movimiento"] == "entrada"
+    es_salida = mov["tipo_movimiento"].isin(["salida", "merma"])
+    mov["ingreso"] = cantidad.where(es_entrada, 0.0)
+    mov["salida"] = cantidad.where(es_salida, 0.0)
+    mov["costo_total"] = pd.to_numeric(mov["costo_total"], errors="coerce").fillna(0)
+    claves = list(zip(mov["item_tipo"], mov["item_id"]))
+    mov["item"] = [nombres.get(k, k[1]) for k in claves]
+    mov["unidad"] = [unidades.get(k, "unid.") for k in claves]
+    mov["tipo"] = mov["item_tipo"].map(NOMBRES_TIPO_ITEM).fillna(mov["item_tipo"])
+
+    mov = mov.sort_values(["fecha", "orden"], na_position="first")
+    mov["saldo"] = (mov["ingreso"] - mov["salida"]).groupby([mov["item_tipo"], mov["item_id"]]).cumsum()
+
+    # ---- filtros ----
+    c1, c2, c3, c4 = st.columns(4)
+    desde = c1.date_input(
+        "Desde", value=datetime.date.today() - datetime.timedelta(days=30), key="env_hist_desde",
+    )
+    hasta = c2.date_input("Hasta", value=datetime.date.today(), key="env_hist_hasta")
+    tipos_presentes = [t for t in NOMBRES_TIPO_ITEM.values() if t in set(mov["tipo"])]
+    tipo_sel = c3.selectbox("Tipo de ítem", ["Todos"] + tipos_presentes, key="env_hist_tipo")
+    items_disponibles = sorted(mov.loc[mov["tipo"] == tipo_sel, "item"].unique()) if tipo_sel != "Todos" else []
+    item_sel = c4.selectbox(
+        "Ítem", ["Todos"] + items_disponibles, key="env_hist_item",
+        disabled=tipo_sel == "Todos",
+    )
+    if desde > hasta:
+        st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
+        return
+
+    periodo = mov[
+        (mov["fecha"].dt.date >= desde) & (mov["fecha"].dt.date <= hasta)
+    ]
+    if tipo_sel != "Todos":
+        periodo = periodo[periodo["tipo"] == tipo_sel]
+        if item_sel != "Todos":
+            periodo = periodo[periodo["item"] == item_sel]
+    if periodo.empty:
+        st.info("No hay movimientos en ese período.")
+        return
+
+    # ---- resumen ----
+    m = st.columns(4 if ve_costos(rol) else 2)
+    m[0].metric("Movimientos", f"{len(periodo):,}")
+    m[1].metric("Ítems con movimiento", f"{periodo.groupby(['item_tipo', 'item_id']).ngroups:,}")
+    if ve_costos(rol):
+        m[2].metric("Costo de ingresos ($)", f"{periodo.loc[periodo['ingreso'] > 0, 'costo_total'].sum():,.2f}")
+        m[3].metric("Costo de salidas ($)", f"{periodo.loc[periodo['salida'] > 0, 'costo_total'].sum():,.2f}")
+    if item_sel != "Todos":
+        st.caption(
+            f"**{item_sel}** — ingresó {periodo['ingreso'].sum():,.2f}, "
+            f"salió {periodo['salida'].sum():,.2f}, saldo al {hasta.isoformat()}: "
+            f"{periodo['saldo'].iloc[-1]:,.2f} {periodo['unidad'].iloc[0]}"
+        )
+
+    # ---- tabla ----
+    tabla = periodo.copy()
+    tabla["fecha"] = tabla["fecha"].dt.date
+    tabla["movimiento"] = tabla["tipo_movimiento"].map(NOMBRES_MOVIMIENTO).fillna(tabla["tipo_movimiento"])
+    columnas = ["fecha", "tipo", "item", "unidad", "movimiento", "ingreso", "salida", "saldo"]
+    if ve_costos(rol):
+        columnas.append("costo_total")
+    columnas += [c for c in ["modulo_destino", "usuario", "observaciones"] if c in tabla.columns]
+    st.dataframe(
+        tabla[columnas].rename(columns={
+            "fecha": "Fecha", "tipo": "Tipo", "item": "Ítem", "unidad": "Unidad",
+            "movimiento": "Movimiento", "ingreso": "Ingreso", "salida": "Salida",
+            "saldo": "Saldo", "costo_total": "Costo total ($)",
+            "modulo_destino": "Destino / motivo", "usuario": "Usuario",
+            "observaciones": "Observaciones",
+        }),
+        use_container_width=True, hide_index=True,
+        column_config={
+            "Fecha": st.column_config.DateColumn(format="YYYY-MM-DD"),
+            "Ingreso": st.column_config.NumberColumn(format="%.2f"),
+            "Salida": st.column_config.NumberColumn(format="%.2f"),
+            "Saldo": st.column_config.NumberColumn(format="%.2f"),
+            "Costo total ($)": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+    st.caption(
+        "**Saldo** = existencias del ítem después de cada movimiento (calculado con todo "
+        "el histórico). Las mermas cuentan como salida."
+    )
