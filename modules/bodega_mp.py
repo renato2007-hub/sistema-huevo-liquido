@@ -1166,15 +1166,31 @@ def _cuadro_html(celdas):
     )
 
 
-def _cuadro_estadistico(serie, freq_nombre, etiquetas):
-    """Pequeño cuadro con el análisis estadístico de una serie por periodo."""
+def _dias_produccion(db, consumo, desde, hasta):
+    """Dias en que hubo produccion dentro del periodo: fechas de la hoja de
+    produccion de semielaborados mas las fechas con consumo de huevo. La
+    planta no trabaja todos los dias, asi que los promedios diarios se
+    calculan solo sobre estos dias."""
+    dias = set(consumo["fecha"].dropna().dt.date) if not consumo.empty else set()
+    prod = db.get_df("produccion_semielaborados")
+    if not prod.empty and "fecha" in prod.columns:
+        fechas = pd.to_datetime(prod["fecha"], errors="coerce").dropna().dt.date
+        dias |= {f for f in fechas if desde <= f <= hasta}
+    return dias
+
+
+def _cuadro_estadistico(serie, freq_nombre, etiquetas, n_dias_prod):
+    """Pequeño cuadro con el análisis estadístico de una serie por periodo.
+    Si se agrupa por dia, la serie ya viene solo con los dias de produccion
+    (y los dias con movimiento), asi que promedio, variabilidad y tendencia
+    no se distorsionan con los dias en que no se trabaja."""
     import numpy as np
     unidad = {"Día": "día", "Semana": "semana", "Mes": "mes"}[freq_nombre]
     total = float(serie.sum())
     n = len(serie)
     con_mov = int((serie > 0).sum())
     promedio = total / n if n else 0.0
-    prom_activos = float(serie[serie > 0].mean()) if con_mov else 0.0
+    prom_dia_prod = total / n_dias_prod if n_dias_prod else None
     desv = float(serie.std(ddof=1)) if n > 1 else 0.0
     cv = (desv / promedio * 100) if promedio else 0.0
     if con_mov:
@@ -1187,23 +1203,34 @@ def _cuadro_estadistico(serie, freq_nombre, etiquetas):
         if abs(pendiente) < 0.05 * max(promedio, 1e-9):
             tendencia = "→ estable"
         else:
-            tendencia = f"{'↑ sube' if pendiente > 0 else '↓ baja'} {abs(pendiente):,.1f} cub./{unidad}"
+            sufijo = "día prod." if unidad == "día" else unidad
+            tendencia = f"{'↑ sube' if pendiente > 0 else '↓ baja'} {abs(pendiente):,.1f} cub./{sufijo}"
     else:
         tendencia = "—"
-    _cuadro_html([
+    celdas = [
         ("Total", f"<b>{total:,.0f}</b> cub."),
-        (f"Promedio/{unidad}", f"{promedio:,.1f} cub."),
-        (f"{unidad.capitalize()}s con mov.", f"{con_mov} de {n} (prom. {prom_activos:,.1f})"),
+        ("Prom./día de producción",
+         f"<b>{prom_dia_prod:,.1f}</b> cub. ({n_dias_prod} días)" if prom_dia_prod is not None else "—"),
+    ]
+    if unidad != "día":
+        celdas.append((f"Promedio/{unidad}", f"{promedio:,.1f} cub."))
+    celdas += [
+        ("Días con mov." if unidad == "día" else f"{unidad.capitalize()}s con mov.", f"{con_mov} de {n}"),
         ("Máximo", maximo),
         ("Variabilidad", f"±{desv:,.1f} (CV {cv:,.0f}%)"),
         ("Tendencia", tendencia),
-    ])
+    ]
+    _cuadro_html(celdas)
 
 
-def _grafica_serie(titulo, df, columna, color, desde, hasta, freq, freq_nombre, vacio):
+def _grafica_serie(titulo, df, columna, color, desde, hasta, freq, freq_nombre, vacio, dias_prod):
     import plotly.graph_objects as go
     st.markdown(f"##### {titulo}")
     serie = _serie_por_periodo(df, columna, desde, hasta, freq)
+    if freq == "D":
+        # Solo dias de produccion y dias con movimiento: los dias en que la
+        # planta no trabaja no se dibujan ni cuentan en el analisis.
+        serie = serie[[(p.start_time.date() in dias_prod) or v > 0 for p, v in serie.items()]]
     etiquetas = [_etiqueta_periodo(p, freq) for p in serie.index]
     if serie.sum() == 0:
         st.info(vacio)
@@ -1218,8 +1245,10 @@ def _grafica_serie(titulo, df, columna, color, desde, hasta, freq, freq_nombre, 
         x=etiquetas[i_max], y=serie.iloc[i_max], text=f"{serie.iloc[i_max]:,.0f}",
         showarrow=False, yshift=10, font=dict(size=11, color="#52514e"),
     )
-    st.plotly_chart(_layout_base(fig), use_container_width=True)
-    _cuadro_estadistico(serie, freq_nombre, etiquetas)
+    fig = _layout_base(fig)
+    fig.update_xaxes(type="category")
+    st.plotly_chart(fig, use_container_width=True)
+    _cuadro_estadistico(serie, freq_nombre, etiquetas, len(dias_prod))
 
 
 def _render_graficas_mp(db, kardex, desde, hasta, rol):
@@ -1247,8 +1276,14 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
     ajustes = k[k["movimiento"].isin(["Ajuste de inventario", "Corrección de recepción"])]
     compras = recep[recep["origen"] == "compra"]
 
+    dias_prod = _dias_produccion(db, consumo, desde, hasta)
+
     # ---- resumen rápido ----
-    r = st.columns(4)
+    r = st.columns(5)
+    r[4].metric(
+        "Días de producción", f"{len(dias_prod)} de {(hasta - desde).days + 1}",
+        help="Días del período en que hubo producción. Los promedios diarios se calculan sobre estos días.",
+    )
     r[0].metric("Consumo en producción", f"{consumo['salida'].sum():,.0f} cub.")
     r[1].metric("Planta central", f"{recep.loc[recep['origen'] == 'central', 'ingreso'].sum():,.0f} cub.")
     r[2].metric("Planta sucursal", f"{recep.loc[recep['origen'] == 'sucursal', 'ingreso'].sum():,.0f} cub.")
@@ -1258,25 +1293,25 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
     with g1:
         _grafica_serie(
             "🏭 Consumo de huevo en producción", consumo, "salida", COLOR_CONSUMO,
-            desde, hasta, freq, freq_nombre, "No hubo consumo en producción en este período.",
+            desde, hasta, freq, freq_nombre, "No hubo consumo en producción en este período.", dias_prod,
         )
     with g2:
         _grafica_serie(
             "🛒 Compras totales (proveedores externos)", compras, "ingreso", COLOR_COMPRAS,
-            desde, hasta, freq, freq_nombre, "No hubo compras a proveedores externos en este período.",
+            desde, hasta, freq, freq_nombre, "No hubo compras a proveedores externos en este período.", dias_prod,
         )
     g3, g4 = st.columns(2)
     with g3:
         _grafica_serie(
             "🐔 Ingresos Planta central (La Libertad)", recep[recep["origen"] == "central"], "ingreso",
             COLOR_CENTRAL, desde, hasta, freq, freq_nombre,
-            "No hubo ingresos de Planta central en este período.",
+            "No hubo ingresos de Planta central en este período.", dias_prod,
         )
     with g4:
         _grafica_serie(
             "🐔 Ingresos Planta sucursal (Rumipamba)", recep[recep["origen"] == "sucursal"], "ingreso",
             COLOR_SUCURSAL, desde, hasta, freq, freq_nombre,
-            "No hubo ingresos de Planta sucursal en este período.",
+            "No hubo ingresos de Planta sucursal en este período.", dias_prod,
         )
 
     g5, g6 = st.columns(2)
