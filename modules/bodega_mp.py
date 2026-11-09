@@ -81,6 +81,31 @@ def _recepcion_ya_consumida(db, recepcion_id):
     return False
 
 
+def _sumar_por_lote(df, columna, nombre):
+    """Suma una columna numerica de una tabla de movimientos agrupando por lote."""
+    if df.empty or "recepcion_id" not in df.columns or columna not in df.columns:
+        return pd.Series(dtype=float, name=nombre)
+    valores = pd.to_numeric(df[columna], errors="coerce").fillna(0)
+    return valores.groupby(df["recepcion_id"].astype(str)).sum().rename(nombre)
+
+
+def _movimientos_por_lote(db):
+    """Devuelve, por lote (recepcion_id), las cubetas consumidas en produccion,
+    las perdidas y los ajustes de inventario separados en lo que sumo y lo que
+    resto."""
+    consumo = _sumar_por_lote(db.get_df("consumo_mp_produccion"), "cubetas_usadas", "consumo")
+    perdidas = _sumar_por_lote(db.get_df("mermas_mp"), "cubetas_equivalentes", "perdidas")
+    ajustes = db.get_df("mp_ajustes")
+    if not ajustes.empty and "diferencia" in ajustes.columns:
+        dif = pd.to_numeric(ajustes["diferencia"], errors="coerce").fillna(0)
+        ajustes = ajustes.assign(mas=dif.clip(lower=0), menos=(-dif).clip(lower=0))
+    ajuste_mas = _sumar_por_lote(ajustes, "mas", "ajuste_mas")
+    ajuste_menos = _sumar_por_lote(ajustes, "menos", "ajuste_menos")
+    resultado = pd.concat([consumo, perdidas, ajuste_mas, ajuste_menos], axis=1)
+    resultado.index.name = "recepcion_id"
+    return resultado.reset_index()
+
+
 def _buscar_lote_del_dia(db, prefijo, fecha):
     """Busca si ya existe una recepcion activa con el mismo lote del dia
     (para consolidarla en lugar de crear una nueva). Devuelve la fila o None."""
@@ -282,18 +307,62 @@ def render(db, username, rol):
                         inventario["origen_id"]
                     )
 
-                columnas_inv = ["recepcion_id", "fecha", "proveedor_nombre", "cubetas_saldo"]
+                # Ingreso y salida de cada lote, armados con sus movimientos:
+                #   ingreso = cubetas recibidas + ajustes que sumaron
+                #   salida  = consumo en produccion + perdidas + ajustes que restaron
+                movimientos = _movimientos_por_lote(db)
+                inventario["recepcion_id"] = inventario["recepcion_id"].astype(str)
+                inventario = inventario.merge(movimientos, on="recepcion_id", how="left")
+                for col in ["consumo", "perdidas", "ajuste_mas", "ajuste_menos"]:
+                    inventario[col] = inventario[col].fillna(0)
+                inventario["cubetas_ingreso"] = (
+                    pd.to_numeric(inventario["cubetas"], errors="coerce").fillna(0)
+                    + inventario["ajuste_mas"]
+                )
+                inventario["cubetas_salida"] = (
+                    inventario["consumo"] + inventario["perdidas"] + inventario["ajuste_menos"]
+                )
+
+                columnas_inv = [
+                    "recepcion_id", "fecha", "proveedor_nombre",
+                    "cubetas_ingreso", "cubetas_salida", "cubetas_saldo",
+                ]
                 if "tipo" in inventario.columns:
                     columnas_inv.insert(3, "tipo")
                 if ve_costos(rol):
                     columnas_inv += ["costo_cubeta", "valor_saldo"]
                 columnas_inv = [c for c in columnas_inv if c in inventario.columns]
-                st.dataframe(inventario[columnas_inv], use_container_width=True, hide_index=True)
+                # Solo la fecha, sin la hora 00:00:00 que agrega pd.to_datetime
+                tabla_inv = inventario[columnas_inv].copy()
+                tabla_inv["fecha"] = tabla_inv["fecha"].dt.date
+                st.dataframe(
+                    tabla_inv.rename(columns={
+                        "recepcion_id": "Lote", "fecha": "Fecha", "proveedor_nombre": "Proveedor",
+                        "tipo": "Tipo", "cubetas_ingreso": "Ingreso (cub.)",
+                        "cubetas_salida": "Salida (cub.)", "cubetas_saldo": "Saldo (cub.)",
+                        "costo_cubeta": "Costo/cub. ($)", "valor_saldo": "Valor saldo ($)",
+                    }),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Fecha": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                        "Ingreso (cub.)": st.column_config.NumberColumn(format="%.2f"),
+                        "Salida (cub.)": st.column_config.NumberColumn(format="%.2f"),
+                        "Saldo (cub.)": st.column_config.NumberColumn(format="%.2f"),
+                        "Costo/cub. ($)": st.column_config.NumberColumn(format="%.2f"),
+                        "Valor saldo ($)": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
+                st.caption(
+                    "**Ingreso** = cubetas recibidas + ajustes que sumaron. "
+                    "**Salida** = consumo en producción + pérdidas/daños + ajustes que restaron."
+                )
 
                 total_cubetas = int(inventario["cubetas_saldo"].sum())
-                c1, c2 = st.columns(2)
-                c1.metric("Total cubetas en bodega", f"{total_cubetas:,}")
-                c2.metric("Total huevos en bodega", f"{total_cubetas * 30:,}")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total ingresado (cub.)", f"{inventario['cubetas_ingreso'].sum():,.2f}")
+                c2.metric("Total salido (cub.)", f"{inventario['cubetas_salida'].sum():,.2f}")
+                c3.metric("Total cubetas en bodega", f"{total_cubetas:,}")
+                c4.metric("Total huevos en bodega", f"{total_cubetas * 30:,}")
                 if ve_costos(rol):
                     valor_total = float(inventario["valor_saldo"].sum())
                     st.metric("Valor total en bodega ($)", f"{valor_total:,.2f}")
