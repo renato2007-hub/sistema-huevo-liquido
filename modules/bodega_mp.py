@@ -18,6 +18,7 @@ import streamlit as st
 import pandas as pd
 from utils.permisos import ve_costos
 from utils.bitacora import log_cambio, log_cambios_multiples
+import utils.graficas as graf
 
 
 CAUSAS_MERMA_HUEVO = ["Caída", "Rotura en bodega", "Daño de transporte/proveedor", "Otro"]
@@ -1085,7 +1086,6 @@ COLOR_COMPRAS = "#1baf7a"    # aqua    — compras a proveedores externos
 COLOR_CONSUMO = "#6250d6"    # violeta — consumo en producción
 COLOR_AJUSTE_MAS = "#2a78d6"   # azul — ajustes que suman (polo positivo)
 COLOR_AJUSTE_MENOS = "#e34948" # rojo — ajustes que restan (polo negativo)
-GRANULARIDAD = {"Día": "D", "Semana": "W-SUN", "Mes": "M"}
 
 
 def _origen_mp(db):
@@ -1112,143 +1112,11 @@ def _origen_mp(db):
     return clases
 
 
-def _serie_por_periodo(df, columna, desde, hasta, freq):
-    """Suma 'columna' por periodo (dia/semana/mes) incluyendo los periodos
-    sin movimiento en cero, para que la grafica y las estadisticas muestren
-    tambien los dias en que no paso nada."""
-    rango = pd.period_range(pd.Timestamp(desde), pd.Timestamp(hasta), freq=freq)
-    if df.empty:
-        return pd.Series(0.0, index=rango)
-    sumas = df.groupby(df["fecha"].dt.to_period(freq))[columna].sum()
-    return sumas.reindex(rango, fill_value=0.0).astype(float)
-
-
-def _etiqueta_periodo(periodo, freq):
-    if freq == "D":
-        return periodo.start_time.strftime("%d/%m")
-    if freq.startswith("W"):
-        return "Sem " + periodo.start_time.strftime("%d/%m")
-    meses = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
-    return f"{meses[periodo.start_time.month - 1]} {periodo.start_time.year}"
-
-
-def _layout_base(fig, alto=300, leyenda=False):
-    fig.update_layout(
-        height=alto, margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        bargap=0.35, showlegend=leyenda,
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
-        hoverlabel=dict(bgcolor="white", font_size=12),
-        xaxis=dict(showgrid=False, linecolor="#d9d8d3"),
-        yaxis=dict(gridcolor="rgba(128,128,128,0.15)", zerolinecolor="#b5b4ae", title="Cubetas"),
-    )
-    try:
-        fig.update_traces(marker_cornerradius=4)  # extremo redondeado (plotly >= 5.19)
-    except (ValueError, TypeError):
-        pass
-    return fig
-
-
-def _cuadro_html(celdas):
-    """Cuadro compacto de estadisticas: celdas pequeñas que se acomodan solas
-    en varias filas segun el ancho disponible, para que no se traslapen
-    cuando la grafica esta en media pantalla."""
-    items = "".join(
-        f'<div style="flex:1 1 90px;min-width:90px;padding:4px 8px;">'
-        f'<div style="font-size:11px;opacity:.65;line-height:1.2;">{etiqueta}</div>'
-        f'<div style="font-size:13px;line-height:1.3;">{valor}</div></div>'
-        for etiqueta, valor in celdas
-    )
-    st.markdown(
-        '<div style="display:flex;flex-wrap:wrap;gap:2px;border:1px solid rgba(128,128,128,.25);'
-        f'border-radius:8px;padding:4px;margin:-8px 0 16px 0;">{items}</div>',
-        unsafe_allow_html=True,
-    )
-
-
 def _dias_produccion(db, consumo, desde, hasta):
-    """Dias en que hubo produccion dentro del periodo: fechas de la hoja de
-    produccion de semielaborados mas las fechas con consumo de huevo. La
-    planta no trabaja todos los dias, asi que los promedios diarios se
-    calculan solo sobre estos dias."""
-    dias = set(consumo["fecha"].dropna().dt.date) if not consumo.empty else set()
-    prod = db.get_df("produccion_semielaborados")
-    if not prod.empty and "fecha" in prod.columns:
-        fechas = pd.to_datetime(prod["fecha"], errors="coerce").dropna().dt.date
-        dias |= {f for f in fechas if desde <= f <= hasta}
-    return dias
-
-
-def _cuadro_estadistico(serie, freq_nombre, etiquetas, n_dias_prod):
-    """Pequeño cuadro con el análisis estadístico de una serie por periodo.
-    Si se agrupa por dia, la serie ya viene solo con los dias de produccion
-    (y los dias con movimiento), asi que promedio, variabilidad y tendencia
-    no se distorsionan con los dias en que no se trabaja."""
-    import numpy as np
-    unidad = {"Día": "día", "Semana": "semana", "Mes": "mes"}[freq_nombre]
-    total = float(serie.sum())
-    n = len(serie)
-    con_mov = int((serie > 0).sum())
-    promedio = total / n if n else 0.0
-    prom_dia_prod = total / n_dias_prod if n_dias_prod else None
-    desv = float(serie.std(ddof=1)) if n > 1 else 0.0
-    cv = (desv / promedio * 100) if promedio else 0.0
-    if con_mov:
-        i_max = int(np.argmax(serie.values))
-        maximo = f"{serie.iloc[i_max]:,.0f} ({etiquetas[i_max]})"
-    else:
-        maximo = "—"
-    if n >= 3 and con_mov >= 3:
-        pendiente = float(np.polyfit(np.arange(n), serie.values, 1)[0])
-        if abs(pendiente) < 0.05 * max(promedio, 1e-9):
-            tendencia = "→ estable"
-        else:
-            sufijo = "día prod." if unidad == "día" else unidad
-            tendencia = f"{'↑ sube' if pendiente > 0 else '↓ baja'} {abs(pendiente):,.1f} cub./{sufijo}"
-    else:
-        tendencia = "—"
-    celdas = [
-        ("Total", f"<b>{total:,.0f}</b> cub."),
-        ("Prom./día de producción",
-         f"<b>{prom_dia_prod:,.1f}</b> cub. ({n_dias_prod} días)" if prom_dia_prod is not None else "—"),
-    ]
-    if unidad != "día":
-        celdas.append((f"Promedio/{unidad}", f"{promedio:,.1f} cub."))
-    celdas += [
-        ("Días con mov." if unidad == "día" else f"{unidad.capitalize()}s con mov.", f"{con_mov} de {n}"),
-        ("Máximo", maximo),
-        ("Variabilidad", f"±{desv:,.1f} (CV {cv:,.0f}%)"),
-        ("Tendencia", tendencia),
-    ]
-    _cuadro_html(celdas)
-
-
-def _grafica_serie(titulo, df, columna, color, desde, hasta, freq, freq_nombre, vacio, dias_prod):
-    import plotly.graph_objects as go
-    st.markdown(f"##### {titulo}")
-    serie = _serie_por_periodo(df, columna, desde, hasta, freq)
-    if freq == "D":
-        # Solo dias de produccion y dias con movimiento: los dias en que la
-        # planta no trabaja no se dibujan ni cuentan en el analisis.
-        serie = serie[[(p.start_time.date() in dias_prod) or v > 0 for p, v in serie.items()]]
-    etiquetas = [_etiqueta_periodo(p, freq) for p in serie.index]
-    if serie.sum() == 0:
-        st.info(vacio)
-        return
-    fig = go.Figure(go.Bar(
-        x=etiquetas, y=serie.values, marker_color=color,
-        hovertemplate="%{x}<br><b>%{y:,.2f}</b> cubetas<extra></extra>",
-    ))
-    # etiqueta solo en el valor más alto (no un número en cada barra)
-    i_max = int(serie.values.argmax())
-    fig.add_annotation(
-        x=etiquetas[i_max], y=serie.iloc[i_max], text=f"{serie.iloc[i_max]:,.0f}",
-        showarrow=False, yshift=10, font=dict(size=11, color="#52514e"),
-    )
-    fig = _layout_base(fig)
-    fig.update_xaxes(type="category")
-    st.plotly_chart(fig, use_container_width=True)
-    _cuadro_estadistico(serie, freq_nombre, etiquetas, len(dias_prod))
+    """Dias de produccion del periodo: fechas de produccion de semielaborados
+    mas las fechas con consumo de huevo."""
+    extra = set(consumo["fecha"].dropna().dt.date) if not consumo.empty else set()
+    return graf.dias_produccion(db, desde, hasta, extra)
 
 
 def _render_graficas_mp(db, kardex, desde, hasta, rol):
@@ -1256,13 +1124,7 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
     compras (totales y por proveedor) y ajustes, con su análisis."""
     import plotly.graph_objects as go
 
-    dias = (hasta - desde).days + 1
-    sugerida = "Día" if dias <= 45 else ("Semana" if dias <= 200 else "Mes")
-    freq_nombre = st.radio(
-        "Agrupar por", list(GRANULARIDAD), index=list(GRANULARIDAD).index(sugerida),
-        horizontal=True, key="mp_graf_freq",
-    )
-    freq = GRANULARIDAD[freq_nombre]
+    freq_nombre, freq = graf.selector_granularidad(desde, hasta, key="mp_graf_freq")
 
     # Las recepciones eliminadas fueron errores de registro: no cuentan.
     k = kardex[
@@ -1291,24 +1153,24 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
 
     g1, g2 = st.columns(2)
     with g1:
-        _grafica_serie(
+        graf.grafica_serie(
             "🏭 Consumo de huevo en producción", consumo, "salida", COLOR_CONSUMO,
             desde, hasta, freq, freq_nombre, "No hubo consumo en producción en este período.", dias_prod,
         )
     with g2:
-        _grafica_serie(
+        graf.grafica_serie(
             "🛒 Compras totales (proveedores externos)", compras, "ingreso", COLOR_COMPRAS,
             desde, hasta, freq, freq_nombre, "No hubo compras a proveedores externos en este período.", dias_prod,
         )
     g3, g4 = st.columns(2)
     with g3:
-        _grafica_serie(
+        graf.grafica_serie(
             "🐔 Ingresos Planta central (La Libertad)", recep[recep["origen"] == "central"], "ingreso",
             COLOR_CENTRAL, desde, hasta, freq, freq_nombre,
             "No hubo ingresos de Planta central en este período.", dias_prod,
         )
     with g4:
-        _grafica_serie(
+        graf.grafica_serie(
             "🐔 Ingresos Planta sucursal (Rumipamba)", recep[recep["origen"] == "sucursal"], "ingreso",
             COLOR_SUCURSAL, desde, hasta, freq, freq_nombre,
             "No hubo ingresos de Planta sucursal en este período.", dias_prod,
@@ -1335,7 +1197,7 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
                 textfont=dict(color="#52514e"), cliponaxis=False,
                 hovertemplate=hover + "<extra></extra>",
             ))
-            fig = _layout_base(fig, alto=max(220, 50 * len(por_prov) + 60))
+            fig = graf.layout_base(fig, alto=max(220, 50 * len(por_prov) + 60))
             fig.update_layout(xaxis=dict(title="Cubetas", showgrid=True,
                                          gridcolor="rgba(128,128,128,0.15)"),
                               yaxis=dict(title=None, gridcolor="rgba(0,0,0,0)"),
@@ -1356,7 +1218,7 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
                     ("Costo total", f"${costo_total:,.2f}"),
                     ("Costo prom./cub.", f"${costo_total / total:,.2f}" if total else "—"),
                 ]
-            _cuadro_html(celdas)
+            graf.cuadro_html(celdas)
 
     # ---- ajustes ----
     with g6:
@@ -1364,9 +1226,9 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
         if ajustes.empty:
             st.info("No hubo ajustes ni correcciones en este período.")
         else:
-            mas = _serie_por_periodo(ajustes, "ingreso", desde, hasta, freq)
-            menos = _serie_por_periodo(ajustes, "salida", desde, hasta, freq)
-            etiquetas = [_etiqueta_periodo(p, freq) for p in mas.index]
+            mas = graf.serie_por_periodo(ajustes, "ingreso", desde, hasta, freq)
+            menos = graf.serie_por_periodo(ajustes, "salida", desde, hasta, freq)
+            etiquetas = [graf.etiqueta_periodo(p, freq) for p in mas.index]
             fig = go.Figure([
                 go.Bar(x=etiquetas, y=mas.values, name="Agregadas", marker_color=COLOR_AJUSTE_MAS,
                        hovertemplate="%{x}<br>Agregadas: <b>%{y:,.2f}</b> cub.<extra></extra>"),
@@ -1374,7 +1236,7 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
                        customdata=menos.values,
                        hovertemplate="%{x}<br>Quitadas: <b>%{customdata:,.2f}</b> cub.<extra></extra>"),
             ])
-            fig = _layout_base(fig, leyenda=True)
+            fig = graf.layout_base(fig, leyenda=True)
             fig.update_layout(barmode="relative")
             st.plotly_chart(fig, use_container_width=True)
             agregadas, quitadas = float(mas.sum()), float(menos.sum())
@@ -1384,7 +1246,7 @@ def _render_graficas_mp(db, kardex, desde, hasta, rol):
             motivos = ajustes.loc[ajustes["movimiento"] == "Ajuste de inventario", "detalle"].astype(str)
             motivo_top = motivos.str.split(" — ").str[0].mode()
             motivo_txt = motivo_top.iloc[0] if not motivo_top.empty else "Corrección de recepción"
-            _cuadro_html([
+            graf.cuadro_html([
                 ("Registros", f"{len(ajustes)}"),
                 ("Agregadas", f"+{agregadas:,.0f} cub."),
                 ("Quitadas", f"−{quitadas:,.0f} cub."),

@@ -10,6 +10,8 @@ import datetime
 import streamlit as st
 import pandas as pd
 from utils.permisos import ve_costos
+import utils.graficas as graf
+from html import escape
 
 CAUSAS_MERMA = ["Llegó dañado del proveedor", "Se dañó en bodega", "Se dañó al manipular/usar", "Otro"]
 
@@ -380,6 +382,15 @@ def _render_historial(db, rol, catalogos):
         periodo = periodo[periodo["tipo"] == tipo_sel]
         if item_sel != "Todos":
             periodo = periodo[periodo["item"] == item_sel]
+    sub_graficas, sub_movimientos = st.tabs(["📊 Gráficas", "📋 Movimientos"])
+    with sub_graficas:
+        _render_graficas_env(db, periodo, tipo_sel, item_sel, desde, hasta, rol)
+    with sub_movimientos:
+        _render_movimientos_env(periodo, rol, item_sel, hasta)
+
+
+def _render_movimientos_env(periodo, rol, item_sel, hasta):
+    """Tabla de movimientos (kardex) del periodo filtrado."""
     if periodo.empty:
         st.info("No hay movimientos en ese período.")
         return
@@ -426,4 +437,220 @@ def _render_historial(db, rol, catalogos):
     st.caption(
         "**Saldo** = existencias del ítem después de cada movimiento (calculado con todo "
         "el histórico). Las mermas cuentan como salida."
+    )
+
+
+# ============================ GRÁFICAS DEL HISTORIAL ============================
+# Un color fijo por cada cosa que se grafica (paleta categórica validada).
+COLOR_CONSUMO = graf.VIOLETA
+COLOR_COMPRAS = graf.AQUA
+COLOR_AREA = graf.AZUL
+COLOR_MERMA = graf.NARANJA
+COLOR_TIPO = {
+    "Insumo": graf.AZUL, "Envase": graf.NARANJA, "Tapa": graf.AQUA,
+    "Etiqueta": graf.AMARILLO, "Cartón": graf.MAGENTA, "Liner": graf.VERDE,
+}
+
+
+def _clasificar_movimientos(periodo):
+    """Separa los movimientos del periodo en consumo, compras, mermas y
+    ajustes. Los ajustes son los registrados en '✏️ Ajuste de inventario'
+    (codigo AJ-...); el resto de entradas son compras, el resto de salidas
+    son consumo (produccion, pasteurizacion, limpieza o uso manual)."""
+    p = periodo.copy()
+    es_ajuste = p["movimiento_id"].astype(str).str.upper().str.startswith("AJ")
+    p["area"] = p["modulo_destino"].astype(str).str.strip().replace({"": "Salida manual", "nan": "Salida manual"})
+    p["proveedor_txt"] = p["proveedor"].astype(str).str.strip().replace({"": "Sin proveedor", "nan": "Sin proveedor"})
+    p["causa_txt"] = p["causa"].astype(str).str.strip().replace({"": "Sin causa", "nan": "Sin causa"})
+    consumo = p[~es_ajuste & (p["tipo_movimiento"] == "salida")]
+    compras = p[~es_ajuste & (p["tipo_movimiento"] == "entrada")]
+    mermas = p[~es_ajuste & (p["tipo_movimiento"] == "merma")]
+    ajustes = p[es_ajuste]
+    return consumo, compras, mermas, ajustes
+
+
+def _ranking(titulo, df, grupo, columna, color, unidad, rol, vacio, etiqueta_grupo):
+    """Barras horizontales del total por grupo + cuadro con su analisis."""
+    st.markdown(f"##### {titulo}")
+    if df.empty or df[columna].sum() == 0:
+        st.info(vacio)
+        return
+    tabla = df.groupby(grupo).agg(
+        total=(columna, "sum"), costo=("costo_total", "sum"), registros=(columna, "count"),
+    ).sort_values("total")
+    hover = f"%{{y}}<br><b>%{{x:,.2f}}</b> {unidad} en %{{customdata[0]}} registros"
+    if ve_costos(rol):
+        hover += "<br>Costo: $%{customdata[1]:,.2f}"
+    graf.barras_horizontales(
+        tabla.index.astype(str).tolist(), tabla["total"].tolist(), color,
+        eje=unidad, hover=hover, customdata=tabla[["registros", "costo"]].values,
+    )
+    total = float(tabla["total"].sum())
+    principal = tabla["total"].idxmax()
+    celdas = [
+        ("Total", f"<b>{graf.fmt(total)}</b> {unidad}"),
+        (etiqueta_grupo, f"{len(tabla)}"),
+        ("Principal", f"{escape(str(principal))} ({tabla.loc[principal, 'total'] / total * 100:,.0f}%)"),
+        ("Registros", f"{int(tabla['registros'].sum())}"),
+    ]
+    if ve_costos(rol):
+        costo = float(tabla["costo"].sum())
+        celdas += [
+            ("Costo total", f"${costo:,.2f}"),
+            (f"Costo prom./{unidad}", f"${costo / total:,.2f}" if total else "—"),
+        ]
+    graf.cuadro_html(celdas)
+
+
+def _render_graficas_env(db, periodo, tipo_sel, item_sel, desde, hasta, rol):
+    """Panel de gráficas del Historial de envases e insumos."""
+    import plotly.graph_objects as go
+
+    if tipo_sel == "Todos":
+        st.info(
+            "Elige un **Tipo de ítem** arriba (y si quieres un **Ítem**) para ver las gráficas "
+            "de consumo, compras, mermas y ajustes en sus cantidades. Cada tipo se mide en su "
+            "propia unidad, por eso no se suman entre sí."
+        )
+        if ve_costos(rol) and not periodo.empty:
+            consumo, compras, _, _ = _clasificar_movimientos(periodo)
+            g1, g2 = st.columns(2)
+            for col, titulo, df in [(g1, "💸 Costo del consumo por tipo de ítem", consumo),
+                                    (g2, "🛒 Costo de las compras por tipo de ítem", compras)]:
+                with col:
+                    st.markdown(f"##### {titulo}")
+                    if df.empty or df["costo_total"].sum() == 0:
+                        st.info("Sin movimientos con costo en este período.")
+                        continue
+                    por_tipo = df.groupby("tipo")["costo_total"].sum().sort_values()
+                    fig = go.Figure(go.Bar(
+                        x=por_tipo.values, y=por_tipo.index, orientation="h",
+                        marker_color=[COLOR_TIPO.get(t, graf.AZUL) for t in por_tipo.index],
+                        text=[f"${v:,.2f}" for v in por_tipo.values], textposition="outside",
+                        textfont=dict(color="#52514e"), cliponaxis=False,
+                        hovertemplate="%{y}<br><b>$%{x:,.2f}</b><extra></extra>",
+                    ))
+                    fig = graf.layout_base(fig, alto=max(220, 40 * len(por_tipo) + 60))
+                    fig.update_layout(xaxis=dict(title="Costo ($)", showgrid=True,
+                                                 gridcolor="rgba(128,128,128,0.15)"),
+                                      yaxis=dict(title=None), margin=dict(l=10, r=70, t=10, b=10))
+                    st.plotly_chart(fig, use_container_width=True)
+                    total = float(por_tipo.sum())
+                    graf.cuadro_html([
+                        ("Total", f"<b>${total:,.2f}</b>"),
+                        ("Mayor", f"{escape(str(por_tipo.idxmax()))} ({por_tipo.max() / total * 100:,.0f}%)"),
+                    ])
+        return
+
+    freq_nombre, freq = graf.selector_granularidad(desde, hasta, key="env_graf_freq")
+    consumo, compras, mermas, ajustes = _clasificar_movimientos(periodo)
+    unidades = periodo["unidad"].dropna().unique().tolist() if not periodo.empty else []
+    unidad = unidades[0] if len(unidades) == 1 else "unid."
+    if len(unidades) > 1:
+        st.warning(
+            f"Los ítems de este tipo usan unidades distintas ({', '.join(unidades)}). Las gráficas "
+            f"por período suman todo junto; elige un **Ítem** para verlo en su propia unidad."
+        )
+    dias_prod = graf.dias_produccion(db, desde, hasta)
+    que = item_sel if item_sel != "Todos" else f"{tipo_sel.lower()}s"
+
+    # ---- resumen rápido ----
+    r = st.columns(4)
+    r[0].metric("Consumo", f"{graf.fmt(consumo['salida'].sum())} {unidad}")
+    r[1].metric("Compras", f"{graf.fmt(compras['ingreso'].sum())} {unidad}")
+    r[2].metric("Mermas", f"{graf.fmt(mermas['salida'].sum())} {unidad}")
+    r[3].metric(
+        "Días de producción", f"{len(dias_prod)} de {(hasta - desde).days + 1}",
+        help="Días del período en que se produjo semielaborado. Los promedios diarios se calculan sobre estos días.",
+    )
+
+    g1, g2 = st.columns(2)
+    with g1:
+        graf.grafica_serie(
+            f"📦 Consumo de {que}", consumo, "salida", COLOR_CONSUMO, desde, hasta, freq, freq_nombre,
+            "No hubo consumo en este período.", dias_prod, unidad=unidad, eje=unidad,
+        )
+    with g2:
+        graf.grafica_serie(
+            f"🛒 Compras de {que}", compras, "ingreso", COLOR_COMPRAS, desde, hasta, freq, freq_nombre,
+            "No hubo compras en este período.", dias_prod, unidad=unidad, eje=unidad,
+        )
+
+    g3, g4 = st.columns(2)
+    with g3:
+        if item_sel == "Todos":
+            _ranking(
+                f"📦 Consumo por ítem ({tipo_sel.lower()}s)", consumo, "item", "salida", COLOR_CONSUMO,
+                unidad, rol, "No hubo consumo en este período.", "Ítems",
+            )
+        else:
+            _ranking(
+                "🛒 Compras por proveedor", compras, "proveedor_txt", "ingreso", COLOR_COMPRAS,
+                unidad, rol, "No hubo compras en este período.", "Proveedores",
+            )
+    with g4:
+        _ranking(
+            "🏭 Consumo por área", consumo, "area", "salida", COLOR_AREA,
+            unidad, rol, "No hubo consumo en este período.", "Áreas",
+        )
+
+    g5, g6 = st.columns(2)
+    with g5:
+        if item_sel == "Todos":
+            _ranking(
+                "🛒 Compras por proveedor", compras, "proveedor_txt", "ingreso", COLOR_COMPRAS,
+                unidad, rol, "No hubo compras en este período.", "Proveedores",
+            )
+        else:
+            _ranking(
+                "⚠️ Mermas por causa", mermas, "causa_txt", "salida", COLOR_MERMA,
+                unidad, rol, "No hubo mermas en este período.", "Causas",
+            )
+    with g6:
+        st.markdown("##### ⚖️ Ajustes de inventario")
+        if ajustes.empty:
+            st.info("No hubo ajustes en este período.")
+        else:
+            mas = graf.serie_por_periodo(ajustes, "ingreso", desde, hasta, freq)
+            menos = graf.serie_por_periodo(ajustes, "salida", desde, hasta, freq)
+            if freq == "D":
+                visibles = [(p.start_time.date() in dias_prod) or mas[p] > 0 or menos[p] > 0 for p in mas.index]
+                mas, menos = mas[visibles], menos[visibles]
+            etiquetas = [graf.etiqueta_periodo(p, freq) for p in mas.index]
+            fig = go.Figure([
+                go.Bar(x=etiquetas, y=mas.values, name="Agregadas", marker_color=graf.COLOR_POSITIVO,
+                       hovertemplate=f"%{{x}}<br>Agregadas: <b>%{{y:,.2f}}</b> {unidad}<extra></extra>"),
+                go.Bar(x=etiquetas, y=-menos.values, name="Quitadas", marker_color=graf.COLOR_NEGATIVO,
+                       customdata=menos.values,
+                       hovertemplate=f"%{{x}}<br>Quitadas: <b>%{{customdata:,.2f}}</b> {unidad}<extra></extra>"),
+            ])
+            fig = graf.layout_base(fig, leyenda=True, eje=unidad)
+            fig.update_layout(barmode="relative")
+            fig.update_xaxes(type="category")
+            st.plotly_chart(fig, use_container_width=True)
+            agregadas, quitadas = float(mas.sum()), float(menos.sum())
+            neto = agregadas - quitadas
+            movido = float(consumo["salida"].sum() + compras["ingreso"].sum())
+            graf.cuadro_html([
+                ("Registros", f"{len(ajustes)}"),
+                ("Agregadas", f"+{graf.fmt(agregadas)} {unidad}"),
+                ("Quitadas", f"−{graf.fmt(quitadas)} {unidad}"),
+                ("Neto", f"<b>{'+' if neto >= 0 else '−'}{graf.fmt(abs(neto))}</b> {unidad}"),
+                ("Neto vs. movido", f"{abs(neto) / movido * 100:,.1f}%" if movido else "—"),
+            ])
+
+    if item_sel == "Todos":
+        g7, _ = st.columns(2)
+        with g7:
+            _ranking(
+                "⚠️ Mermas por causa", mermas, "causa_txt", "salida", COLOR_MERMA,
+                unidad, rol, "No hubo mermas en este período.", "Causas",
+            )
+
+    st.caption(
+        "Las gráficas usan el período Desde/Hasta y el Tipo/Ítem elegidos arriba. **Consumo** = "
+        "salidas hacia producción, pasteurización, limpieza o uso manual; **compras** = entradas; "
+        "las **mermas** y los **ajustes** (registrados en ✏️ Ajuste de inventario) van aparte. "
+        "Los promedios diarios usan solo los días en que se produjo semielaborado. "
+        "**Variabilidad** = desviación estándar por período; **Tendencia** = pendiente de la recta de mejor ajuste."
     )
